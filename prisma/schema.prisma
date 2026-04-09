@@ -1,0 +1,129 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id         Int       @id @default(autoincrement())
+  telegramId BigInt    @unique @map("telegram_id")
+  username   String?
+  firstName  String?   @map("first_name")
+  balance    Decimal   @default(0) @db.Decimal(12, 4)
+  appSlots   Int       @default(1) @map("app_slots")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  projects      Project[]
+  conversations Conversation[]
+  payments      Payment[]
+  usageLogs     UsageLog[]
+
+  @@map("users")
+}
+
+model Project {
+  id               String   @id @default(uuid())
+  userId           Int      @map("user_id")
+  name             String
+  description      String?
+  status           String   @default("created")
+  botUserId        BigInt?  @map("bot_user_id")
+  botUsername       String?  @map("bot_username")
+  botTokenEncrypted String? @map("bot_token_encrypted")
+  currentVersion   String?  @map("current_version")
+  plan             String?
+  generatedCode    String?  @map("generated_code")
+  projectSummary   String?  @map("project_summary")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  totalCostUsd  Decimal        @default(0) @map("total_cost_usd") @db.Decimal(12, 4)
+  features      String?        @map("features")
+  tonWallet     String?        @map("ton_wallet")
+  qualityTier   Int            @default(1) @map("quality_tier")
+  releaseCommit Int?           @map("release_commit")
+
+  user          User           @relation(fields: [userId], references: [id])
+  versions      Version[]
+  assets        Asset[]
+  conversations Conversation[]
+  usageLogs     UsageLog[]
+
+  @@map("projects")
+}
+
+model Version {
+  id        Int      @id @default(autoincrement())
+  projectId String   @map("project_id")
+  version   String
+  changelog String?
+  snapshot  String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  project Project @relation(fields: [projectId], references: [id])
+
+  @@map("versions")
+}
+
+model Asset {
+  id          Int      @id @default(autoincrement())
+  projectId   String   @map("project_id")
+  fileId      String   @map("file_id")
+  filePath    String?  @map("file_path")
+  fileName    String?  @map("file_name")
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  project Project @relation(fields: [projectId], references: [id])
+
+  @@map("assets")
+}
+
+model Conversation {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  projectId String?  @map("project_id")
+  state     String
+  context   Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user    User     @relation(fields: [userId], references: [id])
+  project Project? @relation(fields: [projectId], references: [id])
+
+  @@map("conversations")
+}
+
+model Payment {
+  id                   Int       @id @default(autoincrement())
+  userId               Int       @map("user_id")
+  amountUsd            Decimal   @map("amount_usd") @db.Decimal(12, 4)
+  status               String    @default("pending")
+  nowpaymentsId        String?   @map("nowpayments_id")
+  nowpaymentsInvoiceUrl String?  @map("nowpayments_invoice_url")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  confirmedAt          DateTime? @map("confirmed_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("payments")
+}
+
+model UsageLog {
+  id           Int      @id @default(autoincrement())
+  userId       Int      @map("user_id")
+  projectId    String?  @map("project_id")
+  inputTokens  Int      @map("input_tokens")
+  outputTokens Int      @map("output_tokens")
+  costUsd      Decimal  @map("cost_usd") @db.Decimal(12, 6)
+  operation    String
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user    User     @relation(fields: [userId], references: [id])
+  project Project? @relation(fields: [projectId], references: [id])
+
+  @@map("usage_logs")
+}
