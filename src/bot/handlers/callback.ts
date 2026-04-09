@@ -21,6 +21,7 @@ import {
   revertConfirmKeyboard,
 } from "../keyboards";
 import { commitService } from "../../services/commit.service";
+import { setPending, resolveByProject, getPendingByProject } from "../agent-questions";
 import { getProjectFeatures, getFeatureById, purchaseFeature, PAID_FEATURES } from "../../services/features.service";
 import { decryptToken } from "../../services/crypto.service";
 import { prisma } from "../../db";
@@ -35,11 +36,61 @@ function esc(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function qualityDescription(): string {
+  return (
+    `<b>Good</b> — Sonnet 4.6, 60 iterations\n` +
+    `<b>Better</b> — Sonnet 4.6+, 100 iterations\n` +
+    `<b>Best</b> — Opus 4.6, 60 iterations\n` +
+    `<b>The Best</b> — Opus 4.6+, 100 iterations`
+  );
+}
+
 async function ack(ctx: any) {
   try { await ctx.answerCallbackQuery(); } catch {}
 }
 
 import { processingProjects } from "../processing";
+
+const tgApi = (method: string, body: any) =>
+  fetch(`https://api.telegram.org/bot${config.botToken}/${method}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).catch(() => {});
+
+function createAskUser(projectId: string, chatId: number, statusMsgId: number) {
+  return async (question: string, options: string[]): Promise<string> => {
+    const answer = await new Promise<string>((resolve) => {
+      setPending(projectId, chatId, options, resolve);
+
+      const keyboard: any[][] = options.map((opt, i) => [
+        { text: opt, callback_data: `aq:${projectId}:${i}` },
+      ]);
+      keyboard.push([{ text: "Skip", callback_data: `aq:${projectId}:skip` }]);
+
+      const questionHtml =
+        `❓ <b>Question from AI:</b>\n\n${esc(question)}` +
+        (options.length === 0 ? "\n\n<i>Type your answer below, or press Skip.</i>" : "");
+
+      tgApi("editMessageText", {
+        chat_id: chatId,
+        message_id: statusMsgId,
+        text: questionHtml,
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: keyboard },
+      });
+    });
+
+    await tgApi("editMessageText", {
+      chat_id: chatId,
+      message_id: statusMsgId,
+      text: processMessage("Continuing..."),
+      parse_mode: "HTML",
+    });
+
+    return answer;
+  };
+}
 
 function buildListText(projects: { name: string; status: string }[], slotUsed?: number, slotTotal?: number): string {
   const slotLine = typeof slotUsed === "number" && typeof slotTotal === "number"
@@ -373,11 +424,14 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
         } catch {}
       };
 
+      const askUser = createAskUser(projectId, ctx.chat!.id, statusMsg.message_id);
+
       const result = await agentService.buildApp(
         projectId,
         project.description || "",
         project.plan,
-        progress
+        progress,
+        askUser,
       );
 
       const usage = await billingService.recordUsage(
@@ -738,7 +792,8 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
         } catch {}
       };
 
-      const result = await agentService.updateApp(projectId, suggestion, progress);
+      const askUser = createAskUser(projectId, ctx.chat!.id, statusMsg.message_id);
+      const result = await agentService.updateApp(projectId, suggestion, progress, undefined, askUser);
 
       const usage = await billingService.recordUsage(
         user.id, projectId, result.model,
@@ -787,6 +842,29 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
       doneMessage("No changes applied.", "Your app stays as is."),
       { parse_mode: "HTML", reply_markup: projectActionsKeyboard(projectId, project?.status || "deployed", features, project?.botUsername || undefined) }
     );
+  });
+
+  // === Agent ask_user responses ===
+
+  bot.callbackQuery(/^aq:(.+):(.+)$/, async (ctx) => {
+    try { await ctx.answerCallbackQuery(); } catch {}
+    const projectId = ctx.match[1];
+    const optionKey = ctx.match[2];
+
+    const pending = getPendingByProject(projectId);
+    if (!pending) return;
+
+    let answer = "";
+    if (optionKey !== "skip") {
+      const idx = parseInt(optionKey, 10);
+      if (!isNaN(idx) && pending.options[idx]) {
+        answer = pending.options[idx];
+      } else {
+        answer = optionKey;
+      }
+    }
+
+    resolveByProject(projectId, answer);
   });
 
   // === Versions ===
@@ -904,13 +982,11 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
     if (!project) return;
 
     const tier = (project as any).qualityTier || 1;
+    const desc = qualityDescription();
 
     await ctx.editMessageText(
       `${ce(EMOJI.setting)} <b>AI Quality Tier</b>\n\n` +
-      `Select the AI model quality for building and updating your app:\n\n` +
-      `<b>Good</b> — Sonnet 4.6, regular pricing\n` +
-      `<b>Best</b> — Opus 4.6, ~75% more expensive\n` +
-      `<b>The Best</b> — Opus 4.6 with extended thinking, ~100% more expensive`,
+      `Select the AI model quality for building and updating your app:\n\n` + desc,
       { parse_mode: "HTML", reply_markup: qualityKeyboard(projectId, tier) }
     );
   });
@@ -919,19 +995,17 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
     await ack(ctx);
     const projectId = ctx.match[1];
     const tier = parseInt(ctx.match[2]);
-    if (tier < 1 || tier > 3) return;
+    if (tier < 1 || tier > 4) return;
 
     await prisma.project.update({ where: { id: projectId }, data: { qualityTier: tier } });
 
     const project = await projectService.getProject(projectId);
     if (!project) return;
 
+    const desc = qualityDescription();
     await ctx.editMessageText(
       `${ce(EMOJI.setting)} <b>AI Quality Tier</b>\n\n` +
-      `Select the AI model quality for building and updating your app:\n\n` +
-      `<b>Good</b> — Sonnet 4.6, regular pricing\n` +
-      `<b>Best</b> — Opus 4.6, ~75% more expensive\n` +
-      `<b>The Best</b> — Opus 4.6 with extended thinking, ~100% more expensive`,
+      `Select the AI model quality for building and updating your app:\n\n` + desc,
       { parse_mode: "HTML", reply_markup: qualityKeyboard(projectId, tier) }
     );
   });

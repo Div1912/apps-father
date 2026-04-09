@@ -130,14 +130,16 @@ export function settingsKeyboard(projectId: string) {
 
 const QUALITY_LABELS: Record<number, { name: string; desc: string }> = {
   1: { name: "Good (Sonnet)", desc: "Regular pricing" },
-  2: { name: "Best (Opus)", desc: "+~75% pricing" },
-  3: { name: "The Best (Opus+)", desc: "+~100% pricing" },
+  2: { name: "Better (Sonnet+)", desc: "+~50% pricing" },
+  3: { name: "Best (Opus)", desc: "+~75% pricing" },
+  4: { name: "The Best (Opus+)", desc: "+~100% pricing" },
 };
 
 export function qualityKeyboard(projectId: string, currentTier: number) {
-  const rows: any[][] = [1, 2, 3].map(tier => [{
-    text: `${tier === currentTier ? "✅" : "⬜"} ${QUALITY_LABELS[tier].name} — ${QUALITY_LABELS[tier].desc}`,
+  const rows: any[][] = [1, 2, 3, 4].map(tier => [{
+    text: `${QUALITY_LABELS[tier].name} — ${QUALITY_LABELS[tier].desc}`,
     callback_data: `qt:${projectId}:${tier}`,
+    icon_custom_emoji_id: tier === currentTier ? EMOJI.indicator_success : EMOJI.indicator_none,
   }]);
   rows.push([{ text: "Back", callback_data: `settings:${projectId}` }]);
   return { inline_keyboard: rows };

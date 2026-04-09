@@ -234,7 +234,7 @@ WORKFLOW FOR NEW APP:
 4. Write backend/routes.js FIRST — REST endpoints + module.exports.ws handler if real-time needed
 5. Write frontend files (index.html, styles.css, app.js) — endpoint names and WS message types MUST match routes.js exactly
 6. shell("npm install <pkg>") if external packages needed
-7. telegram_api to configure bot (setMyDescription, setMyCommands, setChatMenuButton)
+7. telegram_api to configure bot (setMyDescription, setMyCommands, setChatMenuButton) — ONLY on first build
 8. VERIFY: grep app.js for all apiCall/fetch URLs, then test each with http_request
 9. fetch_url to read API docs when you need to learn an unfamiliar external API
 9. Call done() ONLY after verifying all endpoints work
@@ -245,6 +245,14 @@ WORKFLOW FOR UPDATE:
 3. If changing backend routes, grep frontend for affected apiCall URLs
 4. Test changed endpoints with http_request
 5. Call done()
+IMPORTANT: Do NOT call telegram_api(setMyDescription) during updates — only set bot description on first build.
+
+ASKING THE USER (ask_user tool):
+- Use ask_user ONLY when you need information the user MUST provide: API keys, credentials, external account IDs, or a choice between fundamentally different approaches where guessing wrong wastes significant effort.
+- NEVER use ask_user for implementation details, design choices, styling, naming, or anything you can decide yourself.
+- NEVER call ask_user in parallel with other tools — it must be the ONLY tool in its turn.
+- Always provide clear options as buttons when the question has a finite set of answers.
+- If the user clicks Skip or doesn't answer, proceed with the best default.
 
 PROGRESS REPORTING:
 - Call set_progress(percent, message) periodically so the user sees a live progress bar.
@@ -409,6 +417,18 @@ const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "ask_user",
+    description: "Ask the app owner a question and wait for their answer. Use ONLY when you truly need user input (API keys, credentials, choosing between fundamentally different approaches). Do NOT use for trivial or implementation decisions you can make yourself. Provide options as buttons when possible. The user can also type free text or press Skip.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        question: { type: "string" as const, description: "The question to ask the user" },
+        options: { type: "array" as const, items: { type: "string" as const }, description: "Optional list of choices shown as buttons (e.g. ['Option A', 'Option B'])" },
+      },
+      required: ["question"],
+    },
+  },
+  {
     name: "set_progress",
     description: "Report your approximate progress as a percentage (0-100). Call this periodically so the user sees a progress bar. Example: 10% after reading files, 30% after writing HTML, 60% after backend, 80% after testing, 95% before done.",
     input_schema: {
@@ -427,7 +447,6 @@ const TOOLS: Anthropic.Tool[] = [
       type: "object" as const,
       properties: {
         summary: { type: "string" as const, description: "Detailed summary of all changes made" },
-        bot_description: { type: "string" as const, description: "Short bot description (optional)" },
       },
       required: ["summary"],
     },
@@ -456,10 +475,11 @@ export interface AgentResult {
   cacheReadTokens: number;
 }
 
-export const QUALITY_TIERS: Record<number, { model: string; thinking: number }> = {
-  1: { model: "claude-sonnet-4-6", thinking: 8000 },
-  2: { model: "claude-opus-4-6", thinking: 8000 },
-  3: { model: "claude-opus-4-6", thinking: 16000 },
+export const QUALITY_TIERS: Record<number, { model: string; thinking: number; maxIterations: number }> = {
+  1: { model: "claude-sonnet-4-6", thinking: 8000, maxIterations: 60 },
+  2: { model: "claude-sonnet-4-6", thinking: 16000, maxIterations: 100 },
+  3: { model: "claude-opus-4-6", thinking: 8000, maxIterations: 60 },
+  4: { model: "claude-opus-4-6", thinking: 16000, maxIterations: 100 },
 };
 
 export class AgentService {
@@ -511,6 +531,7 @@ export class AgentService {
     description: string,
     plan: string,
     onProgress?: (p: AgentProgress) => Promise<void>,
+    onAskUser?: (question: string, options: string[]) => Promise<string>,
   ): Promise<AgentResult> {
     const featureGating = await this.buildFeatureGating(projectId);
 
@@ -527,7 +548,7 @@ ${plan}
 ${featureGating}
 Create all necessary files (frontend/index.html, frontend/styles.css, frontend/app.js, backend/routes.js) and configure the bot. Database is handled via db.get/db.set in routes.js — no schema setup needed. Make it beautiful and functional.`;
 
-    return this.runAgent(projectId, prompt, onProgress);
+    return this.runAgent(projectId, prompt, onProgress, onAskUser);
   }
 
   async updateApp(
@@ -535,6 +556,7 @@ Create all necessary files (frontend/index.html, frontend/styles.css, frontend/a
     updateDescription: string,
     onProgress?: (p: AgentProgress) => Promise<void>,
     attachments?: { localPath: string; projectPath: string; originalName: string; caption?: string }[],
+    onAskUser?: (question: string, options: string[]) => Promise<string>,
   ): Promise<AgentResult> {
     const project: any = await projectService.getProject(projectId);
     const contextParts: string[] = [];
@@ -568,13 +590,14 @@ ${context}Update request: ${updateDescription}
 ${attachmentInfo}${featureGating}
 Use grep and read_file to verify current state before making changes. Use edit_file for targeted modifications.`;
 
-    return this.runAgent(projectId, prompt, onProgress);
+    return this.runAgent(projectId, prompt, onProgress, onAskUser);
   }
 
   private async runAgent(
     projectId: string,
     userPrompt: string,
     onProgress?: (p: AgentProgress) => Promise<void>,
+    onAskUser?: (question: string, options: string[]) => Promise<string>,
   ): Promise<AgentResult> {
     const progress = onProgress || (async () => {});
     const projectDir = path.join(PROJECTS_DIR, projectId);
@@ -605,7 +628,7 @@ Use grep and read_file to verify current state before making changes. Use edit_f
     let totalCacheReadTokens = 0;
     let currentPercent: number | undefined;
 
-    const maxIterations = runtimeConfig.getMaxAgentIterations();
+    const maxIterations = tierConfig.maxIterations;
     while (iterations < maxIterations) {
       iterations++;
 
@@ -947,6 +970,38 @@ Use grep and read_file to verify current state before making changes. Use edit_f
               break;
             }
 
+            case "ask_user": {
+              const question = args.question || "Please provide input:";
+              const options: string[] = args.options || [];
+
+              if (!onAskUser) {
+                result = "User interaction not available in this context. Make your best decision and continue.";
+                break;
+              }
+
+              console.log(`[Agent] ❓ Asking user: ${question.substring(0, 100)}`);
+              await progress({ action: "Waiting for your answer...", detail: question.substring(0, 80), percent: currentPercent });
+
+              const ASK_TIMEOUT = 5 * 60 * 1000;
+              let timeoutId: ReturnType<typeof setTimeout>;
+              const answer = await Promise.race([
+                onAskUser(question, options),
+                new Promise<string>(resolve => {
+                  timeoutId = setTimeout(() => resolve(""), ASK_TIMEOUT);
+                }),
+              ]);
+              clearTimeout(timeoutId!);
+
+              if (answer) {
+                result = `User answered: ${answer}`;
+                console.log(`[Agent] ✅ User answered: ${answer.substring(0, 100)}`);
+              } else {
+                result = "User skipped this question. Proceed with your best judgment.";
+                console.log(`[Agent] ⏭️ User skipped question`);
+              }
+              break;
+            }
+
             case "set_progress": {
               currentPercent = Math.max(0, Math.min(100, Math.round(args.percent)));
               const msg = args.message || "";
@@ -973,15 +1028,6 @@ Use grep and read_file to verify current state before making changes. Use edit_f
                   });
                 } catch {}
 
-                if (args.bot_description) {
-                  try {
-                    await fetch(`https://api.telegram.org/bot${botToken}/setMyDescription`, {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ description: args.bot_description }),
-                    });
-                  } catch {}
-                }
               }
 
               try {

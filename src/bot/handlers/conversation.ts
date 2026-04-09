@@ -7,6 +7,7 @@ import { billingService } from "../../services/billing.service";
 import { config } from "../../config";
 import { planActionKeyboard, projectActionsKeyboard } from "../keyboards";
 import { commitService } from "../../services/commit.service";
+import { hasPendingForChat, resolveByChat, setPending } from "../agent-questions";
 import { getProjectFeatures } from "../../services/features.service";
 import { processMessage, doneMessage, errorMessage, costLine, truncSummary, mdToTgHtml } from "../progress";
 import { EMOJI, ce } from "../emoji";
@@ -22,6 +23,47 @@ function esc(text: string): string {
 
 import { processingProjects } from "../processing";
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
+
+const tgApi = (method: string, body: any) =>
+  fetch(`https://api.telegram.org/bot${config.botToken}/${method}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).catch(() => {});
+
+function createConvAskUser(projectId: string, chatId: number, statusMsgId: number) {
+  return async (question: string, options: string[]): Promise<string> => {
+    const answer = await new Promise<string>((resolve) => {
+      setPending(projectId, chatId, options, resolve);
+
+      const keyboard: any[][] = options.map((opt, i) => [
+        { text: opt, callback_data: `aq:${projectId}:${i}` },
+      ]);
+      keyboard.push([{ text: "Skip", callback_data: `aq:${projectId}:skip` }]);
+
+      const questionHtml =
+        `❓ <b>Question from AI:</b>\n\n${esc(question)}` +
+        (options.length === 0 ? "\n\n<i>Type your answer below, or press Skip.</i>" : "");
+
+      tgApi("editMessageText", {
+        chat_id: chatId,
+        message_id: statusMsgId,
+        text: questionHtml,
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: keyboard },
+      });
+    });
+
+    await tgApi("editMessageText", {
+      chat_id: chatId,
+      message_id: statusMsgId,
+      text: processMessage("Continuing..."),
+      parse_mode: "HTML",
+    });
+
+    return answer;
+  };
+}
 
 function downloadFile(url: string, dest: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -179,6 +221,12 @@ export function registerConversationHandlers(bot: Bot<BotContext>) {
   bot.on("message:text", async (ctx) => {
     const session = ctx.session;
     const text = ctx.message.text;
+
+    if (ctx.chat && hasPendingForChat(ctx.chat.id)) {
+      if (resolveByChat(ctx.chat.id, text, ctx.message.date)) {
+        return;
+      }
+    }
 
     // Fallback: if no active session, check if user has a project awaiting description
     if (!session.awaitingInput && ctx.from) {
@@ -382,7 +430,8 @@ async function handleUpdateDescription(ctx: BotContext, projectId: string, updat
       } catch {}
     };
 
-    const result = await agentService.updateApp(projectId, updateText, progress, attachments);
+    const askUser = createConvAskUser(projectId, ctx.chat!.id, statusMsg.message_id);
+    const result = await agentService.updateApp(projectId, updateText, progress, attachments, askUser);
 
     const usage = await billingService.recordUsage(
       user.id, projectId, result.model,
