@@ -47,9 +47,12 @@ export function mdToTgHtml(md: string): string {
   return s;
 }
 
-export function processMessage(status: string, percent?: number, lang: Lang = "en"): string {
+export function processMessage(status: string, percent?: number, lang: Lang = "en", costUsd?: number, balance?: number): string {
   const bar = typeof percent === "number" ? `\n${t(lang, "progress_label")} <b>${Math.max(0, Math.min(100, percent))}%</b>\n${progressBar(percent)}` : "";
-  return `<b>${ce(EMOJI.loading, "⏳")} ${t(lang, "process_going")}</b>${bar}\n<blockquote>${status}</blockquote>`;
+  const costInfo = typeof costUsd === "number" && costUsd > 0
+    ? `\n<blockquote>${ce(EMOJI.dollar, "💲")} ${t(lang, "cost_label")} <b>$${costUsd.toFixed(4)}</b>${typeof balance === "number" ? ` | ${t(lang, "balance_label")} <b>$${balance.toFixed(2)}</b>` : ""}</blockquote>`
+    : "";
+  return `<b>${ce(EMOJI.loading, "⏳")} ${t(lang, "process_going")}</b>${bar}${costInfo}\n<blockquote>${status}</blockquote>`;
 }
 
 export function doneMessage(title: string, detail: string): string {
@@ -78,16 +81,18 @@ function esc(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-export function checklistMessage(title: string, items: ChecklistItem[], status?: string, lang: Lang = "en"): string {
+export function checklistMessage(title: string, items: ChecklistItem[], status?: string, lang: Lang = "en", costUsd?: number, balance?: number, percent?: number): string {
   const lines = items.map(item => {
     const emoji = item.done
       ? ce(EMOJI.mark_done, "✅")
       : ce(EMOJI.mark_empty, "⬜");
     return `${emoji} ${esc(item.text)}`;
   });
-  const doneCount = items.filter(i => i.done).length;
-  const percent = Math.round((doneCount / items.length) * 100);
-  const bar = `${t(lang, "progress_label")} <b>${Math.max(0, Math.min(100, percent))}%</b>\n${progressBar(percent)}`;
+  const pct = typeof percent === "number" ? Math.max(0, Math.min(100, percent)) : 0;
+  const bar = `${t(lang, "progress_label")} <b>${pct}%</b>\n${progressBar(pct)}`;
   const statusLine = status ? `\n<blockquote>${status}</blockquote>` : "";
-  return `<b>${ce(EMOJI.loading, "⏳")} ${title}</b>\n\n${lines.join("\n")}\n\n${bar}${statusLine}`;
+  const costInfo = typeof costUsd === "number" && costUsd > 0
+    ? `\n<blockquote>${ce(EMOJI.dollar, "💲")} ${t(lang, "cost_label")} <b>$${costUsd.toFixed(4)}</b>${typeof balance === "number" ? ` | ${t(lang, "balance_label")} <b>$${balance.toFixed(2)}</b>` : ""}</blockquote>`
+    : "";
+  return `<b>${ce(EMOJI.loading, "⏳")} ${title}</b>\n\n${lines.join("\n")}\n\n${bar}${costInfo}${statusLine}`;
 }

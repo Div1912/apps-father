@@ -24,8 +24,8 @@ function rmDirSync(dir: string) {
   }
 }
 
-function bustCache(projectDir: string): void {
-  const indexPath = path.join(projectDir, "frontend", "index.html");
+function bustCache(dir: string): void {
+  const indexPath = path.join(dir, "frontend", "index.html");
   if (!fs.existsSync(indexPath)) return;
   try {
     const v = Date.now();
@@ -39,7 +39,11 @@ function bustCache(projectDir: string): void {
 }
 
 class CommitService {
-  async createCommit(projectId: string, message: string, logPath?: string): Promise<number> {
+  /**
+   * Prepare a new commit folder for the agent to work in.
+   * Copies latest commit (or development/) into commits/N+1/.
+   */
+  async prepareCommitFolder(projectId: string): Promise<{ commitDir: string; commitNum: number }> {
     const projectDir = path.join(PROJECTS_DIR, projectId);
     const commitsDir = path.join(projectDir, "commits");
     fs.mkdirSync(commitsDir, { recursive: true });
@@ -58,15 +62,73 @@ class CommitService {
 
     const commitDir = path.join(commitsDir, String(commitNum));
     rmDirSync(commitDir);
+    fs.mkdirSync(commitDir, { recursive: true });
 
-    copyDirSync(path.join(projectDir, "frontend"), path.join(commitDir, "frontend"));
-    copyDirSync(path.join(projectDir, "backend"), path.join(commitDir, "backend"));
+    const prevCommitDir = commitNum > 0
+      ? path.join(commitsDir, String(commitNum - 1))
+      : null;
 
+    if (prevCommitDir && fs.existsSync(prevCommitDir)) {
+      copyDirSync(path.join(prevCommitDir, "frontend"), path.join(commitDir, "frontend"));
+      copyDirSync(path.join(prevCommitDir, "backend"), path.join(commitDir, "backend"));
+      // Carry forward context.md from previous commit
+      const prevContext = path.join(prevCommitDir, "context.md");
+      if (fs.existsSync(prevContext)) {
+        fs.copyFileSync(prevContext, path.join(commitDir, "context.md"));
+      }
+    } else {
+      const devDir = path.join(projectDir, "development");
+      if (fs.existsSync(path.join(devDir, "frontend"))) {
+        copyDirSync(path.join(devDir, "frontend"), path.join(commitDir, "frontend"));
+      }
+      if (fs.existsSync(path.join(devDir, "backend"))) {
+        copyDirSync(path.join(devDir, "backend"), path.join(commitDir, "backend"));
+      }
+    }
+
+    fs.mkdirSync(path.join(commitDir, "frontend"), { recursive: true });
+    fs.mkdirSync(path.join(commitDir, "backend"), { recursive: true });
+
+    // Overlay assets from development/ (handles newly uploaded files)
+    const devAssets = path.join(projectDir, "development", "frontend", "assets");
+    if (fs.existsSync(devAssets)) {
+      copyDirSync(devAssets, path.join(commitDir, "frontend", "assets"));
+    }
+
+    console.log(`[Commit] Prepared commit #${commitNum} for project ${projectId.substring(0, 8)}`);
+    return { commitDir, commitNum };
+  }
+
+  /**
+   * Copy commit folder contents to development/ for live testing.
+   */
+  syncToDev(projectId: string, commitDir: string): void {
+    const projectDir = path.join(PROJECTS_DIR, projectId);
+    const devDir = path.join(projectDir, "development");
+
+    rmDirSync(path.join(devDir, "frontend"));
+    rmDirSync(path.join(devDir, "backend"));
+
+    copyDirSync(path.join(commitDir, "frontend"), path.join(devDir, "frontend"));
+    copyDirSync(path.join(commitDir, "backend"), path.join(devDir, "backend"));
+
+    fs.mkdirSync(path.join(devDir, "data"), { recursive: true });
+
+    bustCache(devDir);
+    console.log(`[Commit] Synced to development/ for project ${projectId.substring(0, 8)}`);
+  }
+
+  /**
+   * Finalize a commit: create DB record, copy agent log, sync to development/.
+   */
+  async createCommit(projectId: string, message: string, commitNum: number, commitDir: string, logPath?: string): Promise<number> {
     if (logPath && fs.existsSync(logPath)) {
       try {
         fs.copyFileSync(logPath, path.join(commitDir, "agent.log"));
       } catch {}
     }
+
+    this.syncToDev(projectId, commitDir);
 
     await prisma.version.create({
       data: {
@@ -80,17 +142,33 @@ class CommitService {
     return commitNum;
   }
 
+  /**
+   * Release: copy development/ code to release/ (preserving release DB).
+   */
   async releaseCurrentDev(projectId: string): Promise<number> {
     const projectDir = path.join(PROJECTS_DIR, projectId);
+    const devDir = path.join(projectDir, "development");
     const releaseDir = path.join(projectDir, "release");
 
-    rmDirSync(releaseDir);
+    rmDirSync(path.join(releaseDir, "frontend"));
+    rmDirSync(path.join(releaseDir, "backend"));
     fs.mkdirSync(releaseDir, { recursive: true });
 
-    copyDirSync(path.join(projectDir, "frontend"), path.join(releaseDir, "frontend"));
-    copyDirSync(path.join(projectDir, "backend"), path.join(releaseDir, "backend"));
+    copyDirSync(path.join(devDir, "frontend"), path.join(releaseDir, "frontend"));
+    copyDirSync(path.join(devDir, "backend"), path.join(releaseDir, "backend"));
 
-    bustCache(path.join(releaseDir));
+    const releaseDbDir = path.join(releaseDir, "data");
+    fs.mkdirSync(releaseDbDir, { recursive: true });
+    const releaseDbPath = path.join(releaseDbDir, "app.db");
+    if (!fs.existsSync(releaseDbPath)) {
+      const devDbPath = path.join(devDir, "data", "app.db");
+      if (fs.existsSync(devDbPath)) {
+        fs.copyFileSync(devDbPath, releaseDbPath);
+        console.log(`[Release] Seeded release DB from development for project ${projectId.substring(0, 8)}`);
+      }
+    }
+
+    bustCache(releaseDir);
 
     const latest = await prisma.version.findFirst({
       where: { projectId },
@@ -108,6 +186,9 @@ class CommitService {
     return commitNum;
   }
 
+  /**
+   * Revert: restore commits/N/ to development/, delete newer commits.
+   */
   async revertToCommit(projectId: string, commitNum: number): Promise<void> {
     const projectDir = path.join(PROJECTS_DIR, projectId);
     const commitDir = path.join(projectDir, "commits", String(commitNum));
@@ -116,13 +197,7 @@ class CommitService {
       throw new Error(`Commit #${commitNum} not found on disk`);
     }
 
-    rmDirSync(path.join(projectDir, "frontend"));
-    rmDirSync(path.join(projectDir, "backend"));
-
-    copyDirSync(path.join(commitDir, "frontend"), path.join(projectDir, "frontend"));
-    copyDirSync(path.join(commitDir, "backend"), path.join(projectDir, "backend"));
-
-    bustCache(projectDir);
+    this.syncToDev(projectId, commitDir);
 
     const allCommits = await prisma.version.findMany({
       where: { projectId },
@@ -157,48 +232,74 @@ class CommitService {
     return fs.existsSync(logFile) ? logFile : null;
   }
 
+  /**
+   * Migrate existing projects from old layout (root frontend/backend/data)
+   * to new layout (development/, release/data/).
+   */
   async migrateExistingProjects(): Promise<number> {
     const projects = await prisma.project.findMany({
       where: {
-        status: { in: ["deployed", "released"] },
-        releaseCommit: null,
+        status: { in: ["deployed", "released", "building", "planning", "created", "error"] },
       },
     });
 
     let migrated = 0;
     for (const project of projects) {
       const projectDir = path.join(PROJECTS_DIR, project.id);
-      const frontendDir = path.join(projectDir, "frontend");
-      const commitsDir = path.join(projectDir, "commits", "0");
+      const oldFrontend = path.join(projectDir, "frontend");
+      const devDir = path.join(projectDir, "development");
 
-      if (!fs.existsSync(frontendDir)) continue;
-      if (fs.existsSync(commitsDir)) continue;
+      if (!fs.existsSync(oldFrontend)) continue;
+      if (fs.existsSync(path.join(devDir, "frontend"))) continue;
 
       try {
-        copyDirSync(path.join(projectDir, "frontend"), path.join(commitsDir, "frontend"));
-        copyDirSync(path.join(projectDir, "backend"), path.join(commitsDir, "backend"));
+        fs.mkdirSync(devDir, { recursive: true });
+        copyDirSync(path.join(projectDir, "frontend"), path.join(devDir, "frontend"));
+        copyDirSync(path.join(projectDir, "backend"), path.join(devDir, "backend"));
+
+        const oldDataDir = path.join(projectDir, "data");
+        const devDataDir = path.join(devDir, "data");
+        fs.mkdirSync(devDataDir, { recursive: true });
+        if (fs.existsSync(path.join(oldDataDir, "app.db"))) {
+          fs.copyFileSync(path.join(oldDataDir, "app.db"), path.join(devDataDir, "app.db"));
+        }
 
         const releaseDir = path.join(projectDir, "release");
-        rmDirSync(releaseDir);
-        fs.mkdirSync(releaseDir, { recursive: true });
-        copyDirSync(path.join(projectDir, "frontend"), path.join(releaseDir, "frontend"));
-        copyDirSync(path.join(projectDir, "backend"), path.join(releaseDir, "backend"));
+        if (fs.existsSync(releaseDir)) {
+          const releaseDataDir = path.join(releaseDir, "data");
+          fs.mkdirSync(releaseDataDir, { recursive: true });
+          if (!fs.existsSync(path.join(releaseDataDir, "app.db")) && fs.existsSync(path.join(oldDataDir, "app.db"))) {
+            fs.copyFileSync(path.join(oldDataDir, "app.db"), path.join(releaseDataDir, "app.db"));
+          }
+        }
 
-        await prisma.version.create({
-          data: {
-            projectId: project.id,
-            version: "0",
-            changelog: "Initial version (migrated)",
-          },
-        });
+        const commitsDir = path.join(projectDir, "commits");
+        if (!fs.existsSync(path.join(commitsDir, "0"))) {
+          fs.mkdirSync(path.join(commitsDir, "0"), { recursive: true });
+          copyDirSync(path.join(projectDir, "frontend"), path.join(commitsDir, "0", "frontend"));
+          copyDirSync(path.join(projectDir, "backend"), path.join(commitsDir, "0", "backend"));
 
-        await prisma.project.update({
-          where: { id: project.id },
-          data: { releaseCommit: 0 },
-        });
+          const existingVersion = await prisma.version.findFirst({ where: { projectId: project.id } });
+          if (!existingVersion) {
+            await prisma.version.create({
+              data: { projectId: project.id, version: "0", changelog: "Initial version (migrated)" },
+            });
+          }
+
+          if (project.releaseCommit === null) {
+            await prisma.project.update({
+              where: { id: project.id },
+              data: { releaseCommit: 0 },
+            });
+          }
+        }
+
+        rmDirSync(path.join(projectDir, "frontend"));
+        rmDirSync(path.join(projectDir, "backend"));
+        rmDirSync(path.join(projectDir, "data"));
 
         migrated++;
-        console.log(`[Migration] Project "${project.name}" (${project.id.substring(0, 8)}) → migrated to version control`);
+        console.log(`[Migration] Project "${project.name}" (${project.id.substring(0, 8)}) → migrated to new layout`);
       } catch (err) {
         console.error(`[Migration] Failed for project ${project.id.substring(0, 8)}:`, err);
       }

@@ -53,9 +53,7 @@ router.all("/:projectId/{*routePath}", async (req: Request, res: Response) => {
   const routePath = Array.isArray(rawRoute) ? rawRoute.join("/") : String(rawRoute || "");
 
   const projectDir = path.join(PROJECTS_DIR, projectId);
-  const releaseBackend = path.join(projectDir, "release", "backend");
-  const devBackend = path.join(projectDir, "backend");
-  const backendDir = fs.existsSync(releaseBackend) ? releaseBackend : devBackend;
+  const backendDir = path.join(projectDir, "release", "backend");
   const routesFile = path.join(backendDir, "routes.js");
 
   if (!fs.existsSync(routesFile)) {
@@ -81,7 +79,8 @@ router.all("/:projectId/{*routePath}", async (req: Request, res: Response) => {
       botUsername = project.botUsername;
     }
 
-    db = createProjectDb(projectDir, botToken, botUsername, projectId);
+    const releaseDir = path.join(projectDir, "release");
+    db = createProjectDb(releaseDir, botToken, botUsername, projectId);
 
     if (typeof routeModule === "function") {
       try {

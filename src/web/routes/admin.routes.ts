@@ -242,17 +242,18 @@ router.get("/api/projects/:id", async (req: Request<{id: string}>, res: Response
 
 router.get("/api/projects/:id/files", (req: Request<{id: string}>, res: Response) => {
   const projectId = req.params.id;
-  const projectDir = path.join(PROJECTS_DIR, projectId);
-  if (!fs.existsSync(projectDir)) { res.json({ files: [] }); return; }
-  res.json({ files: walkDir(projectDir, projectDir) });
+  const devDir = path.join(PROJECTS_DIR, projectId, "development");
+  if (!fs.existsSync(devDir)) { res.json({ files: [] }); return; }
+  res.json({ files: walkDir(devDir, devDir) });
 });
 
 router.get("/api/projects/:id/file", (req: Request<{id: string}>, res: Response) => {
   const projectId = req.params.id;
   const filePath = String(req.query.path || "");
   if (!filePath || filePath.includes("..")) { res.status(400).json({ error: "Invalid path" }); return; }
-  const fullPath = path.join(PROJECTS_DIR, projectId, filePath);
-  if (!fullPath.startsWith(path.join(PROJECTS_DIR, projectId))) { res.status(403).json({ error: "Forbidden" }); return; }
+  const devDir = path.join(PROJECTS_DIR, projectId, "development");
+  const fullPath = path.join(devDir, filePath);
+  if (!fullPath.startsWith(devDir)) { res.status(403).json({ error: "Forbidden" }); return; }
   if (!fs.existsSync(fullPath)) { res.status(404).json({ error: "Not found" }); return; }
   res.json({ content: fs.readFileSync(fullPath, "utf-8") });
 });

@@ -63,7 +63,7 @@ export class BotRunnerService {
         try {
           const path = require("path");
           const fs = require("fs");
-          const dataDir = path.join(process.cwd(), "projects", projectId, "data");
+          const dataDir = path.join(process.cwd(), "projects", projectId, "release", "data");
           if (fs.existsSync(path.join(dataDir, "app.db"))) {
             const sqlite = new Database(path.join(dataDir, "app.db"));
             sqlite.pragma("journal_mode = WAL");

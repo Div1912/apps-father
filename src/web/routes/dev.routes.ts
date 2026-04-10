@@ -25,7 +25,7 @@ router.get("/:projectId/{*filePath}", async (req: Request, res: Response) => {
   const rawPath = (Array.isArray(rawParam) ? rawParam.join("/") : String(rawParam || "")).replace(/^\/+/, "");
   const filePath = rawPath || "index.html";
 
-  const fullPath = path.join(PROJECTS_DIR, projectId, "frontend", filePath);
+  const fullPath = path.join(PROJECTS_DIR, projectId, "development", "frontend", filePath);
 
   if (!fullPath.startsWith(path.join(PROJECTS_DIR, projectId))) {
     res.status(403).send("Forbidden");
@@ -36,7 +36,7 @@ router.get("/:projectId/{*filePath}", async (req: Request, res: Response) => {
 
   if (!fs.existsSync(fullPath)) {
     if (isIndex || !rawPath) {
-      const indexPath = path.join(PROJECTS_DIR, projectId, "frontend", "index.html");
+      const indexPath = path.join(PROJECTS_DIR, projectId, "development", "frontend", "index.html");
       if (fs.existsSync(indexPath)) {
         const html = await injectSplash(projectId, indexPath);
         res.type("html").send(rewriteApiPaths(html, projectId));

@@ -19,9 +19,7 @@ router.get("/:projectId/{*filePath}", async (req: Request, res: Response) => {
   const rawPath = (Array.isArray(rawParam) ? rawParam.join("/") : String(rawParam || "")).replace(/^\/+/, "");
   const filePath = rawPath || "index.html";
 
-  const releaseBase = path.join(PROJECTS_DIR, projectId, "release", "frontend");
-  const devBase = path.join(PROJECTS_DIR, projectId, "frontend");
-  const baseDir = fs.existsSync(releaseBase) ? releaseBase : devBase;
+  const baseDir = path.join(PROJECTS_DIR, projectId, "release", "frontend");
 
   const fullPath = path.join(baseDir, filePath);
 

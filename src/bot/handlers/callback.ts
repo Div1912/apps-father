@@ -593,15 +593,17 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
         }
       } : undefined;
 
-      const progress = async (p: { action: string; detail: string; percent?: number }) => {
+      const currentBalance = await billingService.getUserBalance(user.id);
+
+      const progress = async (p: { action: string; detail: string; percent?: number; costUsd?: number; balance?: number }) => {
         if (Date.now() - lastUpdate < 2000) return;
         lastUpdate = Date.now();
         try {
           await ctx.api.editMessageText(
             ctx.chat!.id, statusMsg.message_id,
             useChecklist
-              ? checklistMessage(t(lang, "building_app"), items, `${p.action} ${esc(p.detail)}`, lang)
-              : processMessage(`${p.action} ${esc(p.detail)}`, p.percent, lang),
+              ? checklistMessage(t(lang, "building_app"), items, `${p.action} ${esc(p.detail)}`, lang, p.costUsd, p.balance, p.percent)
+              : processMessage(`${p.action} ${esc(p.detail)}`, p.percent, lang, p.costUsd, p.balance),
             { parse_mode: "HTML" }
           );
         } catch {}
@@ -618,6 +620,7 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
         useChecklist ? checklistItems : undefined,
         onCheckTodo,
         lang,
+        currentBalance,
       );
 
       const usage = await billingService.recordUsage(
@@ -629,7 +632,7 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
       await projectService.updateProjectStatus(projectId, "deployed");
 
       try {
-        await commitService.createCommit(projectId, `App created: ${(project.description || "").substring(0, 80)}`, result.logPath);
+        await commitService.createCommit(projectId, `App created: ${(project.description || "").substring(0, 80)}`, result.commitNum!, result.commitDir!, result.logPath);
         await commitService.releaseCurrentDev(projectId);
       } catch (commitErr) {
         console.error("[Callback] Commit/release error:", commitErr);
@@ -1021,22 +1024,24 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
         }
       } : undefined;
 
-      const progress = async (p: { action: string; detail: string; percent?: number }) => {
+      const currentBalance = await billingService.getUserBalance(user.id);
+
+      const progress = async (p: { action: string; detail: string; percent?: number; costUsd?: number; balance?: number }) => {
         if (Date.now() - lastUpdate < 2000) return;
         lastUpdate = Date.now();
         try {
           await ctx.api.editMessageText(
             ctx.chat!.id, statusMsg.message_id,
             useChecklist
-              ? checklistMessage(t(lang, "applying_suggestion"), items, `${p.action} ${esc(p.detail)}`, lang)
-              : processMessage(`${p.action} ${esc(p.detail)}`, p.percent, lang),
+              ? checklistMessage(t(lang, "applying_suggestion"), items, `${p.action} ${esc(p.detail)}`, lang, p.costUsd, p.balance, p.percent)
+              : processMessage(`${p.action} ${esc(p.detail)}`, p.percent, lang, p.costUsd, p.balance),
             { parse_mode: "HTML" }
           );
         } catch {}
       };
 
       const askUser = createAskUser(projectId, ctx.chat!.id, statusMsg.message_id, lang);
-      const result = await agentService.updateApp(projectId, suggestion, progress, undefined, askUser, useChecklist ? checklistItems : undefined, onCheckTodo, lang);
+      const result = await agentService.updateApp(projectId, suggestion, progress, undefined, askUser, useChecklist ? checklistItems : undefined, onCheckTodo, lang, currentBalance);
 
       const usage = await billingService.recordUsage(
         user.id, projectId, result.model,
@@ -1045,7 +1050,7 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
       );
 
       try {
-        await commitService.createCommit(projectId, `Update: ${suggestion.substring(0, 80)}`, result.logPath);
+        await commitService.createCommit(projectId, `Update: ${suggestion.substring(0, 80)}`, result.commitNum!, result.commitDir!, result.logPath);
       } catch (commitErr) {
         console.error("[Callback] Commit error (suggestion):", commitErr);
       }
@@ -1286,6 +1291,31 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
       `${t(lang, "quality_desc")}\n\n` + desc,
       { parse_mode: "HTML", reply_markup: qualityKeyboard(projectId, tier, lang) }
     );
+  });
+
+  bot.callbackQuery(/^regen_context:(.+)$/, async (ctx) => {
+    await ack(ctx);
+    const lang = getLang(ctx);
+    const projectId = ctx.match![1];
+
+    await ctx.editMessageText(
+      `${ce(EMOJI.loading, "⏳")} ${t(lang, "regen_context_start")}`,
+      { parse_mode: "HTML" },
+    );
+
+    try {
+      await agentService.regenerateContext(projectId);
+      await ctx.editMessageText(
+        `${ce(EMOJI.indicator_success, "✅")} ${t(lang, "regen_context_done")}`,
+        { parse_mode: "HTML", reply_markup: settingsKeyboard(projectId, lang) },
+      );
+    } catch (err: any) {
+      console.error(`[Callback] regen_context error:`, err.message);
+      await ctx.editMessageText(
+        `${ce(EMOJI.indicator_error, "❌")} ${t(lang, "regen_context_error")}`,
+        { parse_mode: "HTML", reply_markup: settingsKeyboard(projectId, lang) },
+      );
+    }
   });
 
   bot.callbackQuery(/^transfer:(.+)$/, async (ctx) => {

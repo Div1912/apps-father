@@ -96,7 +96,7 @@ async function downloadTelegramFile(
 
   const ext = path.extname(tgFile.file_path) || path.extname(suggestedName) || "";
   const fileName = `upload_${Date.now()}${ext}`;
-  const assetsDir = path.join(PROJECTS_DIR, projectId, "frontend", "assets");
+  const assetsDir = path.join(PROJECTS_DIR, projectId, "development", "frontend", "assets");
   fs.mkdirSync(assetsDir, { recursive: true });
 
   const localPath = path.join(assetsDir, fileName);
@@ -448,7 +448,9 @@ async function handleUpdateDescription(ctx: BotContext, projectId: string, updat
       }
     } : undefined;
 
-    const progress = async (p: { action: string; detail: string; percent?: number }) => {
+    const currentBalance = await billingService.getUserBalance(user.id);
+
+    const progress = async (p: { action: string; detail: string; percent?: number; costUsd?: number; balance?: number }) => {
       if (Date.now() - lastUpdate < 2000) return;
       lastUpdate = Date.now();
       try {
@@ -456,15 +458,15 @@ async function handleUpdateDescription(ctx: BotContext, projectId: string, updat
           ctx.chat!.id,
           statusMsg.message_id,
           useChecklist
-            ? checklistMessage(t(lang, "updating_app"), items, `${p.action} ${esc(p.detail)}`, lang)
-            : processMessage(`${p.action} ${esc(p.detail)}`, p.percent, lang),
+            ? checklistMessage(t(lang, "updating_app"), items, `${p.action} ${esc(p.detail)}`, lang, p.costUsd, p.balance, p.percent)
+            : processMessage(`${p.action} ${esc(p.detail)}`, p.percent, lang, p.costUsd, p.balance),
           { parse_mode: "HTML" }
         );
       } catch {}
     };
 
     const askUser = createConvAskUser(projectId, ctx.chat!.id, statusMsg.message_id, lang);
-    const result = await agentService.updateApp(projectId, updateText, progress, attachments, askUser, useChecklist ? checklistItems : undefined, onCheckTodo, lang);
+    const result = await agentService.updateApp(projectId, updateText, progress, attachments, askUser, useChecklist ? checklistItems : undefined, onCheckTodo, lang, currentBalance);
 
     const usage = await billingService.recordUsage(
       user.id, projectId, result.model,
@@ -475,7 +477,7 @@ async function handleUpdateDescription(ctx: BotContext, projectId: string, updat
     await projectService.updateProjectStatus(projectId, "deployed");
 
     try {
-      await commitService.createCommit(projectId, `Update: ${updateText.substring(0, 80)}`, result.logPath);
+      await commitService.createCommit(projectId, `Update: ${updateText.substring(0, 80)}`, result.commitNum!, result.commitDir!, result.logPath);
     } catch (commitErr) {
       console.error("[Conversation] Commit error:", commitErr);
     }

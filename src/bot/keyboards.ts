@@ -132,6 +132,9 @@ export function settingsKeyboard(projectId: string, lang: Lang = "en") {
         { text: t(lang, "btn_quality"), callback_data: `quality:${projectId}`, icon_custom_emoji_id: EMOJI.setting },
       ],
       [
+        { text: t(lang, "btn_regen_context"), callback_data: `regen_context:${projectId}`, icon_custom_emoji_id: EMOJI.update },
+      ],
+      [
         { text: t(lang, "btn_transfer"), callback_data: `transfer:${projectId}`, icon_custom_emoji_id: EMOJI.indicator_warning },
       ],
       [

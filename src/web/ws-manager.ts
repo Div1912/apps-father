@@ -72,8 +72,8 @@ function createProjectDb(projectDir: string, botToken: string, botUsername: stri
 async function initProjectWs(projectId: string, isDev: boolean): Promise<ProjectWsState | null> {
   const projectDir = path.join(PROJECTS_DIR, projectId);
   const releaseBackend = path.join(projectDir, "release", "backend", "routes.js");
-  const devBackend = path.join(projectDir, "backend", "routes.js");
-  const routesFile = isDev ? devBackend : (fs.existsSync(releaseBackend) ? releaseBackend : devBackend);
+  const devBackend = path.join(projectDir, "development", "backend", "routes.js");
+  const routesFile = isDev ? devBackend : releaseBackend;
 
   if (!fs.existsSync(routesFile)) return null;
 
@@ -94,7 +94,8 @@ async function initProjectWs(projectId: string, isDev: boolean): Promise<Project
     botUsername = project.botUsername;
   }
 
-  const db = createProjectDb(projectDir, botToken, botUsername, projectId);
+  const envDir = isDev ? path.join(projectDir, "development") : path.join(projectDir, "release");
+  const db = createProjectDb(envDir, botToken, botUsername, projectId);
   const state: ProjectWsState = {
     clients: new Set(),
     connectionHandler: null,

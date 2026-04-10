@@ -33,17 +33,18 @@ function walkDir(dir: string, base: string): { path: string; name: string; langu
 
 router.get("/:projectId/api/files", (req: Request, res: Response) => {
   const projectId = String(req.params.projectId);
-  const projectDir = path.join(PROJECTS_DIR, projectId);
-  if (!fs.existsSync(projectDir)) { res.json({ files: [] }); return; }
-  res.json({ files: walkDir(projectDir, projectDir) });
+  const devDir = path.join(PROJECTS_DIR, projectId, "development");
+  if (!fs.existsSync(devDir)) { res.json({ files: [] }); return; }
+  res.json({ files: walkDir(devDir, devDir) });
 });
 
 router.get("/:projectId/api/file", (req: Request, res: Response) => {
   const projectId = String(req.params.projectId);
   const filePath = String(req.query.path || "");
   if (!filePath || filePath.includes("..")) { res.status(400).json({ error: "Invalid path" }); return; }
-  const fullPath = path.join(PROJECTS_DIR, projectId, filePath);
-  if (!fullPath.startsWith(path.join(PROJECTS_DIR, projectId))) { res.status(403).json({ error: "Forbidden" }); return; }
+  const devDir = path.join(PROJECTS_DIR, projectId, "development");
+  const fullPath = path.join(devDir, filePath);
+  if (!fullPath.startsWith(devDir)) { res.status(403).json({ error: "Forbidden" }); return; }
   if (!fs.existsSync(fullPath)) { res.status(404).json({ error: "File not found" }); return; }
   res.json({ content: fs.readFileSync(fullPath, "utf-8"), language: getLanguage(filePath) });
 });
@@ -52,8 +53,9 @@ router.post("/:projectId/api/file", (req: Request, res: Response) => {
   const projectId = String(req.params.projectId);
   const { path: filePath, content } = req.body;
   if (!filePath || typeof content !== "string" || filePath.includes("..")) { res.status(400).json({ error: "Invalid request" }); return; }
-  const fullPath = path.join(PROJECTS_DIR, projectId, filePath);
-  if (!fullPath.startsWith(path.join(PROJECTS_DIR, projectId))) { res.status(403).json({ error: "Forbidden" }); return; }
+  const devDir = path.join(PROJECTS_DIR, projectId, "development");
+  const fullPath = path.join(devDir, filePath);
+  if (!fullPath.startsWith(devDir)) { res.status(403).json({ error: "Forbidden" }); return; }
   fs.mkdirSync(path.dirname(fullPath), { recursive: true });
   fs.writeFileSync(fullPath, content, "utf-8");
   res.json({ ok: true });
@@ -63,8 +65,9 @@ router.post("/:projectId/api/new-file", (req: Request, res: Response) => {
   const projectId = String(req.params.projectId);
   const { path: filePath } = req.body;
   if (!filePath || filePath.includes("..")) { res.status(400).json({ error: "Invalid path" }); return; }
-  const fullPath = path.join(PROJECTS_DIR, projectId, filePath);
-  if (!fullPath.startsWith(path.join(PROJECTS_DIR, projectId))) { res.status(403).json({ error: "Forbidden" }); return; }
+  const devDir = path.join(PROJECTS_DIR, projectId, "development");
+  const fullPath = path.join(devDir, filePath);
+  if (!fullPath.startsWith(devDir)) { res.status(403).json({ error: "Forbidden" }); return; }
   if (fs.existsSync(fullPath)) { res.status(409).json({ error: "File already exists" }); return; }
   fs.mkdirSync(path.dirname(fullPath), { recursive: true });
   fs.writeFileSync(fullPath, "", "utf-8");
@@ -75,8 +78,9 @@ router.delete("/:projectId/api/file", (req: Request, res: Response) => {
   const projectId = String(req.params.projectId);
   const filePath = String(req.query.path || "");
   if (!filePath || filePath.includes("..")) { res.status(400).json({ error: "Invalid path" }); return; }
-  const fullPath = path.join(PROJECTS_DIR, projectId, filePath);
-  if (!fullPath.startsWith(path.join(PROJECTS_DIR, projectId))) { res.status(403).json({ error: "Forbidden" }); return; }
+  const devDir = path.join(PROJECTS_DIR, projectId, "development");
+  const fullPath = path.join(devDir, filePath);
+  if (!fullPath.startsWith(devDir)) { res.status(403).json({ error: "Forbidden" }); return; }
   if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
   res.json({ ok: true });
 });
