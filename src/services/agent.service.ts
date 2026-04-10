@@ -682,7 +682,7 @@ ${context}Update request: ${updateDescription}
 ${attachmentInfo}${featureGating}
 Use grep and read_file to verify current state before making changes. Use edit_file for targeted modifications. Use deploy_to_dev() to deploy and test your changes via the Dev URLs.${langInstruction}`;
 
-    return this.runAgent(projectId, prompt, onProgress, onAskUser, checklist, onCheckTodo, userBalance);
+    return this.runAgent(projectId, prompt, onProgress, onAskUser, checklist, onCheckTodo, userBalance, attachments);
   }
 
   private async runAgent(
@@ -693,6 +693,7 @@ Use grep and read_file to verify current state before making changes. Use edit_f
     checklist?: string[],
     onCheckTodo?: (id: number) => Promise<void>,
     userBalance?: number,
+    attachments?: { localPath: string; projectPath: string; originalName: string; caption?: string }[],
   ): Promise<AgentResult> {
     let liveCostUsd = 0;
     const startBalance = userBalance ?? 0;
@@ -745,8 +746,33 @@ Use grep and read_file to verify current state before making changes. Use edit_f
 
     logger.header(tierConfig.model, finalPrompt);
 
+    const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
+    const MIME_MAP: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif" };
+    const imageBlocks: any[] = [];
+    if (attachments && attachments.length > 0) {
+      for (const att of attachments) {
+        const ext = path.extname(att.originalName).toLowerCase();
+        if (IMAGE_EXTS.has(ext) && fs.existsSync(att.localPath)) {
+          try {
+            const data = fs.readFileSync(att.localPath).toString("base64");
+            imageBlocks.push({
+              type: "image",
+              source: { type: "base64", media_type: MIME_MAP[ext] || "image/png", data },
+            });
+            console.log(`[Agent] 🖼️ Attached image for vision: ${att.originalName} (${ext})`);
+          } catch (err) {
+            console.error(`[Agent] Failed to read image ${att.localPath}:`, err);
+          }
+        }
+      }
+    }
+
+    const firstMessageContent: any = imageBlocks.length > 0
+      ? [...imageBlocks, { type: "text", text: finalPrompt }]
+      : finalPrompt;
+
     const messages: Anthropic.MessageParam[] = [
-      { role: "user", content: finalPrompt },
+      { role: "user", content: firstMessageContent },
     ];
 
     let summary = "";
@@ -872,6 +898,10 @@ Use grep and read_file to verify current state before making changes. Use edit_f
               if (this.isProtectedPath(args.path)) { result = "Error: You can only write to frontend/ and backend/ directories."; break; }
               const filePath = this.safePath(projectDir, args.path);
               if (!filePath) { result = "Error: Invalid path"; break; }
+              if (typeof args.content !== "string" || args.content.length === 0) {
+                result = "Error: Content is empty or missing (likely truncated by max_tokens). Try writing a smaller file or use edit_file for targeted changes.";
+                break;
+              }
               fs.mkdirSync(path.dirname(filePath), { recursive: true });
               fs.writeFileSync(filePath, args.content, "utf-8");
               const lineCount = args.content.split("\n").length;
