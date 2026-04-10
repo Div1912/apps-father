@@ -10,6 +10,7 @@ import { projectService } from "./project.service";
 import { decryptToken } from "./crypto.service";
 import { runtimeConfig } from "./runtime-config.service";
 import { getProjectFeatures } from "./features.service";
+import { AgentLogger } from "./agent-logger";
 
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
 const SKILLS_DIR = path.join(process.cwd(), "skills");
@@ -485,6 +486,7 @@ export interface AgentResult {
   outputTokens: number;
   cacheWriteTokens: number;
   cacheReadTokens: number;
+  logPath?: string;
 }
 
 export const QUALITY_TIERS: Record<number, { model: string; thinking: number; maxIterations: number }> = {
@@ -661,6 +663,8 @@ Use grep and read_file to verify current state before making changes. Use edit_f
     fs.mkdirSync(path.join(projectDir, "frontend"), { recursive: true });
     fs.mkdirSync(path.join(projectDir, "backend"), { recursive: true });
 
+    const logger = new AgentLogger(projectId);
+
     let botToken = "";
     let qualityTier = 1;
     try {
@@ -679,6 +683,8 @@ Use grep and read_file to verify current state before making changes. Use edit_f
       const checklistText = checklist.map((item, i) => `${i + 1}. ${item}`).join("\n");
       finalPrompt += `\n\nYOUR TASK CHECKLIST (complete each item, then call check_todo(id) to mark it done):\n${checklistText}\n\nYou MUST call check_todo(id) after completing each task. Call done() only after ALL tasks are checked off.`;
     }
+
+    logger.header(tierConfig.model, finalPrompt);
 
     const messages: Anthropic.MessageParam[] = [
       { role: "user", content: finalPrompt },
@@ -720,18 +726,22 @@ Use grep and read_file to verify current state before making changes. Use edit_f
       const assistantContent: Anthropic.ContentBlock[] = response.content;
       messages.push({ role: "assistant", content: assistantContent });
 
-      // Log Claude's response
+      logger.iteration(iterations, tierConfig.model);
+      logger.tokens(totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens);
+
       const thinkingBlocks = assistantContent.filter(b => (b as any).type === "thinking");
       const textBlocks = assistantContent.filter(b => b.type === "text");
       const toolBlocks = assistantContent.filter(b => b.type === "tool_use");
       for (const tb of thinkingBlocks) {
         const thinking = (tb as any).thinking || "";
         if (thinking.trim()) {
+          logger.thinking(thinking);
           console.log(`[Agent] 🧠 Thinking: ${thinking.substring(0, 300).replace(/\n/g, " ")}${thinking.length > 300 ? "..." : ""}`);
         }
       }
       for (const tb of textBlocks) {
         if (tb.type === "text" && tb.text.trim()) {
+          logger.claudeMessage(tb.text);
           console.log(`[Agent] 💬 Claude says: ${tb.text.substring(0, 500)}`);
         }
       }
@@ -745,6 +755,7 @@ Use grep and read_file to verify current state before making changes. Use edit_f
         if (textBlock && textBlock.type === "text") {
           summary = textBlock.text;
         }
+        logger.done(summary, iterations, totalInputTokens, totalOutputTokens);
         console.log(`[Agent] ⏹️ Agent finished after ${iterations} iterations | Total tokens: in=${totalInputTokens} out=${totalOutputTokens}`);
         break;
       }
@@ -758,6 +769,7 @@ Use grep and read_file to verify current state before making changes. Use edit_f
         const args = input as any;
         let result = "";
         const argsSummary = this.summarizeArgs(name, args);
+        logger.toolCall(name, args);
 
         try {
           switch (name) {
@@ -1129,7 +1141,10 @@ Use grep and read_file to verify current state before making changes. Use edit_f
               bustCache(projectDir);
               toolResults.push({ type: "tool_result", tool_use_id: id, content: "OK" });
               messages.push({ role: "user", content: toolResults });
-              return { summary, model: tierConfig.model, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens };
+              logger.done(summary, iterations, totalInputTokens, totalOutputTokens);
+              const logFilePath = logger.getLogPath();
+              logger.close();
+              return { summary, model: tierConfig.model, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath };
             }
 
             default:
@@ -1140,6 +1155,7 @@ Use grep and read_file to verify current state before making changes. Use edit_f
           console.error(`[Agent] ❌ Tool ${name} error:`, err.message);
         }
 
+        logger.toolResult(name, result);
         console.log(`[Agent] 📥 ${name}(${argsSummary}) -> ${result.substring(0, 200).replace(/\n/g, "\\n")}${result.length > 200 ? "..." : ""}`);
         toolResults.push({ type: "tool_result", tool_use_id: id, content: result });
       }
@@ -1163,6 +1179,10 @@ Use grep and read_file to verify current state before making changes. Use edit_f
 
     bustCache(path.join(PROJECTS_DIR, projectId));
 
+    logger.done(summary || "Agent reached iteration limit", iterations, totalInputTokens, totalOutputTokens);
+    const logFilePath = logger.getLogPath();
+    logger.close();
+
     return {
       summary: summary || "App updated (agent reached iteration limit)",
       model: tierConfig.model,
@@ -1170,6 +1190,7 @@ Use grep and read_file to verify current state before making changes. Use edit_f
       outputTokens: totalOutputTokens,
       cacheWriteTokens: totalCacheWriteTokens,
       cacheReadTokens: totalCacheReadTokens,
+      logPath: logFilePath,
     };
   }
 

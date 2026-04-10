@@ -329,4 +329,22 @@ router.get("/history", (req: Request, res: Response) => {
   res.json(result);
 });
 
+// Agent log download for a specific commit
+router.get("/agent/:projectId/:commitNum", (req: Request, res: Response) => {
+  const projectId = req.params.projectId as string;
+  const commitNum = req.params.commitNum as string;
+  const num = parseInt(commitNum, 10);
+  if (isNaN(num)) { res.status(400).send("Invalid commit number"); return; }
+
+  const logFile = path.join(process.cwd(), "projects", projectId, "commits", String(num), "agent.log");
+  if (!fs.existsSync(logFile)) {
+    res.status(404).send("Log file not found");
+    return;
+  }
+
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="agent-commit-${num}.log"`);
+  fs.createReadStream(logFile).pipe(res);
+});
+
 export default router;

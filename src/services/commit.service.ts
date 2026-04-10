@@ -39,7 +39,7 @@ function bustCache(projectDir: string): void {
 }
 
 class CommitService {
-  async createCommit(projectId: string, message: string): Promise<number> {
+  async createCommit(projectId: string, message: string, logPath?: string): Promise<number> {
     const projectDir = path.join(PROJECTS_DIR, projectId);
     const commitsDir = path.join(projectDir, "commits");
     fs.mkdirSync(commitsDir, { recursive: true });
@@ -61,6 +61,12 @@ class CommitService {
 
     copyDirSync(path.join(projectDir, "frontend"), path.join(commitDir, "frontend"));
     copyDirSync(path.join(projectDir, "backend"), path.join(commitDir, "backend"));
+
+    if (logPath && fs.existsSync(logPath)) {
+      try {
+        fs.copyFileSync(logPath, path.join(commitDir, "agent.log"));
+      } catch {}
+    }
 
     await prisma.version.create({
       data: {
@@ -144,6 +150,11 @@ class CommitService {
       where: { projectId },
       orderBy: { id: "desc" },
     });
+  }
+
+  getLogPath(projectId: string, commitNum: number): string | null {
+    const logFile = path.join(PROJECTS_DIR, projectId, "commits", String(commitNum), "agent.log");
+    return fs.existsSync(logFile) ? logFile : null;
   }
 
   async migrateExistingProjects(): Promise<number> {

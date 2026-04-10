@@ -475,7 +475,7 @@ async function handleUpdateDescription(ctx: BotContext, projectId: string, updat
     await projectService.updateProjectStatus(projectId, "deployed");
 
     try {
-      await commitService.createCommit(projectId, `Update: ${updateText.substring(0, 80)}`);
+      await commitService.createCommit(projectId, `Update: ${updateText.substring(0, 80)}`, result.logPath);
     } catch (commitErr) {
       console.error("[Conversation] Commit error:", commitErr);
     }

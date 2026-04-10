@@ -629,7 +629,7 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
       await projectService.updateProjectStatus(projectId, "deployed");
 
       try {
-        await commitService.createCommit(projectId, `App created: ${(project.description || "").substring(0, 80)}`);
+        await commitService.createCommit(projectId, `App created: ${(project.description || "").substring(0, 80)}`, result.logPath);
         await commitService.releaseCurrentDev(projectId);
       } catch (commitErr) {
         console.error("[Callback] Commit/release error:", commitErr);
@@ -1045,7 +1045,7 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
       );
 
       try {
-        await commitService.createCommit(projectId, `Update: ${suggestion.substring(0, 80)}`);
+        await commitService.createCommit(projectId, `Update: ${suggestion.substring(0, 80)}`, result.logPath);
       } catch (commitErr) {
         console.error("[Callback] Commit error (suggestion):", commitErr);
       }
@@ -1165,9 +1165,19 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
     const commit = commits.find(c => c.version === commitNum);
     const label = commit?.changelog || `Commit #${commitNum}`;
 
+    const hasLog = !!commitService.getLogPath(projectId, parseInt(commitNum, 10));
+
+    const rows: any[][] = [];
+    if (hasLog) {
+      const logUrl = `${config.baseUrl}/logs/agent/${projectId}/${commitNum}`;
+      rows.push([{ text: t(lang, "btn_agent_log"), url: logUrl }]);
+    }
+    rows.push([{ text: t(lang, "btn_yes_revert"), callback_data: `rvc:${projectId}:${commitNum}`, icon_custom_emoji_id: EMOJI.indicator_warning }]);
+    rows.push([{ text: t(lang, "btn_cancel"), callback_data: `versions:${projectId}` }]);
+
     await ctx.editMessageText(
       `${ce(EMOJI.indicator_warning)} <b>${t(lang, "revert_confirm", { num: commitNum })}</b>\n\n<i>${esc(label)}</i>\n\n${t(lang, "revert_warning")}`,
-      { parse_mode: "HTML", reply_markup: revertConfirmKeyboard(projectId, commitNum, lang) }
+      { parse_mode: "HTML", reply_markup: { inline_keyboard: rows } }
     );
   });
 
