@@ -1,5 +1,6 @@
 import { Bot } from "grammy";
 import { BotContext } from "../../types";
+import { publishReport } from "../../services/telegraph.service";
 import { projectService } from "../../services/project.service";
 import { claudeService } from "../../services/claude.service";
 import { agentService } from "../../services/agent.service";
@@ -19,15 +20,17 @@ import {
   qualityKeyboard,
   versionsKeyboard,
   revertConfirmKeyboard,
+  languageKeyboard,
 } from "../keyboards";
 import { commitService } from "../../services/commit.service";
 import { setPending, resolveByProject, getPendingByProject } from "../agent-questions";
 import { getProjectFeatures, getFeatureById, purchaseFeature, PAID_FEATURES } from "../../services/features.service";
 import { decryptToken } from "../../services/crypto.service";
 import { prisma } from "../../db";
-import { processMessage, doneMessage, errorMessage, costLine, truncSummary, mdToTgHtml } from "../progress";
+import { processMessage, doneMessage, errorMessage, costLine, truncSummary, mdToTgHtml, checklistMessage, ChecklistItem } from "../progress";
 import { EMOJI, ce, statusIndicator } from "../emoji";
 import { getNavWelcomeText } from "../commands/start";
+import { Lang, t, translateStatus, translateFeatureLabel, translateFeatureDesc } from "../i18n";
 
 import fs from "fs";
 import path from "path";
@@ -36,13 +39,8 @@ function esc(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function qualityDescription(): string {
-  return (
-    `<b>Good</b> — Sonnet 4.6, 60 iterations\n` +
-    `<b>Better</b> — Sonnet 4.6+, 100 iterations\n` +
-    `<b>Best</b> — Opus 4.6, 60 iterations\n` +
-    `<b>The Best</b> — Opus 4.6+, 100 iterations`
-  );
+function getLang(ctx: BotContext): Lang {
+  return ctx.session.language || "en";
 }
 
 async function ack(ctx: any) {
@@ -58,7 +56,7 @@ const tgApi = (method: string, body: any) =>
     body: JSON.stringify(body),
   }).catch(() => {});
 
-function createAskUser(projectId: string, chatId: number, statusMsgId: number) {
+function createAskUser(projectId: string, chatId: number, statusMsgId: number, lang: Lang = "en") {
   return async (question: string, options: string[]): Promise<string> => {
     const answer = await new Promise<string>((resolve) => {
       setPending(projectId, chatId, options, resolve);
@@ -66,11 +64,11 @@ function createAskUser(projectId: string, chatId: number, statusMsgId: number) {
       const keyboard: any[][] = options.map((opt, i) => [
         { text: opt, callback_data: `aq:${projectId}:${i}` },
       ]);
-      keyboard.push([{ text: "Skip", callback_data: `aq:${projectId}:skip` }]);
+      keyboard.push([{ text: t(lang, "btn_skip"), callback_data: `aq:${projectId}:skip` }]);
 
       const questionHtml =
-        `❓ <b>Question from AI:</b>\n\n${esc(question)}` +
-        (options.length === 0 ? "\n\n<i>Type your answer below, or press Skip.</i>" : "");
+        `❓ <b>${t(lang, "ai_question")}</b>\n\n${esc(question)}` +
+        (options.length === 0 ? `\n\n<i>${t(lang, "ai_question_hint")}</i>` : "");
 
       tgApi("editMessageText", {
         chat_id: chatId,
@@ -84,7 +82,7 @@ function createAskUser(projectId: string, chatId: number, statusMsgId: number) {
     await tgApi("editMessageText", {
       chat_id: chatId,
       message_id: statusMsgId,
-      text: processMessage("Continuing..."),
+      text: processMessage(t(lang, "continuing"), undefined, lang),
       parse_mode: "HTML",
     });
 
@@ -92,51 +90,53 @@ function createAskUser(projectId: string, chatId: number, statusMsgId: number) {
   };
 }
 
-function buildListText(projects: { name: string; status: string }[], slotUsed?: number, slotTotal?: number): string {
+function buildListText(projects: { name: string; status: string }[], slotUsed?: number, slotTotal?: number, lang: Lang = "en"): string {
   const slotLine = typeof slotUsed === "number" && typeof slotTotal === "number"
-    ? `\n📱 <b>App Slots: ${slotUsed}/${slotTotal}</b>\n` : "";
-  let text = `${ce(EMOJI.list)} <b>Your Projects:</b>${slotLine}\n`;
+    ? `\n📱 <b>${t(lang, "app_slots", { used: slotUsed, total: slotTotal })}</b>\n` : "";
+  let text = `${ce(EMOJI.list)} <b>${t(lang, "your_projects")}</b>${slotLine}\n`;
   for (const p of projects) {
-    text += `${statusIndicator(p.status)} <b>${esc(p.name)}</b> — ${p.status}\n`;
+    text += `${statusIndicator(p.status)} <b>${esc(p.name)}</b> — ${translateStatus(lang, p.status)}\n`;
   }
   return text;
 }
 
-const HELP_TEXT =
-  `${ce(EMOJI.help)} <b>Apps Father Help</b>\n\n` +
-  `I create Telegram Mini Apps for you using AI.\n\n` +
-  `<b>How it works:</b>\n` +
-  `1. Create a new project\n` +
-  `2. A new bot will be created for your app\n` +
-  `3. Describe what your app should do\n` +
-  `4. I'll generate a plan for you to review\n` +
-  `5. Approve the plan and I'll build the app\n` +
-  `6. Test your app via the bot's Launch button\n` +
-  `7. Request updates and improvements anytime\n\n` +
-  `<b>Features:</b>\n` +
-  `• AI-generated Mini Apps with database &amp; backend\n` +
-  `• Send images to use as design references\n` +
-  `• AI-powered improvement suggestions\n` +
-  `• Version management &amp; releases\n` +
-  `• Admin analytics panel for each project`;
+function qualityDescription(lang: Lang = "en"): string {
+  return (
+    `<b>${t(lang, "quality_good")}</b> — Sonnet 4.6, 60 iterations\n` +
+    `<b>${t(lang, "quality_better")}</b> — Sonnet 4.6+, 100 iterations\n` +
+    `<b>${t(lang, "quality_best")}</b> — Opus 4.6, 60 iterations\n` +
+    `<b>${t(lang, "quality_the_best")}</b> — Opus 4.6+, 100 iterations`
+  );
+}
 
 export function registerCallbackHandlers(bot: Bot<BotContext>) {
 
-  // ── Navigation (edits the current message) ──
+  bot.on("callback_query:data", async (_ctx, next) => {
+    try {
+      await next();
+    } catch (err: any) {
+      if (err?.message?.includes("message is not modified")) return;
+      console.error("[Callback] Error:", err.message || err);
+    }
+  });
+
+  // ── Navigation ──
 
   bot.callbackQuery("nav_welcome", async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const from = ctx.from;
     const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
     const balance = await billingService.getUserBalance(user.id);
-    await ctx.editMessageText(getNavWelcomeText(balance), {
+    await ctx.editMessageText(getNavWelcomeText(balance, lang), {
       parse_mode: "HTML",
-      reply_markup: welcomeKeyboard(),
+      reply_markup: welcomeKeyboard(lang),
     });
   });
 
   bot.callbackQuery("nav_list", async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const from = ctx.from;
     const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
     const [projects, slots] = await Promise.all([
@@ -145,21 +145,22 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
     ]);
 
     if (projects.length === 0) {
-      await ctx.editMessageText("You don't have any projects yet.", {
+      await ctx.editMessageText(t(lang, "no_projects"), {
         parse_mode: "HTML",
-        reply_markup: { inline_keyboard: [[{ text: "Back", callback_data: "nav_welcome" }]] },
+        reply_markup: { inline_keyboard: [[{ text: t(lang, "btn_back"), callback_data: "nav_welcome" }]] },
       });
       return;
     }
 
-    await ctx.editMessageText(buildListText(projects, slots.used, slots.total), {
+    await ctx.editMessageText(buildListText(projects, slots.used, slots.total, lang), {
       parse_mode: "HTML",
-      reply_markup: projectListKeyboard(projects, slots.used < slots.total),
+      reply_markup: projectListKeyboard(projects, slots.used < slots.total, lang),
     });
   });
 
   bot.callbackQuery("my_projects", async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const from = ctx.from;
     const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
     const [projects, slots] = await Promise.all([
@@ -168,64 +169,228 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
     ]);
 
     if (projects.length === 0) {
-      await ctx.editMessageText("You don't have any projects yet.", {
+      await ctx.editMessageText(t(lang, "no_projects"), {
         parse_mode: "HTML",
-        reply_markup: { inline_keyboard: [[{ text: "Back", callback_data: "nav_welcome" }]] },
+        reply_markup: { inline_keyboard: [[{ text: t(lang, "btn_back"), callback_data: "nav_welcome" }]] },
       });
       return;
     }
 
-    await ctx.editMessageText(buildListText(projects, slots.used, slots.total), {
+    await ctx.editMessageText(buildListText(projects, slots.used, slots.total, lang), {
       parse_mode: "HTML",
-      reply_markup: projectListKeyboard(projects, slots.used < slots.total),
+      reply_markup: projectListKeyboard(projects, slots.used < slots.total, lang),
     });
   });
 
   bot.callbackQuery("help", async (ctx) => {
     await ack(ctx);
-    await ctx.editMessageText(HELP_TEXT, {
-      parse_mode: "HTML",
-      reply_markup: helpKeyboard(),
-    });
+    const lang = getLang(ctx);
+    await ctx.editMessageText(
+      `${ce(EMOJI.help)} <b>${t(lang, "help_title")}</b>\n\n${t(lang, "help_body")}`,
+      { parse_mode: "HTML", reply_markup: helpKeyboard(lang) }
+    );
   });
+
+  // ── Language ──
+
+  bot.callbackQuery("language", async (ctx) => {
+    await ack(ctx);
+    const lang = getLang(ctx);
+    await ctx.editMessageText(
+      `${ce(EMOJI.setting)} <b>${t(lang, "language_title")}</b>\n\n${t(lang, "language_desc")}`,
+      { parse_mode: "HTML", reply_markup: languageKeyboard(lang) }
+    );
+  });
+
+  bot.callbackQuery(/^lang:(en|ru|ua)$/, async (ctx) => {
+    await ack(ctx);
+    const newLang = ctx.match[1] as Lang;
+    ctx.session.language = newLang;
+
+    const from = ctx.from;
+    const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
+    await prisma.user.update({ where: { id: user.id }, data: { language: newLang } });
+
+    const balance = await billingService.getUserBalance(user.id);
+    await ctx.editMessageText(
+      `${ce(EMOJI.indicator_success, "✅")} ${t(newLang, "language_changed")}\n\n${getNavWelcomeText(balance, newLang)}`,
+      { parse_mode: "HTML", reply_markup: welcomeKeyboard(newLang) }
+    );
+  });
+
+  // ── Topup ──
 
   bot.callbackQuery("topup", async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     ctx.session.awaitingInput = "topup_amount";
     ctx.session.activeProjectId = undefined;
     await ctx.reply(
-      `${ce(EMOJI.dollar, "💲")} <b>Top Up Balance</b>\n\n` +
-      `Enter the amount in USD you'd like to add (minimum <b>$10</b>):\n\n` +
-      `<blockquote>You can pay with any cryptocurrency via NOWPayments.\nYour balance will be credited after blockchain confirmation.</blockquote>`,
+      `${ce(EMOJI.dollar, "💲")} <b>${t(lang, "topup_title")}</b>\n\n` +
+      `${t(lang, "topup_enter_amount")}\n\n` +
+      `<blockquote>${t(lang, "topup_note")}</blockquote>`,
       { parse_mode: "HTML" }
     );
   });
 
+  bot.callbackQuery("referral", async (ctx) => {
+    await ack(ctx);
+    const lang = getLang(ctx);
+    const from = ctx.from;
+    const refLink = `https://t.me/apps_father_bot?start=${from.id}`;
+    const shareText = encodeURIComponent(t(lang, "referral_share_text"));
+    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(refLink)}&text=${shareText}`;
+
+    await ctx.editMessageText(
+      `${ce(EMOJI.idea, "🎁")} <b>${t(lang, "referral_title")}</b>\n\n` +
+      t(lang, "referral_body", { link: refLink }),
+      {
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: t(lang, "btn_send_invites"), url: shareUrl }],
+            [{ text: t(lang, "btn_back"), callback_data: "nav_welcome" }],
+          ],
+        },
+      }
+    );
+  });
+
+  bot.callbackQuery(/^cryptobot_pay:(.+)$/, async (ctx) => {
+    await ack(ctx);
+    const lang = getLang(ctx);
+    const amount = parseFloat(ctx.match[1]);
+    if (isNaN(amount) || amount < 10) return;
+
+    const from = ctx.from;
+    const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
+
+    try {
+      const { invoiceUrl } = await billingService.createCryptoBotInvoice(user.id, amount);
+      await ctx.editMessageText(
+        doneMessage(
+          t(lang, "payment_created"),
+          t(lang, "payment_cryptobot_desc", { amount: amount.toFixed(2) })
+        ),
+        {
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: t(lang, "btn_pay", { amount: amount.toFixed(2) }), url: invoiceUrl }],
+              [{ text: t(lang, "btn_back"), callback_data: "nav_welcome" }],
+            ],
+          },
+        }
+      );
+    } catch (err) {
+      console.error("[Callback] CryptoBot topup error:", err);
+      await ctx.editMessageText(
+        errorMessage(t(lang, "payment_error"), lang),
+        { parse_mode: "HTML" }
+      );
+    }
+  });
+
+  bot.callbackQuery(/^nowpay:(.+)$/, async (ctx) => {
+    await ack(ctx);
+    const lang = getLang(ctx);
+    const amount = parseFloat(ctx.match[1]);
+    if (isNaN(amount) || amount < 10) return;
+
+    const from = ctx.from;
+    const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
+
+    try {
+      const { invoiceUrl } = await billingService.createTopUp(user.id, amount);
+      await ctx.editMessageText(
+        doneMessage(
+          t(lang, "payment_created"),
+          t(lang, "payment_nowpay_desc", { amount: amount.toFixed(2) })
+        ),
+        {
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: t(lang, "btn_pay", { amount: amount.toFixed(2) }), url: invoiceUrl }],
+              [{ text: t(lang, "btn_back"), callback_data: "nav_welcome" }],
+            ],
+          },
+        }
+      );
+    } catch (err) {
+      console.error("[Callback] NOWPayments topup error:", err);
+      await ctx.editMessageText(
+        errorMessage(t(lang, "payment_error"), lang),
+        { parse_mode: "HTML" }
+      );
+    }
+  });
+
+  // ── Stars Payment ──
+
+  bot.callbackQuery(/^stars_pay:(.+)$/, async (ctx) => {
+    await ack(ctx);
+    const lang = getLang(ctx);
+    const amount = parseFloat(ctx.match[1]);
+    if (isNaN(amount) || amount < 10) return;
+
+    const STAR_RATE = 0.013;
+    const rawStars = Math.ceil(amount / STAR_RATE);
+    const stars = Math.floor(rawStars / 10) * 10;
+
+    const from = ctx.from;
+    const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
+
+    try {
+      const { invoiceUrl } = await billingService.createStarsInvoice(user.id, amount, stars);
+      await ctx.editMessageText(
+        doneMessage(
+          t(lang, "payment_created"),
+          t(lang, "payment_stars_desc", { amount: amount.toFixed(2), stars: String(stars) })
+        ),
+        {
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: t(lang, "btn_pay_stars", { stars: String(stars) }), url: invoiceUrl }],
+              [{ text: t(lang, "btn_back"), callback_data: "nav_welcome" }],
+            ],
+          },
+        }
+      );
+    } catch (err) {
+      console.error("[Callback] Stars topup error:", err);
+      await ctx.editMessageText(
+        errorMessage(t(lang, "payment_error"), lang),
+        { parse_mode: "HTML" }
+      );
+    }
+  });
+
   bot.callbackQuery("buy_slot", async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const from = ctx.from;
     const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
     const balance = await billingService.getUserBalance(user.id);
     const slots = await projectService.getUserSlotInfo(user.id);
 
     await ctx.editMessageText(
-      `${ce(EMOJI.add, "📱")} <b>Buy App Slot</b>\n\n` +
-      `You currently have <b>${slots.used}/${slots.total}</b> app slots used.\n\n` +
-      `Price: <b>$25</b>\n` +
-      `Your balance: <b>$${balance.toFixed(2)}</b>\n\n` +
+      `${ce(EMOJI.add, "📱")} <b>${t(lang, "buy_slot_title")}</b>\n\n` +
+      t(lang, "buy_slot_info", { used: slots.used, total: slots.total, balance: balance.toFixed(2) }) + "\n\n" +
       (balance >= 25
-        ? "This will add one more app slot to your account."
-        : `⚠️ Insufficient balance. You need <b>$${(25 - balance).toFixed(2)}</b> more.`),
+        ? t(lang, "buy_slot_confirm")
+        : `⚠️ ${t(lang, "buy_slot_insufficient", { needed: (25 - balance).toFixed(2) })}`),
       {
         parse_mode: "HTML",
         reply_markup: balance >= 25
           ? { inline_keyboard: [
-              [{ text: "Confirm — $25", callback_data: "confirm_slot", icon_custom_emoji_id: EMOJI.indicator_success }],
-              [{ text: "Cancel", callback_data: "nav_welcome" }],
+              [{ text: t(lang, "btn_confirm_25"), callback_data: "confirm_slot", icon_custom_emoji_id: EMOJI.indicator_success }],
+              [{ text: t(lang, "btn_cancel"), callback_data: "nav_welcome" }],
             ]}
           : { inline_keyboard: [
-              [{ text: "Top Up", callback_data: "topup" }],
-              [{ text: "Cancel", callback_data: "nav_welcome" }],
+              [{ text: t(lang, "btn_topup"), callback_data: "topup" }],
+              [{ text: t(lang, "btn_cancel"), callback_data: "nav_welcome" }],
             ]},
       }
     );
@@ -233,76 +398,77 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
 
   bot.callbackQuery("confirm_slot", async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const from = ctx.from;
     const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
     try {
       const { newSlots, newBalance } = await projectService.buySlot(user.id);
       const slots = await projectService.getUserSlotInfo(user.id);
       await ctx.editMessageText(
-        `${ce(EMOJI.indicator_success, "✅")} <b>App slot purchased!</b>\n\n` +
-        `<blockquote>Charged: <b>$25</b>\nNew balance: <b>$${newBalance.toFixed(2)}</b>\nApp slots: <b>${slots.used}/${newSlots}</b></blockquote>`,
+        `${ce(EMOJI.indicator_success, "✅")} <b>${t(lang, "slot_purchased")}</b>\n\n` +
+        `<blockquote>${t(lang, "slot_purchased_detail", { balance: newBalance.toFixed(2), used: slots.used, total: newSlots })}</blockquote>`,
         {
           parse_mode: "HTML",
-          reply_markup: { inline_keyboard: [[{ text: "Back", callback_data: "nav_welcome" }]] },
+          reply_markup: { inline_keyboard: [[{ text: t(lang, "btn_back"), callback_data: "nav_welcome" }]] },
         }
       );
     } catch (err: any) {
       await ctx.editMessageText(
-        errorMessage(err.message || "Failed to buy slot"),
-        { parse_mode: "HTML", reply_markup: { inline_keyboard: [[{ text: "Back", callback_data: "nav_welcome" }]] } }
+        errorMessage(err.message || t(lang, "purchase_failed"), lang),
+        { parse_mode: "HTML", reply_markup: { inline_keyboard: [[{ text: t(lang, "btn_back"), callback_data: "nav_welcome" }]] } }
       );
     }
   });
 
   bot.callbackQuery(/^project:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     const project = await projectService.getProject(projectId);
 
     if (!project) {
-      await ctx.editMessageText("❌ Project not found.", {
-        reply_markup: { inline_keyboard: [[{ text: "Back", callback_data: "nav_list" }]] },
+      await ctx.editMessageText(`❌ ${t(lang, "project_not_found")}`, {
+        reply_markup: { inline_keyboard: [[{ text: t(lang, "btn_back"), callback_data: "nav_list" }]] },
       });
       return;
     }
 
     ctx.session.activeProjectId = projectId;
 
-    const botInfo = project.botUsername ? `\nBot: @${project.botUsername}` : "";
+    const botInfo = project.botUsername ? `\n${t(lang, "project_bot")} @${project.botUsername}` : "";
     const versionInfo = project.currentVersion ? `\nVersion: ${project.currentVersion}` : "";
-    const costInfo = Number(project.totalCostUsd) > 0 ? `\nTotal cost: $${Number(project.totalCostUsd).toFixed(2)}` : "";
+    const costInfo = Number(project.totalCostUsd) > 0 ? `\n${t(lang, "project_total_cost")} $${Number(project.totalCostUsd).toFixed(2)}` : "";
 
     await ctx.editMessageText(
       `${ce(EMOJI.logo)} <b>${esc(project.name)}</b>\n\n` +
-      `<blockquote>${statusIndicator(project.status)} Status: <b>${project.status}</b>${botInfo}${versionInfo}${costInfo}</blockquote>\n\n` +
+      `<blockquote>${statusIndicator(project.status)} ${t(lang, "project_status")} <b>${translateStatus(lang, project.status)}</b>${botInfo}${versionInfo}${costInfo}</blockquote>\n\n` +
       `${project.description ? `${ce(EMOJI.idea)} ${esc(project.description)}\n\n` : ""}` +
-      `What would you like to do?`,
+      t(lang, "project_what_to_do"),
       {
         parse_mode: "HTML",
-        reply_markup: projectActionsKeyboard(projectId, project.status, await getProjectFeatures(projectId), project.botUsername || undefined),
+        reply_markup: projectActionsKeyboard(projectId, project.status, await getProjectFeatures(projectId), project.botUsername || undefined, lang),
       }
     );
   });
 
-  // ── Actions (send new messages) ──
+  // ── Actions ──
 
   bot.callbackQuery("new_project", async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const from = ctx.from;
 
-    // Check channel subscription
     const CHANNEL_ID = "@apps_father";
     try {
       const member = await ctx.api.getChatMember(CHANNEL_ID, from.id);
       if (["left", "kicked"].includes(member.status)) {
         await ctx.reply(
-          `${ce(EMOJI.indicator_warning)} <b>Subscribe to continue</b>\n\n` +
-          `To create apps, please subscribe to our channel first:`,
+          `${ce(EMOJI.indicator_warning)} <b>${t(lang, "subscribe_title")}</b>\n\n${t(lang, "subscribe_body")}`,
           {
             parse_mode: "HTML",
             reply_markup: { inline_keyboard: [
-              [{ text: "Subscribe", url: "https://t.me/apps_father" }],
-              [{ text: "I've subscribed ✓", callback_data: "new_project" }],
+              [{ text: t(lang, "btn_subscribe"), url: "https://t.me/apps_father" }],
+              [{ text: t(lang, "btn_subscribed"), callback_data: "new_project" }],
             ]},
           }
         );
@@ -312,13 +478,12 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
       console.error("[Callback] Channel check failed:", err?.message || err);
       if (err?.description?.includes("member list is inaccessible") || err?.error_code === 400) {
         await ctx.reply(
-          `${ce(EMOJI.indicator_warning)} <b>Subscribe to continue</b>\n\n` +
-          `To create apps, please subscribe to our channel first:`,
+          `${ce(EMOJI.indicator_warning)} <b>${t(lang, "subscribe_title")}</b>\n\n${t(lang, "subscribe_body")}`,
           {
             parse_mode: "HTML",
             reply_markup: { inline_keyboard: [
-              [{ text: "Subscribe", url: "https://t.me/apps_father" }],
-              [{ text: "I've subscribed ✓", callback_data: "new_project" }],
+              [{ text: t(lang, "btn_subscribe"), url: "https://t.me/apps_father" }],
+              [{ text: t(lang, "btn_subscribed"), callback_data: "new_project" }],
             ]},
           }
         );
@@ -331,25 +496,23 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
     if (!canCreate) {
       const slots = await projectService.getUserSlotInfo(user.id);
       await ctx.reply(
-        `${ce(EMOJI.indicator_error)} <b>App slot limit reached (${slots.used}/${slots.total})</b>\n\n` +
-        `You need to buy an additional app slot for <b>$25</b>.`,
+        `${ce(EMOJI.indicator_error)} <b>${t(lang, "slot_limit_title", { used: slots.used, total: slots.total })}</b>\n\n${t(lang, "slot_limit_body")}`,
         {
           parse_mode: "HTML",
           reply_markup: { inline_keyboard: [
-            [{ text: "Buy App Slot — $25", callback_data: "buy_slot", icon_custom_emoji_id: EMOJI.add }],
-            [{ text: "Back", callback_data: "nav_welcome" }],
+            [{ text: t(lang, "buy_slot_btn"), callback_data: "buy_slot", icon_custom_emoji_id: EMOJI.add }],
+            [{ text: t(lang, "btn_back"), callback_data: "nav_welcome" }],
           ]},
         }
       );
       return;
     }
     await ctx.reply(
-      `${ce(EMOJI.add)} <b>Create New App</b>\n\n` +
-      `Tap the button below to create a bot for your app.\nEnter a name and username for your bot:`,
+      `${ce(EMOJI.add)} <b>${t(lang, "create_app_title")}</b>\n\n${t(lang, "create_app_body")}`,
       {
         parse_mode: "HTML",
         reply_markup: { inline_keyboard: [
-          [{ text: "Create Bot", url: "https://t.me/newbot/apps_father_bot/username_bot" }],
+          [{ text: t(lang, "btn_create_bot"), url: "https://t.me/newbot/apps_father_bot/username_bot" }],
         ]},
       }
     );
@@ -357,74 +520,94 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
 
   bot.callbackQuery(/^describe:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     ctx.session.activeProjectId = projectId;
     ctx.session.awaitingInput = "description";
 
     await ctx.reply(
-      `${ce(EMOJI.idea)} <b>Describe your Mini App</b>\n\n` +
-      "Tell me what your app should do. Be as detailed as you want:\n" +
-      "- What features should it have?\n" +
-      "- What's the main purpose?\n" +
-      "- Any design preferences?\n" +
-      "- Who is the target audience?\n\n" +
-      "You can also send images as design references!",
+      `${ce(EMOJI.idea)} <b>${t(lang, "describe_title")}</b>\n\n${t(lang, "describe_body")}`,
       { parse_mode: "HTML" }
     );
   });
 
   bot.callbackQuery(/^approve_plan:(.+)$/, async (ctx) => {
-    try { await ctx.answerCallbackQuery("Building your app..."); } catch {}
+    const lang = getLang(ctx);
+    try { await ctx.answerCallbackQuery(t(lang, "building_app") + "..."); } catch {}
     const projectId = ctx.match[1];
 
-    // Block duplicate runs
     if (processingProjects.has(projectId)) return;
 
     const from = ctx.from;
     const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
 
     if (!(await billingService.hasBalance(user.id, 5))) {
-      await ctx.reply(errorMessage("Minimum <b>$5</b> balance required to build. Please top up first."), { parse_mode: "HTML" });
+      await ctx.reply(errorMessage(t(lang, "balance_required_5"), lang), { parse_mode: "HTML" });
       return;
     }
 
     const project = await projectService.getProject(projectId);
     if (!project || !project.plan) {
-      await ctx.reply(errorMessage("No plan found. Please describe your app first."), { parse_mode: "HTML" });
+      await ctx.reply(errorMessage(t(lang, "no_plan_found"), lang), { parse_mode: "HTML" });
       return;
     }
 
     if (project.status === "building" || project.status === "deployed" || project.status === "released") {
-      try { await ctx.answerCallbackQuery("Already building or deployed!"); } catch {}
       return;
     }
 
-    // Delete the plan message
     try { await ctx.deleteMessage(); } catch {}
 
     processingProjects.add(projectId);
     await projectService.updateProjectStatus(projectId, "building");
 
-    const statusMsg = await ctx.reply(processMessage("Starting AI Agent..."), {
-      parse_mode: "HTML",
-    });
+    let checklistItems: string[] = [];
+    try {
+      checklistItems = await agentService.generateChecklist(project.description || "", project.plan, lang);
+    } catch {}
+
+    const items: ChecklistItem[] = checklistItems.map(t => ({ text: t, done: false }));
+    const useChecklist = items.length > 0;
+
+    const statusMsg = await ctx.reply(
+      useChecklist
+        ? checklistMessage(t(lang, "building_app"), items, undefined, lang)
+        : processMessage(t(lang, "starting_agent"), undefined, lang),
+      { parse_mode: "HTML" },
+    );
 
     let lastUpdate = Date.now();
 
     try {
+      const onCheckTodo = useChecklist ? async (id: number) => {
+        if (id >= 1 && id <= items.length) {
+          items[id - 1].done = true;
+          try {
+            await ctx.api.editMessageText(
+              ctx.chat!.id, statusMsg.message_id,
+              checklistMessage(t(lang, "building_app"), items, undefined, lang),
+              { parse_mode: "HTML" }
+            );
+            lastUpdate = Date.now();
+          } catch {}
+        }
+      } : undefined;
+
       const progress = async (p: { action: string; detail: string; percent?: number }) => {
         if (Date.now() - lastUpdate < 2000) return;
         lastUpdate = Date.now();
         try {
           await ctx.api.editMessageText(
             ctx.chat!.id, statusMsg.message_id,
-            processMessage(`${p.action} ${esc(p.detail)}`, p.percent),
+            useChecklist
+              ? checklistMessage(t(lang, "building_app"), items, `${p.action} ${esc(p.detail)}`, lang)
+              : processMessage(`${p.action} ${esc(p.detail)}`, p.percent, lang),
             { parse_mode: "HTML" }
           );
         } catch {}
       };
 
-      const askUser = createAskUser(projectId, ctx.chat!.id, statusMsg.message_id);
+      const askUser = createAskUser(projectId, ctx.chat!.id, statusMsg.message_id, lang);
 
       const result = await agentService.buildApp(
         projectId,
@@ -432,6 +615,9 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
         project.plan,
         progress,
         askUser,
+        useChecklist ? checklistItems : undefined,
+        onCheckTodo,
+        lang,
       );
 
       const usage = await billingService.recordUsage(
@@ -450,30 +636,33 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
       }
 
       processingProjects.delete(projectId);
-      const appUrl = `${config.baseUrl}/app/${projectId}/`;
-      const botMention = project.botUsername ? `@${project.botUsername}` : "your project bot";
+
+      try { await ctx.api.deleteMessage(ctx.chat!.id, statusMsg.message_id); } catch {}
 
       try {
-        await ctx.api.editMessageText(
-          ctx.chat!.id,
-          statusMsg.message_id,
-          doneMessage("Your app is ready!", `${mdToTgHtml(truncSummary(result.summary))}\n\n<blockquote>${appUrl}\n\nOpen it via ${botMention} in Telegram.</blockquote>\n\n${costLine(usage.costUsd, usage.newBalance)}`),
+        const reportUrl = await publishReport(
+          "App Created",
+          result.summary,
+          `${t(lang, "cost_label")} $${usage.costUsd.toFixed(4)} | ${t(lang, "balance_label")} $${usage.newBalance.toFixed(2)}`
+        );
+        await ctx.reply(
+          doneMessage(t(lang, "app_ready"), `${costLine(usage.costUsd, usage.newBalance, lang)}\n\n<a href="${reportUrl}">${t(lang, "view_report")}</a>`),
           {
             parse_mode: "HTML",
-            reply_markup: projectActionsKeyboard(projectId, "deployed", await getProjectFeatures(projectId), project.botUsername || undefined),
+            reply_markup: { inline_keyboard: [
+              [{ text: t(lang, "btn_open_app"), callback_data: `dash:${projectId}` }],
+            ]},
           }
         );
-      } catch (displayErr) {
-        console.error("[Callback] Display error (app is deployed):", displayErr);
-        await ctx.api.editMessageText(
-          ctx.chat!.id,
-          statusMsg.message_id,
-          doneMessage("Your app is ready!", `<blockquote>${appUrl}\n\nOpen it via ${botMention} in Telegram.</blockquote>\n\n${costLine(usage.costUsd, usage.newBalance)}`),
+      } catch (reportErr) {
+        console.error("[Callback] Telegraph report error:", reportErr);
+        await ctx.reply(
+          doneMessage(t(lang, "app_ready"), `${mdToTgHtml(truncSummary(result.summary, 2000, lang))}\n\n${costLine(usage.costUsd, usage.newBalance, lang)}`),
           {
             parse_mode: "HTML",
-            reply_markup: projectActionsKeyboard(projectId, "deployed", await getProjectFeatures(projectId), project.botUsername || undefined),
+            reply_markup: projectActionsKeyboard(projectId, "deployed", await getProjectFeatures(projectId), project.botUsername || undefined, lang),
           }
-        ).catch(() => {});
+        );
       }
     } catch (err) {
       console.error("[Callback] Build error:", err);
@@ -482,53 +671,56 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
       await ctx.api.editMessageText(
         ctx.chat!.id,
         statusMsg.message_id,
-        errorMessage(`Failed to build: ${esc(err instanceof Error ? err.message : "Unknown error")}\n\nPlease try again.`),
-        { parse_mode: "HTML", reply_markup: planActionKeyboard(projectId) }
+        errorMessage(`${t(lang, "build_failed")} ${esc(err instanceof Error ? err.message : "Unknown error")}\n\n${t(lang, "try_again")}`, lang),
+        { parse_mode: "HTML", reply_markup: planActionKeyboard(projectId, lang) }
       ).catch(() => {});
     }
   });
 
   bot.callbackQuery(/^modify_plan:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     ctx.session.activeProjectId = projectId;
     ctx.session.awaitingInput = "plan_feedback";
 
     await ctx.reply(
-      `${ce(EMOJI.update)} <b>Modify Plan</b>\n\nWhat would you like to change? Describe your modifications:`,
+      `${ce(EMOJI.update)} <b>${t(lang, "modify_plan_title")}</b>\n\n${t(lang, "modify_plan_body")}`,
       { parse_mode: "HTML" }
     );
   });
 
   bot.callbackQuery(/^decline_plan:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     ctx.session.activeProjectId = projectId;
     ctx.session.awaitingInput = "description";
     ctx.session.pendingPlan = undefined;
 
     await ctx.reply(
-      `${ce(EMOJI.indicator_error)} <b>Plan declined.</b>\n\nPlease describe your app again with more details:`,
+      `${ce(EMOJI.indicator_error)} <b>${t(lang, "decline_plan")}</b>\n\n${t(lang, "decline_plan_body")}`,
       { parse_mode: "HTML" }
     );
   });
 
   bot.callbackQuery(/^open_app:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     const project = await projectService.getProject(projectId);
     const botUsername = project?.botUsername;
 
     if (!botUsername) {
-      await ctx.reply(errorMessage("Bot not found for this project."), { parse_mode: "HTML" });
+      await ctx.reply(errorMessage(t(lang, "project_not_found"), lang), { parse_mode: "HTML" });
       return;
     }
 
-    await ctx.reply(`${ce(EMOJI.logo)} <b>Open your app via the bot:</b>`, {
+    await ctx.reply(`${ce(EMOJI.logo)} <b>${t(lang, "btn_open_app")}</b>`, {
       parse_mode: "HTML",
       reply_markup: {
         inline_keyboard: [
-          [{ text: "Open App", url: `https://t.me/${botUsername}` }],
+          [{ text: t(lang, "btn_open_app"), url: `https://t.me/${botUsername}` }],
         ],
       },
     });
@@ -536,14 +728,15 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
 
   bot.callbackQuery(/^edit_code:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     const editorUrl = `${config.baseUrl}/editor/${projectId}/`;
 
-    await ctx.reply(`${ce(EMOJI.setting)} <b>Code Editor</b>\n\nOpen the editor to view and modify your project files:`, {
+    await ctx.reply(`${ce(EMOJI.setting)} <b>${t(lang, "code_editor")}</b>\n\n${t(lang, "code_editor_body")}`, {
       parse_mode: "HTML",
       reply_markup: {
         inline_keyboard: [
-          [{ text: "Open Editor", url: editorUrl }],
+          [{ text: t(lang, "btn_open_editor"), url: editorUrl }],
         ],
       },
     });
@@ -551,12 +744,13 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
 
   bot.callbackQuery(/^update_app:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
 
     const from = ctx.from;
     const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
     if (!(await billingService.hasBalance(user.id, 5))) {
-      await ctx.reply(errorMessage("Minimum <b>$5</b> balance required to update. Please top up first."), { parse_mode: "HTML" });
+      await ctx.reply(errorMessage(t(lang, "balance_required_5_update"), lang), { parse_mode: "HTML" });
       return;
     }
 
@@ -564,17 +758,13 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
     ctx.session.awaitingInput = "update_description";
 
     await ctx.reply(
-      `${ce(EMOJI.update)} <b>Update Your App</b>\n\n` +
-      "Describe what changes you'd like to make:\n" +
-      "- New features to add\n" +
-      "- UI changes\n" +
-      "- Bug fixes\n" +
-      "- Any modifications\n\n" +
-      `${ce(EMOJI.idea)} Or attach files first (images, audio, documents) that the AI should use.`,
+      `${ce(EMOJI.update)} <b>${t(lang, "update_title")}</b>\n\n` +
+      t(lang, "update_body") + "\n\n" +
+      `${ce(EMOJI.idea)} ${t(lang, "update_attach_hint")}`,
       {
         parse_mode: "HTML",
         reply_markup: { inline_keyboard: [
-          [{ text: "📎 Attach Files", callback_data: `attach_files:${projectId}` }],
+          [{ text: `📎 ${t(lang, "btn_attach_files")}`, callback_data: `attach_files:${projectId}` }],
         ]},
       }
     );
@@ -582,21 +772,21 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
 
   bot.callbackQuery(/^attach_files:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     ctx.session.activeProjectId = projectId;
     ctx.session.awaitingInput = "attach_files";
     ctx.session.pendingAttachments = [];
 
     await ctx.reply(
-      `📎 <b>Attach Files</b>\n\n` +
-      `Send me any files you want to attach — photos, documents, audio, video.\n\n` +
-      `When you're done, type your update description to continue.`,
+      `📎 <b>${t(lang, "attach_title")}</b>\n\n${t(lang, "attach_body")}`,
       { parse_mode: "HTML" }
     );
   });
 
   bot.callbackQuery(/^release:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
 
     try {
@@ -604,32 +794,53 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
       const project = await projectService.getProject(projectId);
       const features = await getProjectFeatures(projectId);
 
-      await ctx.editMessageText(
-        doneMessage("Version released!", `Commit <b>#${commitNum}</b> is now live for all users.`),
-        {
-          parse_mode: "HTML",
-          reply_markup: projectActionsKeyboard(projectId, "released", features, project?.botUsername || undefined),
-        }
+      try {
+        await ctx.editMessageReplyMarkup({
+          reply_markup: projectActionsKeyboard(projectId, "released", features, project?.botUsername || undefined, lang),
+        });
+      } catch {}
+
+      await ctx.reply(
+        doneMessage(t(lang, "version_released"), t(lang, "version_released_detail", { num: String(commitNum) })),
+        { parse_mode: "HTML" }
       );
     } catch (err) {
       console.error("[Callback] Release error:", err);
       await ctx.reply(
-        errorMessage("Failed to release. Make sure you have at least one commit."),
+        errorMessage(t(lang, "release_error"), lang),
         { parse_mode: "HTML" }
       );
     }
   });
 
+  bot.callbackQuery(/^dash:(.+)$/, async (ctx) => {
+    await ack(ctx);
+    const lang = getLang(ctx);
+    const projectId = ctx.match[1];
+    const project = await projectService.getProject(projectId);
+    if (!project) return;
+    const features = await getProjectFeatures(projectId);
+
+    await ctx.reply(
+      `${statusIndicator(project.status)} <b>${esc(project.name)}</b>`,
+      {
+        parse_mode: "HTML",
+        reply_markup: projectActionsKeyboard(projectId, project.status, features, project.botUsername || undefined, lang),
+      }
+    );
+  });
+
   bot.callbackQuery(/^admin:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     const adminUrl = `${config.baseUrl}/admin/${projectId}/`;
 
-    await ctx.reply(`${ce(EMOJI.setting)} Open admin panel:`, {
+    await ctx.reply(`${ce(EMOJI.setting)} ${t(lang, "open_admin")}`, {
       parse_mode: "HTML",
       reply_markup: {
         inline_keyboard: [
-          [{ text: "Admin Panel", web_app: { url: adminUrl } }],
+          [{ text: t(lang, "btn_admin_panel"), web_app: { url: adminUrl } }],
         ],
       },
     });
@@ -637,21 +848,22 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
 
   bot.callbackQuery(/^wallet:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     const wallet = await projectService.getTonWallet(projectId);
 
     const walletInfo = wallet
-      ? `<b>Current wallet:</b>\n<code>${esc(wallet)}</code>`
-      : "No wallet address set yet.";
+      ? `<b>${t(lang, "wallet_current")}</b>\n<code>${esc(wallet)}</code>`
+      : t(lang, "wallet_not_set");
 
     await ctx.reply(
-      `${ce(EMOJI.dollar, "💎")} <b>TON Wallet</b>\n\n${walletInfo}\n\nSet or update the wallet address where you'll receive TON payments from your app users.`,
+      `${ce(EMOJI.dollar, "💎")} <b>${t(lang, "wallet_title")}</b>\n\n${walletInfo}\n\n${t(lang, "wallet_desc")}`,
       {
         parse_mode: "HTML",
         reply_markup: {
           inline_keyboard: [
-            [{ text: wallet ? "Change Wallet" : "Set Wallet", callback_data: `sw:${projectId}` }],
-            [{ text: "Back", callback_data: `project:${projectId}` }],
+            [{ text: wallet ? t(lang, "btn_change_wallet") : t(lang, "btn_set_wallet"), callback_data: `sw:${projectId}` }],
+            [{ text: t(lang, "btn_back"), callback_data: `project:${projectId}` }],
           ],
         },
       }
@@ -660,43 +872,46 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
 
   bot.callbackQuery(/^sw:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     ctx.session.activeProjectId = projectId;
     ctx.session.awaitingInput = "ton_wallet";
 
     await ctx.reply(
-      `${ce(EMOJI.dollar, "💎")} <b>Set TON Wallet</b>\n\n` +
-      `Send your TON wallet address where you want to receive payments:\n\n` +
-      `<blockquote>The address should look like:\nUQA... or EQA... (user-friendly format)</blockquote>`,
+      `${ce(EMOJI.dollar, "💎")} <b>${t(lang, "set_wallet_title")}</b>\n\n` +
+      `${t(lang, "set_wallet_body")}\n\n` +
+      `<blockquote>${t(lang, "set_wallet_note")}</blockquote>`,
       { parse_mode: "HTML" }
     );
   });
 
   bot.callbackQuery(/^suggest:(.+)$/, async (ctx) => {
-    try { await ctx.answerCallbackQuery("Generating suggestions..."); } catch {}
+    const lang = getLang(ctx);
+    try { await ctx.answerCallbackQuery(t(lang, "generating_suggestions")); } catch {}
     const projectId = ctx.match[1];
 
     const from = ctx.from;
     const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
 
     if (!(await billingService.hasBalance(user.id))) {
-      await ctx.reply(errorMessage("Insufficient balance. Please top up first."), { parse_mode: "HTML" });
+      await ctx.reply(errorMessage(t(lang, "insufficient_balance"), lang), { parse_mode: "HTML" });
       return;
     }
 
     const project = await projectService.getProject(projectId);
 
     if (!project?.description || !project?.plan) {
-      await ctx.reply(errorMessage("Need a description and plan first."), { parse_mode: "HTML" });
+      await ctx.reply(errorMessage(t(lang, "need_desc_plan"), lang), { parse_mode: "HTML" });
       return;
     }
 
-    const statusMsg = await ctx.reply(processMessage("Generating suggestions..."), { parse_mode: "HTML" });
+    const statusMsg = await ctx.reply(processMessage(t(lang, "generating_suggestions"), undefined, lang), { parse_mode: "HTML" });
 
     try {
       const result = await claudeService.suggestImprovements(
         project.description,
-        project.plan
+        project.plan,
+        lang
       );
 
       const usage = await billingService.recordUsage(
@@ -709,17 +924,17 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
         await ctx.api.editMessageText(
           ctx.chat!.id,
           statusMsg.message_id,
-          doneMessage("No suggestions", `Your app looks great! No suggestions at this time.\n\n${costLine(usage.costUsd, usage.newBalance)}`),
+          doneMessage(t(lang, "no_suggestions"), `${t(lang, "no_suggestions_body")}\n\n${costLine(usage.costUsd, usage.newBalance, lang)}`),
           { parse_mode: "HTML" }
         );
         return;
       }
 
-      let text = `${ce(EMOJI.idea)} <b>Suggested Improvements:</b>\n\n`;
+      let text = `${ce(EMOJI.idea)} <b>${t(lang, "suggested_improvements")}</b>\n\n`;
       result.suggestions.forEach((s, i) => {
         text += `${i + 1}. ${esc(s)}\n\n`;
       });
-      text += `Select which improvements to apply:\n\n${costLine(usage.costUsd, usage.newBalance)}`;
+      text += `${t(lang, "select_improvements")}\n\n${costLine(usage.costUsd, usage.newBalance, lang)}`;
 
       ctx.session.conversationState = "idle";
       (ctx.session as any).pendingSuggestions = result.suggestions;
@@ -730,7 +945,7 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
         text,
         {
           parse_mode: "HTML",
-          reply_markup: suggestionsKeyboard(projectId, result.suggestions),
+          reply_markup: suggestionsKeyboard(projectId, result.suggestions, lang),
         }
       );
     } catch (err) {
@@ -738,14 +953,15 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
       await ctx.api.editMessageText(
         ctx.chat!.id,
         statusMsg.message_id,
-        errorMessage("Failed to generate suggestions."),
+        errorMessage(t(lang, "suggestion_error"), lang),
         { parse_mode: "HTML" }
       );
     }
   });
 
   bot.callbackQuery(/^apply_suggestion:(.+):(\d+)$/, async (ctx) => {
-    try { await ctx.answerCallbackQuery("Applying suggestion..."); } catch {}
+    const lang = getLang(ctx);
+    try { await ctx.answerCallbackQuery(t(lang, "applying_suggestion") + "..."); } catch {}
     const projectId = ctx.match[1];
 
     if (processingProjects.has(projectId)) return;
@@ -754,7 +970,7 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
     const suggestions = (ctx.session as any).pendingSuggestions as string[] | undefined;
 
     if (!suggestions || !suggestions[suggestionIndex]) {
-      await ctx.reply(errorMessage("Suggestion not found."), { parse_mode: "HTML" });
+      await ctx.reply(errorMessage(t(lang, "suggestion_not_found"), lang), { parse_mode: "HTML" });
       return;
     }
 
@@ -762,38 +978,65 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
     const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
 
     if (!(await billingService.hasBalance(user.id, 5))) {
-      await ctx.reply(errorMessage("Minimum <b>$5</b> balance required. Please top up first."), { parse_mode: "HTML" });
+      await ctx.reply(errorMessage(t(lang, "balance_required_5_suggest"), lang), { parse_mode: "HTML" });
       return;
     }
 
     const suggestion = suggestions[suggestionIndex];
     ctx.session.activeProjectId = projectId;
 
-    // Delete the suggestions message
     try { await ctx.deleteMessage(); } catch {}
 
-    const statusMsg = await ctx.reply(processMessage(`Applying: ${esc(suggestion)}`), {
-      parse_mode: "HTML",
-    });
-
-    let lastUpdate = Date.now();
     processingProjects.add(projectId);
 
+    let checklistItems: string[] = [];
     try {
+      checklistItems = await agentService.generateChecklist(suggestion, undefined, lang);
+    } catch {}
+
+    const items: ChecklistItem[] = checklistItems.map(t => ({ text: t, done: false }));
+    const useChecklist = items.length > 0;
+
+    const statusMsg = await ctx.reply(
+      useChecklist
+        ? checklistMessage(t(lang, "applying_suggestion"), items, undefined, lang)
+        : processMessage(`${t(lang, "applying_suggestion")}: ${esc(suggestion)}`, undefined, lang),
+      { parse_mode: "HTML" },
+    );
+
+    let lastUpdate = Date.now();
+
+    try {
+      const onCheckTodo = useChecklist ? async (id: number) => {
+        if (id >= 1 && id <= items.length) {
+          items[id - 1].done = true;
+          try {
+            await ctx.api.editMessageText(
+              ctx.chat!.id, statusMsg.message_id,
+              checklistMessage(t(lang, "applying_suggestion"), items, undefined, lang),
+              { parse_mode: "HTML" }
+            );
+            lastUpdate = Date.now();
+          } catch {}
+        }
+      } : undefined;
+
       const progress = async (p: { action: string; detail: string; percent?: number }) => {
         if (Date.now() - lastUpdate < 2000) return;
         lastUpdate = Date.now();
         try {
           await ctx.api.editMessageText(
             ctx.chat!.id, statusMsg.message_id,
-            processMessage(`${p.action} ${esc(p.detail)}`, p.percent),
+            useChecklist
+              ? checklistMessage(t(lang, "applying_suggestion"), items, `${p.action} ${esc(p.detail)}`, lang)
+              : processMessage(`${p.action} ${esc(p.detail)}`, p.percent, lang),
             { parse_mode: "HTML" }
           );
         } catch {}
       };
 
-      const askUser = createAskUser(projectId, ctx.chat!.id, statusMsg.message_id);
-      const result = await agentService.updateApp(projectId, suggestion, progress, undefined, askUser);
+      const askUser = createAskUser(projectId, ctx.chat!.id, statusMsg.message_id, lang);
+      const result = await agentService.updateApp(projectId, suggestion, progress, undefined, askUser, useChecklist ? checklistItems : undefined, onCheckTodo, lang);
 
       const usage = await billingService.recordUsage(
         user.id, projectId, result.model,
@@ -807,22 +1050,42 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
         console.error("[Callback] Commit error (suggestion):", commitErr);
       }
 
-      const project = await projectService.getProject(projectId);
-      const features = await getProjectFeatures(projectId);
-      await ctx.api.editMessageText(
-        ctx.chat!.id,
-        statusMsg.message_id,
-        doneMessage("Suggestion applied!", `<i>${esc(suggestion)}</i>\n\n${mdToTgHtml(truncSummary(result.summary))}\n\n${costLine(usage.costUsd, usage.newBalance)}`),
-        {
-          parse_mode: "HTML",
-          reply_markup: projectActionsKeyboard(projectId, project?.status || "deployed", features, project?.botUsername || undefined),
-        }
-      );
+      try { await ctx.api.deleteMessage(ctx.chat!.id, statusMsg.message_id); } catch {}
+
+      try {
+        const reportUrl = await publishReport(
+          t(lang, "suggestion_applied"),
+          result.summary,
+          `${t(lang, "cost_label")} $${usage.costUsd.toFixed(4)} | ${t(lang, "balance_label")} $${usage.newBalance.toFixed(2)}`
+        );
+        await ctx.api.sendMessage(
+          ctx.chat!.id,
+          doneMessage(t(lang, "suggestion_applied"), `<i>${esc(suggestion)}</i>\n\n${costLine(usage.costUsd, usage.newBalance, lang)}\n\n<a href="${reportUrl}">${t(lang, "view_report")}</a>`),
+          {
+            parse_mode: "HTML",
+            reply_markup: { inline_keyboard: [
+              [{ text: t(lang, "btn_open_app"), callback_data: `dash:${projectId}` }],
+            ]},
+          }
+        );
+      } catch (reportErr) {
+        console.error("[Callback] Telegraph report error (suggestion):", reportErr);
+        const project = await projectService.getProject(projectId);
+        const features = await getProjectFeatures(projectId);
+        await ctx.api.sendMessage(
+          ctx.chat!.id,
+          doneMessage(t(lang, "suggestion_applied"), `<i>${esc(suggestion)}</i>\n\n${mdToTgHtml(truncSummary(result.summary, 2000, lang))}\n\n${costLine(usage.costUsd, usage.newBalance, lang)}`),
+          {
+            parse_mode: "HTML",
+            reply_markup: projectActionsKeyboard(projectId, project?.status || "deployed", features, project?.botUsername || undefined, lang),
+          }
+        );
+      }
     } catch (err) {
       await ctx.api.editMessageText(
         ctx.chat!.id,
         statusMsg.message_id,
-        errorMessage("Failed to apply suggestion."),
+        errorMessage(t(lang, "suggestion_error"), lang),
         { parse_mode: "HTML" }
       );
     } finally {
@@ -834,13 +1097,14 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
 
   bot.callbackQuery(/^skip_suggestions:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     const project = await projectService.getProject(projectId);
     const features = await getProjectFeatures(projectId);
 
     await ctx.reply(
-      doneMessage("No changes applied.", "Your app stays as is."),
-      { parse_mode: "HTML", reply_markup: projectActionsKeyboard(projectId, project?.status || "deployed", features, project?.botUsername || undefined) }
+      doneMessage(t(lang, "no_changes"), t(lang, "no_changes_body")),
+      { parse_mode: "HTML", reply_markup: projectActionsKeyboard(projectId, project?.status || "deployed", features, project?.botUsername || undefined, lang) }
     );
   });
 
@@ -871,6 +1135,7 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
 
   bot.callbackQuery(/^versions:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     const project = await projectService.getProject(projectId);
     if (!project) return;
@@ -878,20 +1143,21 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
     const commits = await commitService.getCommits(projectId);
     if (commits.length === 0) {
       await ctx.editMessageText(
-        `${ce(EMOJI.list)} <b>Versions</b>\n\nNo commits yet. Build or update your app first.`,
-        { parse_mode: "HTML", reply_markup: { inline_keyboard: [[{ text: "Back", callback_data: `project:${projectId}` }]] } }
+        `${ce(EMOJI.list)} <b>${t(lang, "versions_title")}</b>\n\n${t(lang, "no_commits")}`,
+        { parse_mode: "HTML", reply_markup: { inline_keyboard: [[{ text: t(lang, "btn_back"), callback_data: `project:${projectId}` }]] } }
       );
       return;
     }
 
     await ctx.editMessageText(
-      `${ce(EMOJI.list)} <b>Versions — ${esc(project.name)}</b>\n\nTap a commit to revert to it.\n${project.releaseCommit !== null ? `Current release: <b>#${project.releaseCommit}</b>` : "No release yet."}`,
-      { parse_mode: "HTML", reply_markup: versionsKeyboard(projectId, commits, project.releaseCommit) }
+      `${ce(EMOJI.list)} <b>${t(lang, "versions_title")} — ${esc(project.name)}</b>\n\n${t(lang, "versions_tap")}\n${project.releaseCommit !== null ? t(lang, "current_release", { num: String(project.releaseCommit) }) : t(lang, "no_release_yet")}`,
+      { parse_mode: "HTML", reply_markup: versionsKeyboard(projectId, commits, project.releaseCommit, lang) }
     );
   });
 
   bot.callbackQuery(/^rv:(.+):(\d+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     const commitNum = ctx.match[2];
 
@@ -900,13 +1166,14 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
     const label = commit?.changelog || `Commit #${commitNum}`;
 
     await ctx.editMessageText(
-      `${ce(EMOJI.indicator_warning)} <b>Revert to commit #${commitNum}?</b>\n\n<i>${esc(label)}</i>\n\nThis will restore your dev environment to this commit and <b>delete all newer commits</b>.`,
-      { parse_mode: "HTML", reply_markup: revertConfirmKeyboard(projectId, commitNum) }
+      `${ce(EMOJI.indicator_warning)} <b>${t(lang, "revert_confirm", { num: commitNum })}</b>\n\n<i>${esc(label)}</i>\n\n${t(lang, "revert_warning")}`,
+      { parse_mode: "HTML", reply_markup: revertConfirmKeyboard(projectId, commitNum, lang) }
     );
   });
 
   bot.callbackQuery(/^rvc:(.+):(\d+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     const commitNum = parseInt(ctx.match[2], 10);
 
@@ -916,37 +1183,39 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
       const features = await getProjectFeatures(projectId);
 
       await ctx.editMessageText(
-        doneMessage("Reverted!", `Dev environment restored to commit <b>#${commitNum}</b>.\n\nUse <b>Release Version</b> to push this to production.`),
+        doneMessage(t(lang, "reverted"), t(lang, "reverted_detail", { num: String(commitNum) })),
         {
           parse_mode: "HTML",
-          reply_markup: projectActionsKeyboard(projectId, project?.status || "deployed", features, project?.botUsername || undefined),
+          reply_markup: projectActionsKeyboard(projectId, project?.status || "deployed", features, project?.botUsername || undefined, lang),
         }
       );
     } catch (err) {
       console.error("[Callback] Revert error:", err);
       await ctx.reply(
-        errorMessage(`Failed to revert: ${esc(err instanceof Error ? err.message : "Unknown error")}`),
+        errorMessage(`${t(lang, "revert_error")} ${esc(err instanceof Error ? err.message : "Unknown error")}`, lang),
         { parse_mode: "HTML" }
       );
     }
   });
 
-  // === Settings sub-menu ===
+  // === Settings ===
 
   bot.callbackQuery(/^settings:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     const project = await projectService.getProject(projectId);
     if (!project) return;
 
     await ctx.editMessageText(
-      `${ce(EMOJI.setting)} <b>Settings — ${esc(project.name)}</b>`,
-      { parse_mode: "HTML", reply_markup: settingsKeyboard(projectId) }
+      `${ce(EMOJI.setting)} <b>${t(lang, "settings_title")} — ${esc(project.name)}</b>`,
+      { parse_mode: "HTML", reply_markup: settingsKeyboard(projectId, lang) }
     );
   });
 
   bot.callbackQuery(/^info:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     const project = await projectService.getProject(projectId);
     if (!project) return;
@@ -966,66 +1235,67 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
     const appUrl = `${config.baseUrl}/app/${projectId}/`;
 
     await ctx.editMessageText(
-      `${ce(EMOJI.help)} <b>Project Info</b>\n\n` +
-      `<b>Bot Username:</b> ${project.botUsername ? `@${project.botUsername}` : "Not set"}\n` +
-      `<b>Bot ID:</b> ${botId}\n` +
-      `<b>Bot Token:</b> ${tokenDisplay}\n` +
-      `<b>Web App URL:</b> <code>${appUrl}</code>`,
-      { parse_mode: "HTML", reply_markup: { inline_keyboard: [[{ text: "Back", callback_data: `settings:${projectId}` }]] } }
+      `${ce(EMOJI.help)} <b>${t(lang, "project_info")}</b>\n\n` +
+      `<b>${t(lang, "info_bot_username")}</b> ${project.botUsername ? `@${project.botUsername}` : "Not set"}\n` +
+      `<b>${t(lang, "info_bot_id")}</b> ${botId}\n` +
+      `<b>${t(lang, "info_bot_token")}</b> ${tokenDisplay}\n` +
+      `<b>${t(lang, "info_webapp_url")}</b> <code>${appUrl}</code>`,
+      { parse_mode: "HTML", reply_markup: { inline_keyboard: [[{ text: t(lang, "btn_back"), callback_data: `settings:${projectId}` }]] } }
     );
   });
 
   bot.callbackQuery(/^quality:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     const project = await projectService.getProject(projectId);
     if (!project) return;
 
     const tier = (project as any).qualityTier || 1;
-    const desc = qualityDescription();
+    const desc = qualityDescription(lang);
 
     await ctx.editMessageText(
-      `${ce(EMOJI.setting)} <b>AI Quality Tier</b>\n\n` +
-      `Select the AI model quality for building and updating your app:\n\n` + desc,
-      { parse_mode: "HTML", reply_markup: qualityKeyboard(projectId, tier) }
+      `${ce(EMOJI.setting)} <b>${t(lang, "quality_title")}</b>\n\n` +
+      `${t(lang, "quality_desc")}\n\n` + desc,
+      { parse_mode: "HTML", reply_markup: qualityKeyboard(projectId, tier, lang) }
     );
   });
 
   bot.callbackQuery(/^qt:(.+):(\d)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     const tier = parseInt(ctx.match[2]);
     if (tier < 1 || tier > 4) return;
 
     await prisma.project.update({ where: { id: projectId }, data: { qualityTier: tier } });
 
-    const project = await projectService.getProject(projectId);
-    if (!project) return;
-
-    const desc = qualityDescription();
+    const desc = qualityDescription(lang);
     await ctx.editMessageText(
-      `${ce(EMOJI.setting)} <b>AI Quality Tier</b>\n\n` +
-      `Select the AI model quality for building and updating your app:\n\n` + desc,
-      { parse_mode: "HTML", reply_markup: qualityKeyboard(projectId, tier) }
+      `${ce(EMOJI.setting)} <b>${t(lang, "quality_title")}</b>\n\n` +
+      `${t(lang, "quality_desc")}\n\n` + desc,
+      { parse_mode: "HTML", reply_markup: qualityKeyboard(projectId, tier, lang) }
     );
   });
 
   bot.callbackQuery(/^transfer:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     ctx.session.activeProjectId = projectId;
     ctx.session.awaitingInput = "transfer_owner";
 
     await ctx.reply(
-      `${ce(EMOJI.indicator_warning)} <b>Transfer Ownership</b>\n\n` +
-      `Enter the <b>username</b> of the user you want to transfer this app to:\n\n` +
-      `<blockquote>The user must have used Apps Father bot at least once.</blockquote>`,
+      `${ce(EMOJI.indicator_warning)} <b>${t(lang, "transfer_title")}</b>\n\n` +
+      `${t(lang, "transfer_body")}\n\n` +
+      `<blockquote>${t(lang, "transfer_note")}</blockquote>`,
       { parse_mode: "HTML" }
     );
   });
 
   bot.callbackQuery(/^confirm_transfer:(.+):(\d+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     const newOwnerId = parseInt(ctx.match[2]);
 
@@ -1036,40 +1306,42 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
       await projectService.transferProject(projectId, newOwnerId);
 
       await ctx.editMessageText(
-        `${ce(EMOJI.indicator_success, "✅")} <b>Ownership transferred!</b>\n\n` +
-        `<b>${esc(project.name)}</b> has been transferred to the new owner.`,
+        `${ce(EMOJI.indicator_success, "✅")} <b>${t(lang, "transfer_done")}</b>\n\n` +
+        t(lang, "transfer_done_body", { name: esc(project.name) }),
         {
           parse_mode: "HTML",
-          reply_markup: { inline_keyboard: [[{ text: "Back", callback_data: "nav_list" }]] },
+          reply_markup: { inline_keyboard: [[{ text: t(lang, "btn_back"), callback_data: "nav_list" }]] },
         }
       );
     } catch (err) {
       console.error("[Callback] Transfer error:", err);
       await ctx.editMessageText(
-        errorMessage("Failed to transfer ownership. Please try again."),
-        { parse_mode: "HTML", reply_markup: { inline_keyboard: [[{ text: "Back", callback_data: `project:${projectId}` }]] } }
+        errorMessage(t(lang, "transfer_error"), lang),
+        { parse_mode: "HTML", reply_markup: { inline_keyboard: [[{ text: t(lang, "btn_back"), callback_data: `project:${projectId}` }]] } }
       );
     }
   });
 
   bot.callbackQuery(/^remove_project:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     const project = await projectService.getProject(projectId);
     if (!project) return;
 
     await ctx.editMessageText(
-      `${ce(EMOJI.indicator_error)} <b>Remove "${esc(project.name)}"?</b>\n\n` +
-      `<blockquote>This will permanently delete:\n• All project files\n• Database schema &amp; data\n• Bot configuration\n\nThis cannot be undone.</blockquote>`,
+      `${ce(EMOJI.indicator_error)} <b>${t(lang, "remove_confirm_title", { name: esc(project.name) })}</b>\n\n` +
+      `<blockquote>${t(lang, "remove_warning")}</blockquote>`,
       {
         parse_mode: "HTML",
-        reply_markup: removeConfirmKeyboard(projectId),
+        reply_markup: removeConfirmKeyboard(projectId, lang),
       }
     );
   });
 
   bot.callbackQuery(/^confirm_remove:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     const project = await projectService.getProject(projectId);
     if (!project) return;
@@ -1077,45 +1349,41 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
     const projectName = project.name;
 
     await ctx.editMessageText(
-      processMessage("Removing project..."),
+      processMessage(t(lang, "removing"), undefined, lang),
       { parse_mode: "HTML" }
     );
 
     try {
-      // 1. Stop the bot runner
       const { botRunnerService } = await import("../../services/bot-runner.service");
       try { botRunnerService.stopBot(projectId); } catch {}
 
-      // 2. Delete project files from disk (includes SQLite db)
       const projectDir = path.join(__dirname, "..", "..", "..", "projects", projectId);
       if (fs.existsSync(projectDir)) {
         fs.rmSync(projectDir, { recursive: true, force: true });
       }
 
-      // 4. Delete from database
       await projectService.deleteProject(projectId);
 
-      // Refresh the list
       const from = ctx.from;
       const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
       const projects = await projectService.getProjectsByUser(user.id);
 
       if (projects.length === 0) {
         await ctx.editMessageText(
-          doneMessage(`"${esc(projectName)}" removed.`, "You have no more projects."),
-          { parse_mode: "HTML", reply_markup: { inline_keyboard: [[{ text: "Back", callback_data: "nav_welcome" }]] } }
+          doneMessage(t(lang, "removed", { name: esc(projectName) }), t(lang, "no_more_projects")),
+          { parse_mode: "HTML", reply_markup: { inline_keyboard: [[{ text: t(lang, "btn_back"), callback_data: "nav_welcome" }]] } }
         );
       } else {
         await ctx.editMessageText(
-          doneMessage(`"${esc(projectName)}" removed.`, buildListText(projects)),
-          { parse_mode: "HTML", reply_markup: projectListKeyboard(projects) }
+          doneMessage(t(lang, "removed", { name: esc(projectName) }), buildListText(projects, undefined, undefined, lang)),
+          { parse_mode: "HTML", reply_markup: projectListKeyboard(projects, true, lang) }
         );
       }
     } catch (err) {
       console.error("[Callback] Remove error:", err);
       await ctx.editMessageText(
-        errorMessage("Failed to remove project. Please try again."),
-        { parse_mode: "HTML", reply_markup: { inline_keyboard: [[{ text: "Back", callback_data: `project:${projectId}` }]] } }
+        errorMessage(t(lang, "remove_error"), lang),
+        { parse_mode: "HTML", reply_markup: { inline_keyboard: [[{ text: t(lang, "btn_back"), callback_data: `project:${projectId}` }]] } }
       );
     }
   });
@@ -1124,30 +1392,35 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
 
   bot.callbackQuery(/^features:(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     const features = await getProjectFeatures(projectId);
 
-    let text = `${ce(EMOJI.dollar, "💎")} <b>Premium Features</b>\n\n`;
+    let text = `${ce(EMOJI.dollar, "💎")} <b>${t(lang, "premium_features")}</b>\n\n`;
     for (const f of PAID_FEATURES) {
       const owned = features.includes(f.id);
+      const label = translateFeatureLabel(lang, f.id) || f.label;
+      const desc = translateFeatureDesc(lang, f.id) || f.description;
       text += owned
-        ? `✅ <b>${esc(f.label)}</b> — <i>Unlocked</i>\n`
-        : `🔒 <b>${esc(f.label)}</b> — <b>$${f.price}</b>\n<i>${esc(f.description)}</i>\n`;
+        ? `✅ <b>${esc(label)}</b> — <i>${t(lang, "unlocked")}</i>\n`
+        : `🔒 <b>${esc(label)}</b> — <b>$${f.price}</b>\n<i>${esc(desc)}</i>\n`;
       text += "\n";
     }
 
     await ctx.editMessageText(text, {
       parse_mode: "HTML",
-      reply_markup: featuresKeyboard(projectId, features),
+      reply_markup: featuresKeyboard(projectId, features, lang),
     });
   });
 
   bot.callbackQuery(/^fo:(.+):(.+)$/, async (ctx) => {
-    try { await ctx.answerCallbackQuery("Already unlocked!"); } catch {}
+    const lang = getLang(ctx);
+    try { await ctx.answerCallbackQuery(t(lang, "already_unlocked")); } catch {}
   });
 
   bot.callbackQuery(/^bf:(.+):(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     const featureId = ctx.match[2];
     const feature = getFeatureById(featureId);
@@ -1157,23 +1430,26 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
     const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
     const balance = await billingService.getUserBalance(user.id);
 
+    const fLabel = translateFeatureLabel(lang, featureId) || feature.label;
+    const fDesc = translateFeatureDesc(lang, featureId) || feature.description;
     await ctx.editMessageText(
-      `${ce(EMOJI.dollar, "💎")} <b>Purchase: ${esc(feature.label)}</b>\n\n` +
-      `<blockquote>${esc(feature.description)}</blockquote>\n\n` +
+      `${ce(EMOJI.dollar, "💎")} <b>${t(lang, "purchase_title", { label: esc(fLabel) })}</b>\n\n` +
+      `<blockquote>${esc(fDesc)}</blockquote>\n\n` +
       `Price: <b>$${feature.price}</b>\n` +
-      `Your balance: <b>$${balance.toFixed(2)}</b>\n\n` +
-      (balance >= feature.price ? "Confirm your purchase:" : `⚠️ Insufficient balance. You need <b>$${(feature.price - balance).toFixed(2)}</b> more.`),
+      `${t(lang, "balance_label")} <b>$${balance.toFixed(2)}</b>\n\n` +
+      (balance >= feature.price ? `${t(lang, "btn_confirm_purchase")}:` : `⚠️ ${t(lang, "feature_insufficient", { needed: (feature.price - balance).toFixed(2) })}`),
       {
         parse_mode: "HTML",
         reply_markup: balance >= feature.price
-          ? confirmBuyKeyboard(projectId, featureId)
-          : { inline_keyboard: [[{ text: "Top Up", callback_data: "topup" }], [{ text: "Back", callback_data: `features:${projectId}` }]] },
+          ? confirmBuyKeyboard(projectId, featureId, lang)
+          : { inline_keyboard: [[{ text: t(lang, "btn_topup"), callback_data: "topup" }], [{ text: t(lang, "btn_back"), callback_data: `features:${projectId}` }]] },
       }
     );
   });
 
   bot.callbackQuery(/^cb:(.+):(.+)$/, async (ctx) => {
     await ack(ctx);
+    const lang = getLang(ctx);
     const projectId = ctx.match[1];
     const featureId = ctx.match[2];
     const feature = getFeatureById(featureId);
@@ -1185,19 +1461,20 @@ export function registerCallbackHandlers(bot: Bot<BotContext>) {
     try {
       const { newBalance } = await purchaseFeature(user.id, projectId, featureId);
       const features = await getProjectFeatures(projectId);
+      const fLabel2 = translateFeatureLabel(lang, featureId) || feature.label;
 
       await ctx.editMessageText(
-        `${ce(EMOJI.indicator_success, "✅")} <b>${esc(feature.label)} unlocked!</b>\n\n` +
-        `<blockquote>Charged: <b>$${feature.price}</b>\nNew balance: <b>$${newBalance.toFixed(2)}</b></blockquote>`,
+        `${ce(EMOJI.indicator_success, "✅")} <b>${t(lang, "feature_unlocked", { label: esc(fLabel2) })}</b>\n\n` +
+        `<blockquote>${t(lang, "feature_charged", { price: String(feature.price), balance: newBalance.toFixed(2) })}</blockquote>`,
         {
           parse_mode: "HTML",
-          reply_markup: { inline_keyboard: [[{ text: "Back to Features", callback_data: `features:${projectId}` }], [{ text: "Back to Project", callback_data: `project:${projectId}` }]] },
+          reply_markup: { inline_keyboard: [[{ text: t(lang, "btn_back_features"), callback_data: `features:${projectId}` }], [{ text: t(lang, "btn_back_project"), callback_data: `project:${projectId}` }]] },
         }
       );
     } catch (err: any) {
       await ctx.editMessageText(
-        errorMessage(err.message || "Purchase failed"),
-        { parse_mode: "HTML", reply_markup: { inline_keyboard: [[{ text: "Back", callback_data: `features:${projectId}` }]] } }
+        errorMessage(err.message || t(lang, "purchase_failed"), lang),
+        { parse_mode: "HTML", reply_markup: { inline_keyboard: [[{ text: t(lang, "btn_back"), callback_data: `features:${projectId}` }]] } }
       );
     }
   });

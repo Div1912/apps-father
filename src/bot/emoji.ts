@@ -11,6 +11,18 @@ export const EMOJI = {
   update:            "5377794122587351169",
   setting:           "5377796922906024957",
   dollar:            "5377851954321989517",
+  mark_empty:        "5386836201271501633",
+  mark_done:         "5386312984060534078",
+  progress_start_empty: "5386652488340379423",
+  progress_empty:       "5386436812262644830",
+  progress_end_empty:   "5386828891237158955",
+  progress_start_full:  "5386340802563709741",
+  progress_full:        "5386681015513157928",
+  progress_end_full:    "5386625885312949408",
+  loading:              "5309893756244206277",
+  crypto_bot:           "5361914370068613491",
+  usdt:                 "5406841020769936275",
+  stars:                "5406812184359507637",
 } as const;
 
 export function ce(id: string, fallback = "👍"): string {

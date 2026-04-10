@@ -26,6 +26,10 @@ Write-Host "Prisma OK" -ForegroundColor Green
 
 Write-Host "=== Running DB migration ===" -ForegroundColor Cyan
 ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_father -c 'ALTER TABLE projects ADD COLUMN IF NOT EXISTS release_commit INT;'"
+ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_father -c 'ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT;'"
+ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_father -c 'ALTER TABLE users ADD COLUMN IF NOT EXISTS language TEXT;'"
+ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_father -c 'CREATE TABLE IF NOT EXISTS vouchers (id SERIAL PRIMARY KEY, code TEXT UNIQUE NOT NULL, amount_usd DECIMAL(12,4) NOT NULL, max_uses INT NOT NULL, used_count INT DEFAULT 0, active BOOLEAN DEFAULT true, created_at TIMESTAMPTZ DEFAULT NOW());'"
+ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_father -c 'CREATE TABLE IF NOT EXISTS voucher_redemptions (id SERIAL PRIMARY KEY, voucher_id INT NOT NULL REFERENCES vouchers(id), user_id INT NOT NULL REFERENCES users(id), created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(voucher_id, user_id));'"
 Write-Host "Migration OK" -ForegroundColor Green
 
 Write-Host "=== Syncing skills ===" -ForegroundColor Cyan

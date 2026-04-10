@@ -14,6 +14,7 @@ export interface SessionData {
   pendingDescription?: string;
   pendingAttachments?: AttachedFile[];
   awaitingInput?: "description" | "plan_feedback" | "update_description" | "attach_files" | "version_name" | "topup_amount" | "ton_wallet" | "transfer_owner" | null;
+  language?: "en" | "ru" | "ua";
 }
 
 export type BotContext = Context & SessionFlavor<SessionData>;

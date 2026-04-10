@@ -4,6 +4,7 @@ import { config } from "../../config";
 import { projectService } from "../../services/project.service";
 import { botRunnerService } from "../../services/bot-runner.service";
 import { EMOJI, ce } from "../emoji";
+import { Lang, t } from "../i18n";
 
 const processingBots = new Set<number>();
 
@@ -33,8 +34,6 @@ export function registerManagedBotHandlers(bot: Bot<BotContext>) {
     const managedBot = ctx.message?.managed_bot_created;
     if (!managedBot?.bot) return;
 
-    // Retry up to 10 times (5s total) to handle race condition where
-    // handleManagedBotAsync hasn't finished creating the project yet
     let project = null;
     for (let i = 0; i < 10; i++) {
       project = await projectService.getProjectByBotUserId(managedBot.bot.id);
@@ -68,6 +67,8 @@ async function handleManagedBotAsync(bot: Bot<BotContext>, creator: any, newBot:
       creator.first_name
     );
 
+    const lang = (user.language as Lang) || "en";
+
     const existingProject = await projectService.getProjectByBotUserId(newBot.id);
     if (existingProject) {
       console.log(`[ManagedBot] Project already exists for bot ${newBot.id}, skipping`);
@@ -78,9 +79,8 @@ async function handleManagedBotAsync(bot: Bot<BotContext>, creator: any, newBot:
     if (!canCreate) {
       const { used, total } = await projectService.getUserSlotInfo(user.id);
       await sendToUser(
-        `${ce(EMOJI.indicator_error)} <b>App slot limit reached (${used}/${total})</b>\n\n` +
-        `You need to buy an additional app slot for <b>$25</b> before creating a new app.\n` +
-        `Tap <b>Main Menu → Buy Slot</b> to purchase one.`,
+        `${ce(EMOJI.indicator_error)} <b>${t(lang, "managed_bot_slot_limit", { used, total })}</b>\n\n` +
+        t(lang, "managed_bot_slot_body"),
         { parse_mode: "HTML" }
       );
       return;
@@ -95,7 +95,7 @@ async function handleManagedBotAsync(bot: Bot<BotContext>, creator: any, newBot:
     } catch (err) {
       console.error("[ManagedBot] Failed to get bot token:", err);
       await sendToUser(
-        `${ce(EMOJI.indicator_error)} <b>Failed to get token for @${newBot.username}.</b>\n\nPlease try again.`,
+        `${ce(EMOJI.indicator_error)} <b>${t(lang, "managed_bot_token_error", { username: newBot.username })}</b>\n\n${t(lang, "try_again")}`,
         { parse_mode: "HTML" }
       );
       return;
@@ -113,17 +113,16 @@ async function handleManagedBotAsync(bot: Bot<BotContext>, creator: any, newBot:
     await botRunnerService.startBot(project.id, botToken, newBot.username || "");
 
     await sendToUser(
-      `${ce(EMOJI.indicator_success)} <b>Project "${projectName}" created!</b>\n` +
+      `${ce(EMOJI.indicator_success)} <b>${t(lang, "managed_bot_created", { name: projectName })}</b>\n` +
       `<blockquote>Bot: @${newBot.username}</blockquote>\n\n` +
-      `${ce(EMOJI.idea)} <b>Now describe your app.</b>\n` +
-      `Tell me what it should do, what features it needs, and any design preferences.\n\n` +
-      `You can also send images as design references!`,
+      `${ce(EMOJI.idea)} <b>${t(lang, "managed_bot_describe")}</b>\n` +
+      t(lang, "managed_bot_describe_body"),
       { parse_mode: "HTML" }
     );
   } catch (err) {
     console.error("[ManagedBot] Error handling managed bot:", err);
     await sendToUser(
-      `${ce(EMOJI.indicator_error)} <b>Something went wrong</b> while setting up your project.\n\nPlease try again.`,
+      `${ce(EMOJI.indicator_error)} <b>${t("en", "managed_bot_error")}</b> ${t("en", "managed_bot_error_body")}`,
       { parse_mode: "HTML" }
     );
   }

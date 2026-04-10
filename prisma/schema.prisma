@@ -14,6 +14,8 @@ model User {
   firstName  String?   @map("first_name")
   balance    Decimal   @default(0) @db.Decimal(12, 4)
   appSlots   Int       @default(1) @map("app_slots")
+  referredBy BigInt?   @map("referred_by")
+  language   String    @default("en")
   createdAt  DateTime  @default(now()) @map("created_at")
 
   projects      Project[]
@@ -110,6 +112,32 @@ model Payment {
   user User @relation(fields: [userId], references: [id])
 
   @@map("payments")
+}
+
+model Voucher {
+  id          Int       @id @default(autoincrement())
+  code        String    @unique
+  amountUsd   Decimal   @map("amount_usd") @db.Decimal(12, 4)
+  maxUses     Int       @map("max_uses")
+  usedCount   Int       @default(0) @map("used_count")
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  redemptions VoucherRedemption[]
+
+  @@map("vouchers")
+}
+
+model VoucherRedemption {
+  id         Int      @id @default(autoincrement())
+  voucherId  Int      @map("voucher_id")
+  userId     Int      @map("user_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  voucher Voucher @relation(fields: [voucherId], references: [id])
+
+  @@unique([voucherId, userId])
+  @@map("voucher_redemptions")
 }
 
 model UsageLog {

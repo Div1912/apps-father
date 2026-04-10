@@ -1,5 +1,6 @@
 import { Bot } from "grammy";
 import { BotContext, AttachedFile } from "../../types";
+import { publishReport } from "../../services/telegraph.service";
 import { projectService } from "../../services/project.service";
 import { claudeService } from "../../services/claude.service";
 import { agentService } from "../../services/agent.service";
@@ -9,9 +10,10 @@ import { planActionKeyboard, projectActionsKeyboard } from "../keyboards";
 import { commitService } from "../../services/commit.service";
 import { hasPendingForChat, resolveByChat, setPending } from "../agent-questions";
 import { getProjectFeatures } from "../../services/features.service";
-import { processMessage, doneMessage, errorMessage, costLine, truncSummary, mdToTgHtml } from "../progress";
+import { processMessage, doneMessage, errorMessage, costLine, truncSummary, mdToTgHtml, checklistMessage, ChecklistItem } from "../progress";
 import { EMOJI, ce } from "../emoji";
 import { formatPlanForUser } from "../plan-formatter";
+import { Lang, t } from "../i18n";
 import fs from "fs";
 import path from "path";
 import https from "https";
@@ -19,6 +21,10 @@ import http from "http";
 
 function esc(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function getLang(ctx: BotContext): Lang {
+  return ctx.session.language || "en";
 }
 
 import { processingProjects } from "../processing";
@@ -31,7 +37,7 @@ const tgApi = (method: string, body: any) =>
     body: JSON.stringify(body),
   }).catch(() => {});
 
-function createConvAskUser(projectId: string, chatId: number, statusMsgId: number) {
+function createConvAskUser(projectId: string, chatId: number, statusMsgId: number, lang: Lang = "en") {
   return async (question: string, options: string[]): Promise<string> => {
     const answer = await new Promise<string>((resolve) => {
       setPending(projectId, chatId, options, resolve);
@@ -39,11 +45,11 @@ function createConvAskUser(projectId: string, chatId: number, statusMsgId: numbe
       const keyboard: any[][] = options.map((opt, i) => [
         { text: opt, callback_data: `aq:${projectId}:${i}` },
       ]);
-      keyboard.push([{ text: "Skip", callback_data: `aq:${projectId}:skip` }]);
+      keyboard.push([{ text: t(lang, "btn_skip"), callback_data: `aq:${projectId}:skip` }]);
 
       const questionHtml =
-        `❓ <b>Question from AI:</b>\n\n${esc(question)}` +
-        (options.length === 0 ? "\n\n<i>Type your answer below, or press Skip.</i>" : "");
+        `❓ <b>${t(lang, "ai_question")}</b>\n\n${esc(question)}` +
+        (options.length === 0 ? `\n\n<i>${t(lang, "ai_question_hint")}</i>` : "");
 
       tgApi("editMessageText", {
         chat_id: chatId,
@@ -57,7 +63,7 @@ function createConvAskUser(projectId: string, chatId: number, statusMsgId: numbe
     await tgApi("editMessageText", {
       chat_id: chatId,
       message_id: statusMsgId,
-      text: processMessage("Continuing..."),
+      text: processMessage(t(lang, "continuing"), undefined, lang),
       parse_mode: "HTML",
     });
 
@@ -111,14 +117,14 @@ function isAttachState(state: string | null | undefined): boolean {
 }
 
 function fileSavedReply(ctx: BotContext, projectPath: string) {
+  const lang = getLang(ctx);
   return ctx.reply(
-    `📎 File saved: <code>${esc(projectPath)}</code>\n\nSend more files, or type your update description to continue.`,
+    `📎 ${t(lang, "file_saved", { path: esc(projectPath) })}`,
     { parse_mode: "HTML" }
   );
 }
 
 export function registerConversationHandlers(bot: Bot<BotContext>) {
-  // Handle photos
   bot.on("message:photo", async (ctx) => {
     const session = ctx.session;
     if (!isAttachState(session.awaitingInput) || !session.activeProjectId) return;
@@ -135,11 +141,10 @@ export function registerConversationHandlers(bot: Bot<BotContext>) {
       await fileSavedReply(ctx, attached.projectPath);
     } catch (err) {
       console.error("[Conversation] Error downloading photo:", err);
-      await ctx.reply("❌ Failed to download photo. Please try again.");
+      await ctx.reply(`❌ ${t(getLang(ctx), "file_download_failed")}`);
     }
   });
 
-  // Handle documents
   bot.on("message:document", async (ctx) => {
     const session = ctx.session;
     if (!isAttachState(session.awaitingInput) || !session.activeProjectId) return;
@@ -155,11 +160,10 @@ export function registerConversationHandlers(bot: Bot<BotContext>) {
       await fileSavedReply(ctx, attached.projectPath);
     } catch (err) {
       console.error("[Conversation] Error downloading document:", err);
-      await ctx.reply("❌ Failed to download file. Please try again.");
+      await ctx.reply(`❌ ${t(getLang(ctx), "file_doc_failed")}`);
     }
   });
 
-  // Handle audio files
   bot.on("message:audio", async (ctx) => {
     const session = ctx.session;
     if (!isAttachState(session.awaitingInput) || !session.activeProjectId) return;
@@ -175,11 +179,10 @@ export function registerConversationHandlers(bot: Bot<BotContext>) {
       await fileSavedReply(ctx, attached.projectPath);
     } catch (err) {
       console.error("[Conversation] Error downloading audio:", err);
-      await ctx.reply("❌ Failed to download audio. Please try again.");
+      await ctx.reply(`❌ ${t(getLang(ctx), "file_audio_failed")}`);
     }
   });
 
-  // Handle video files
   bot.on("message:video", async (ctx) => {
     const session = ctx.session;
     if (!isAttachState(session.awaitingInput) || !session.activeProjectId) return;
@@ -195,11 +198,10 @@ export function registerConversationHandlers(bot: Bot<BotContext>) {
       await fileSavedReply(ctx, attached.projectPath);
     } catch (err) {
       console.error("[Conversation] Error downloading video:", err);
-      await ctx.reply("❌ Failed to download video. Please try again.");
+      await ctx.reply(`❌ ${t(getLang(ctx), "file_video_failed")}`);
     }
   });
 
-  // Handle voice messages
   bot.on("message:voice", async (ctx) => {
     const session = ctx.session;
     if (!isAttachState(session.awaitingInput) || !session.activeProjectId) return;
@@ -214,7 +216,7 @@ export function registerConversationHandlers(bot: Bot<BotContext>) {
       await fileSavedReply(ctx, attached.projectPath);
     } catch (err) {
       console.error("[Conversation] Error downloading voice:", err);
-      await ctx.reply("❌ Failed to download voice message. Please try again.");
+      await ctx.reply(`❌ ${t(getLang(ctx), "file_voice_failed")}`);
     }
   });
 
@@ -228,11 +230,9 @@ export function registerConversationHandlers(bot: Bot<BotContext>) {
       }
     }
 
-    // Fallback: if no active session, check if user has a project awaiting description
     if (!session.awaitingInput && ctx.from) {
       const user = await projectService.getOrCreateUser(ctx.from.id, ctx.from.username, ctx.from.first_name);
       const projects = await projectService.getProjectsByUser(user.id);
-      // Find newest project in "planning" state with no description (created in last hour)
       const pending = projects.find((p) => {
         const age = Date.now() - new Date(p.createdAt).getTime();
         return p.status === "planning" && !p.description && age < 3600_000;
@@ -245,7 +245,6 @@ export function registerConversationHandlers(bot: Bot<BotContext>) {
 
     if (!session.awaitingInput) return;
 
-    // topup_amount doesn't need a project
     if (session.awaitingInput === "topup_amount") {
       await handleTopupAmount(ctx, text);
       return;
@@ -282,13 +281,14 @@ export function registerConversationHandlers(bot: Bot<BotContext>) {
 
 async function handleDescription(ctx: BotContext, projectId: string, description: string) {
   ctx.session.awaitingInput = null;
+  const lang = getLang(ctx);
 
   const from = ctx.from!;
   const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
 
   if (!(await billingService.hasBalance(user.id))) {
     await ctx.reply(
-      errorMessage("Insufficient balance. Please top up first."),
+      errorMessage(t(lang, "insufficient_balance"), lang),
       { parse_mode: "HTML" }
     );
     ctx.session.awaitingInput = "description";
@@ -297,13 +297,13 @@ async function handleDescription(ctx: BotContext, projectId: string, description
 
   await projectService.updateProjectDescription(projectId, description);
 
-  const statusMsg = await ctx.reply(processMessage("Generating plan..."), { parse_mode: "HTML" });
+  const statusMsg = await ctx.reply(processMessage(t(lang, "generating_plan"), undefined, lang), { parse_mode: "HTML" });
 
   try {
     const assets = await projectService.getProjectAssets(projectId);
     const assetPaths = assets.map((a) => a.filePath).filter(Boolean) as string[];
 
-    const result = await claudeService.generatePlan(description, assetPaths);
+    const result = await claudeService.generatePlan(description, assetPaths, lang);
     await projectService.updateProjectPlan(projectId, result.plan);
 
     const usage = await billingService.recordUsage(
@@ -318,10 +318,10 @@ async function handleDescription(ctx: BotContext, projectId: string, description
     await ctx.api.editMessageText(
       ctx.chat!.id,
       statusMsg.message_id,
-      `${ce(EMOJI.idea)} <b>Here's the plan for your app:</b>\n\n${formatPlanForUser(result.plan)}\n\n${costLine(usage.costUsd, usage.newBalance)}`,
+      `${ce(EMOJI.idea)} <b>${t(lang, "plan_title")}</b>\n\n${formatPlanForUser(result.plan)}\n\n${costLine(usage.costUsd, usage.newBalance, lang)}`,
       {
         parse_mode: "HTML",
-        reply_markup: planActionKeyboard(projectId),
+        reply_markup: planActionKeyboard(projectId, lang),
       }
     );
   } catch (err) {
@@ -329,7 +329,7 @@ async function handleDescription(ctx: BotContext, projectId: string, description
     await ctx.api.editMessageText(
       ctx.chat!.id,
       statusMsg.message_id,
-      errorMessage("Failed to generate plan. Please try describing your app again."),
+      errorMessage(t(lang, "plan_error"), lang),
       { parse_mode: "HTML" }
     );
     ctx.session.awaitingInput = "description";
@@ -338,13 +338,14 @@ async function handleDescription(ctx: BotContext, projectId: string, description
 
 async function handlePlanFeedback(ctx: BotContext, projectId: string, feedback: string) {
   ctx.session.awaitingInput = null;
+  const lang = getLang(ctx);
 
   const from = ctx.from!;
   const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
 
   if (!(await billingService.hasBalance(user.id))) {
     await ctx.reply(
-      errorMessage("Insufficient balance. Please top up first."),
+      errorMessage(t(lang, "insufficient_balance"), lang),
       { parse_mode: "HTML" }
     );
     ctx.session.awaitingInput = "plan_feedback";
@@ -354,11 +355,11 @@ async function handlePlanFeedback(ctx: BotContext, projectId: string, feedback: 
   const project = await projectService.getProject(projectId);
   if (!project) return;
 
-  const statusMsg = await ctx.reply(processMessage("Updating plan..."), { parse_mode: "HTML" });
+  const statusMsg = await ctx.reply(processMessage(t(lang, "updating_plan"), undefined, lang), { parse_mode: "HTML" });
 
   try {
     const updatedDescription = `${project.description}\n\nAdditional feedback: ${feedback}`;
-    const result = await claudeService.generatePlan(updatedDescription);
+    const result = await claudeService.generatePlan(updatedDescription, undefined, lang);
     await projectService.updateProjectPlan(projectId, result.plan);
 
     const usage = await billingService.recordUsage(
@@ -372,10 +373,10 @@ async function handlePlanFeedback(ctx: BotContext, projectId: string, feedback: 
     await ctx.api.editMessageText(
       ctx.chat!.id,
       statusMsg.message_id,
-      `${ce(EMOJI.idea)} <b>Updated plan:</b>\n\n${formatPlanForUser(result.plan)}\n\n${costLine(usage.costUsd, usage.newBalance)}`,
+      `${ce(EMOJI.idea)} <b>${t(lang, "plan_updated")}</b>\n\n${formatPlanForUser(result.plan)}\n\n${costLine(usage.costUsd, usage.newBalance, lang)}`,
       {
         parse_mode: "HTML",
-        reply_markup: planActionKeyboard(projectId),
+        reply_markup: planActionKeyboard(projectId, lang),
       }
     );
   } catch (err) {
@@ -383,7 +384,7 @@ async function handlePlanFeedback(ctx: BotContext, projectId: string, feedback: 
     await ctx.api.editMessageText(
       ctx.chat!.id,
       statusMsg.message_id,
-      errorMessage("Failed to update plan. Please try again."),
+      errorMessage(t(lang, "plan_update_error"), lang),
       { parse_mode: "HTML" }
     );
     ctx.session.awaitingInput = "plan_feedback";
@@ -392,13 +393,14 @@ async function handlePlanFeedback(ctx: BotContext, projectId: string, feedback: 
 
 async function handleUpdateDescription(ctx: BotContext, projectId: string, updateText: string, attachments?: AttachedFile[]) {
   ctx.session.awaitingInput = null;
+  const lang = getLang(ctx);
 
   const from = ctx.from!;
   const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
 
   if (!(await billingService.hasBalance(user.id, 5))) {
     await ctx.reply(
-      errorMessage("Minimum <b>$5</b> balance required to update. Please top up first."),
+      errorMessage(t(lang, "balance_required_5_update"), lang),
       { parse_mode: "HTML" }
     );
     ctx.session.awaitingInput = "update_description";
@@ -406,16 +408,45 @@ async function handleUpdateDescription(ctx: BotContext, projectId: string, updat
   }
 
   if (processingProjects.has(projectId)) {
-    await ctx.reply(errorMessage("This project is already being processed."), { parse_mode: "HTML" });
+    await ctx.reply(errorMessage(t(lang, "already_processing"), lang), { parse_mode: "HTML" });
     return;
   }
 
-  const statusMsg = await ctx.reply(processMessage("Starting AI Agent..."), { parse_mode: "HTML" });
-  let lastUpdate = Date.now();
   processingProjects.add(projectId);
+
+  let checklistItems: string[] = [];
+  try {
+    checklistItems = await agentService.generateChecklist(updateText, undefined, lang);
+  } catch {}
+
+  const items: ChecklistItem[] = checklistItems.map(t => ({ text: t, done: false }));
+  const useChecklist = items.length > 0;
+
+  const statusMsg = await ctx.reply(
+    useChecklist
+      ? checklistMessage(t(lang, "updating_app"), items, undefined, lang)
+      : processMessage(t(lang, "starting_agent"), undefined, lang),
+    { parse_mode: "HTML" },
+  );
+  let lastUpdate = Date.now();
 
   try {
     await projectService.updateProjectStatus(projectId, "building");
+
+    const onCheckTodo = useChecklist ? async (id: number) => {
+      if (id >= 1 && id <= items.length) {
+        items[id - 1].done = true;
+        try {
+          await ctx.api.editMessageText(
+            ctx.chat!.id,
+            statusMsg.message_id,
+            checklistMessage(t(lang, "updating_app"), items, undefined, lang),
+            { parse_mode: "HTML" }
+          );
+          lastUpdate = Date.now();
+        } catch {}
+      }
+    } : undefined;
 
     const progress = async (p: { action: string; detail: string; percent?: number }) => {
       if (Date.now() - lastUpdate < 2000) return;
@@ -424,14 +455,16 @@ async function handleUpdateDescription(ctx: BotContext, projectId: string, updat
         await ctx.api.editMessageText(
           ctx.chat!.id,
           statusMsg.message_id,
-          processMessage(`${p.action} ${esc(p.detail)}`, p.percent),
+          useChecklist
+            ? checklistMessage(t(lang, "updating_app"), items, `${p.action} ${esc(p.detail)}`, lang)
+            : processMessage(`${p.action} ${esc(p.detail)}`, p.percent, lang),
           { parse_mode: "HTML" }
         );
       } catch {}
     };
 
-    const askUser = createConvAskUser(projectId, ctx.chat!.id, statusMsg.message_id);
-    const result = await agentService.updateApp(projectId, updateText, progress, attachments, askUser);
+    const askUser = createConvAskUser(projectId, ctx.chat!.id, statusMsg.message_id, lang);
+    const result = await agentService.updateApp(projectId, updateText, progress, attachments, askUser, useChecklist ? checklistItems : undefined, onCheckTodo, lang);
 
     const usage = await billingService.recordUsage(
       user.id, projectId, result.model,
@@ -446,30 +479,33 @@ async function handleUpdateDescription(ctx: BotContext, projectId: string, updat
     } catch (commitErr) {
       console.error("[Conversation] Commit error:", commitErr);
     }
-    const appUrl = `${config.baseUrl}/app/${projectId}/`;
-    const updatedProject = await projectService.getProject(projectId);
+    try { await ctx.api.deleteMessage(ctx.chat!.id, statusMsg.message_id); } catch {}
 
     try {
-      await ctx.api.editMessageText(
-        ctx.chat!.id,
-        statusMsg.message_id,
-        doneMessage("App updated!", `${mdToTgHtml(truncSummary(result.summary))}\n\n<blockquote>${appUrl}</blockquote>\n\n${costLine(usage.costUsd, usage.newBalance)}`),
+      const reportUrl = await publishReport(
+        t(lang, "app_updated"),
+        result.summary,
+        `${t(lang, "cost_label")} $${usage.costUsd.toFixed(4)} | ${t(lang, "balance_label")} $${usage.newBalance.toFixed(2)}`
+      );
+      await ctx.reply(
+        doneMessage(t(lang, "app_updated"), `${costLine(usage.costUsd, usage.newBalance, lang)}\n\n<a href="${reportUrl}">${t(lang, "view_report")}</a>`),
         {
           parse_mode: "HTML",
-          reply_markup: projectActionsKeyboard(projectId, "deployed", await getProjectFeatures(projectId), updatedProject?.botUsername || undefined),
+          reply_markup: { inline_keyboard: [
+            [{ text: t(lang, "btn_open_app"), callback_data: `dash:${projectId}` }],
+          ]},
         }
       );
-    } catch (displayErr) {
-      console.error("[Conversation] Display error (app is deployed):", displayErr);
-      await ctx.api.editMessageText(
-        ctx.chat!.id,
-        statusMsg.message_id,
-        doneMessage("App updated!", `<blockquote>${appUrl}</blockquote>\n\n${costLine(usage.costUsd, usage.newBalance)}`),
+    } catch (reportErr) {
+      console.error("[Conversation] Telegraph report error:", reportErr);
+      const updatedProject = await projectService.getProject(projectId);
+      await ctx.reply(
+        doneMessage(t(lang, "app_updated"), `${mdToTgHtml(truncSummary(result.summary, 2000, lang))}\n\n${costLine(usage.costUsd, usage.newBalance, lang)}`),
         {
           parse_mode: "HTML",
-          reply_markup: projectActionsKeyboard(projectId, "deployed", await getProjectFeatures(projectId), updatedProject?.botUsername || undefined),
+          reply_markup: projectActionsKeyboard(projectId, "deployed", await getProjectFeatures(projectId), updatedProject?.botUsername || undefined, lang),
         }
-      ).catch(() => {});
+      );
     }
   } catch (err) {
     console.error("[Conversation] Error updating app:", err);
@@ -477,7 +513,7 @@ async function handleUpdateDescription(ctx: BotContext, projectId: string, updat
     await ctx.api.editMessageText(
       ctx.chat!.id,
       statusMsg.message_id,
-      errorMessage("Failed to update app. Please try again."),
+      errorMessage(t(lang, "update_error"), lang),
       { parse_mode: "HTML" }
     ).catch(() => {});
     ctx.session.awaitingInput = "update_description";
@@ -488,55 +524,48 @@ async function handleUpdateDescription(ctx: BotContext, projectId: string, updat
 
 async function handleTopupAmount(ctx: BotContext, text: string) {
   ctx.session.awaitingInput = null;
+  const lang = getLang(ctx);
 
   const amount = parseFloat(text.replace(/[^0-9.]/g, ""));
   if (isNaN(amount) || amount < 10) {
     await ctx.reply(
-      errorMessage("Minimum top-up is <b>$10</b>. Please enter a valid amount."),
+      errorMessage(t(lang, "topup_min_error"), lang),
       { parse_mode: "HTML" }
     );
     ctx.session.awaitingInput = "topup_amount";
     return;
   }
 
-  const from = ctx.from!;
-  const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
-
-  try {
-    const { invoiceUrl } = await billingService.createTopUp(user.id, amount);
-
-    await ctx.reply(
-      doneMessage(
-        "Payment link created!",
-        `Amount: <b>$${amount.toFixed(2)}</b>\n\nPay with any cryptocurrency via the link below.\nYour balance will be credited automatically after confirmation.`
-      ),
-      {
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: `Pay $${amount.toFixed(2)}`, url: invoiceUrl }],
-            [{ text: "Back", callback_data: "nav_welcome" }],
+  await ctx.reply(
+    `${ce(EMOJI.dollar, "💲")} <b>${t(lang, "btn_topup")} $${amount.toFixed(2)}</b>\n\n` +
+    t(lang, "topup_choose_method"),
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: t(lang, "btn_crypto_bot"), callback_data: `cryptobot_pay:${amount.toFixed(2)}`, icon_custom_emoji_id: EMOJI.crypto_bot },
+            { text: t(lang, "btn_other_crypto"), callback_data: `nowpay:${amount.toFixed(2)}`, icon_custom_emoji_id: EMOJI.usdt },
           ],
-        },
-      }
-    );
-  } catch (err) {
-    console.error("[Conversation] Topup error:", err);
-    await ctx.reply(
-      errorMessage("Failed to create payment link. Please try again."),
-      { parse_mode: "HTML" }
-    );
-  }
+          [
+            { text: t(lang, "btn_stars"), callback_data: `stars_pay:${amount.toFixed(2)}`, icon_custom_emoji_id: EMOJI.stars },
+          ],
+          [{ text: t(lang, "btn_cancel"), callback_data: "nav_welcome" }],
+        ],
+      },
+    }
+  );
 }
 
 
 async function handleTonWallet(ctx: BotContext, projectId: string, address: string) {
   ctx.session.awaitingInput = null;
+  const lang = getLang(ctx);
   const trimmed = address.trim();
 
   if (!/^(UQ|EQ|0:)[A-Za-z0-9_\-+/]{30,}$/.test(trimmed)) {
     await ctx.reply(
-      errorMessage("Invalid TON wallet address.\n\nPlease send a valid address (starts with <code>UQ</code> or <code>EQ</code>):"),
+      errorMessage(t(lang, "wallet_invalid"), lang),
       { parse_mode: "HTML" }
     );
     ctx.session.awaitingInput = "ton_wallet";
@@ -546,13 +575,13 @@ async function handleTonWallet(ctx: BotContext, projectId: string, address: stri
   try {
     await projectService.setTonWallet(projectId, trimmed);
     await ctx.reply(
-      doneMessage("Wallet saved!", `<b>Address:</b>\n<code>${esc(trimmed)}</code>\n\nYour app will receive TON payments to this wallet.`),
+      doneMessage(t(lang, "wallet_saved"), t(lang, "wallet_saved_detail", { address: esc(trimmed) })),
       { parse_mode: "HTML" }
     );
   } catch (err) {
     console.error("[Conversation] Error saving wallet:", err);
     await ctx.reply(
-      errorMessage("Failed to save wallet. Please try again."),
+      errorMessage(t(lang, "wallet_error"), lang),
       { parse_mode: "HTML" }
     );
     ctx.session.awaitingInput = "ton_wallet";
@@ -561,11 +590,12 @@ async function handleTonWallet(ctx: BotContext, projectId: string, address: stri
 
 async function handleTransferOwner(ctx: BotContext, projectId: string, username: string) {
   ctx.session.awaitingInput = null;
+  const lang = getLang(ctx);
   const trimmed = username.trim().replace(/^@/, "");
 
   if (!trimmed) {
     await ctx.reply(
-      errorMessage("Please enter a valid username."),
+      errorMessage(t(lang, "transfer_invalid"), lang),
       { parse_mode: "HTML" }
     );
     ctx.session.awaitingInput = "transfer_owner";
@@ -576,7 +606,7 @@ async function handleTransferOwner(ctx: BotContext, projectId: string, username:
     const targetUser = await projectService.getUserByUsername(trimmed);
     if (!targetUser) {
       await ctx.reply(
-        errorMessage(`User <b>@${esc(trimmed)}</b> not found.\n\nThey must have used Apps Father bot at least once.`),
+        errorMessage(t(lang, "transfer_not_found", { username: esc(trimmed) }), lang),
         { parse_mode: "HTML" }
       );
       ctx.session.awaitingInput = "transfer_owner";
@@ -587,7 +617,7 @@ async function handleTransferOwner(ctx: BotContext, projectId: string, username:
     const currentUser = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
     if (targetUser.id === currentUser.id) {
       await ctx.reply(
-        errorMessage("You can't transfer to yourself."),
+        errorMessage(t(lang, "transfer_self"), lang),
         { parse_mode: "HTML" }
       );
       ctx.session.awaitingInput = "transfer_owner";
@@ -598,15 +628,15 @@ async function handleTransferOwner(ctx: BotContext, projectId: string, username:
     if (!project) return;
 
     await ctx.reply(
-      `${ce(EMOJI.indicator_warning)} <b>Confirm Transfer</b>\n\n` +
-      `Transfer <b>${esc(project.name)}</b> to <b>@${esc(trimmed)}</b>?\n\n` +
-      `<blockquote>This action cannot be undone. The new owner will have full control over this app.</blockquote>`,
+      `${ce(EMOJI.indicator_warning)} <b>${t(lang, "transfer_confirm")}</b>\n\n` +
+      `${t(lang, "transfer_confirm_body", { name: esc(project.name), username: esc(trimmed) })}\n\n` +
+      `<blockquote>${t(lang, "transfer_warning")}</blockquote>`,
       {
         parse_mode: "HTML",
         reply_markup: {
           inline_keyboard: [
-            [{ text: "Confirm Transfer", callback_data: `confirm_transfer:${projectId}:${targetUser.id}` }],
-            [{ text: "Cancel", callback_data: `project:${projectId}` }],
+            [{ text: t(lang, "btn_confirm_transfer"), callback_data: `confirm_transfer:${projectId}:${targetUser.id}` }],
+            [{ text: t(lang, "btn_cancel"), callback_data: `project:${projectId}` }],
           ],
         },
       }
@@ -614,7 +644,7 @@ async function handleTransferOwner(ctx: BotContext, projectId: string, username:
   } catch (err) {
     console.error("[Conversation] Error finding user for transfer:", err);
     await ctx.reply(
-      errorMessage("Failed to look up user. Please try again."),
+      errorMessage(t(lang, "transfer_error"), lang),
       { parse_mode: "HTML" }
     );
     ctx.session.awaitingInput = "transfer_owner";

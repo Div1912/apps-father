@@ -256,7 +256,7 @@ export class ClaudeService {
     };
   }
 
-  async generatePlan(description: string, assets?: string[]): Promise<{
+  async generatePlan(description: string, assets?: string[], lang?: string): Promise<{
     plan: string;
     inputTokens: number;
     outputTokens: number;
@@ -265,13 +265,16 @@ export class ClaudeService {
     if (assets && assets.length > 0) {
       prompt += `\n\nThe user has provided ${assets.length} image(s) as reference for the app design.`;
     }
+    const langInstruction = lang && lang !== "en"
+      ? `\nIMPORTANT: Write the entire plan in ${lang === "ru" ? "Russian" : lang === "ua" ? "Ukrainian" : "English"}.`
+      : "";
     prompt += `\n\nReturn ONLY the plan in markdown format. Do not generate any code yet.
 
 IMPORTANT: Keep the plan CONCISE. The user-facing summary must fit in a Telegram message.
 - App name and brief description (2-3 sentences)
 - Feature list (bullet points, max 8-10 items)
 - UI screens (names + 2-3 bullet points each, max 4 screens)
-- Do NOT include database tables, API endpoints, or technical implementation details in the plan text — those will be handled during code generation.`;
+- Do NOT include database tables, API endpoints, or technical implementation details in the plan text — those will be handled during code generation.${langInstruction}`;
 
     const result = await this.streamMessage({
       system: SYSTEM_PROMPT,
@@ -379,11 +382,14 @@ Return the COMPLETE updated code as valid JSON matching the specified structure.
     }
   }
 
-  async suggestImprovements(description: string, plan: string): Promise<{
+  async suggestImprovements(description: string, plan: string, lang?: string): Promise<{
     suggestions: string[];
     inputTokens: number;
     outputTokens: number;
   }> {
+    const langInstruction = lang && lang !== "en"
+      ? `\n\nIMPORTANT: Write all suggestions in ${lang === "ru" ? "Russian" : lang === "ua" ? "Ukrainian" : "English"}. The suggestions must be in that language.`
+      : "";
     const prompt = `Based on this Mini App description and plan, suggest 3-5 specific improvements or features that would make it better.
 
 Description: ${description}
@@ -392,7 +398,7 @@ Plan: ${plan}
 Return a JSON array of strings, each being a brief improvement suggestion. Example:
 ["Add offline support with service workers", "Include pull-to-refresh on the main list"]
 
-Return ONLY the JSON array, no other text.`;
+Return ONLY the JSON array, no other text.${langInstruction}`;
 
     const message = await this.client.messages.create({
       model: "claude-sonnet-4-6",

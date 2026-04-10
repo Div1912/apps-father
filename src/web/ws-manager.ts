@@ -30,27 +30,37 @@ function createProjectDb(projectDir: string, botToken: string, botUsername: stri
   sqlite.pragma("journal_mode = WAL");
   sqlite.exec("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)");
 
+  let closed = false;
+
   return {
+    get open() { return !closed; },
     get(key: string) {
+      if (closed) return null;
       const row = sqlite.prepare("SELECT value FROM kv WHERE key = ?").get(key) as any;
       return row ? JSON.parse(row.value) : null;
     },
     set(key: string, value: any) {
+      if (closed) return;
       sqlite.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)").run(key, JSON.stringify(value));
     },
     getAll() {
+      if (closed) return {};
       const rows = sqlite.prepare("SELECT key, value FROM kv").all() as any[];
       const result: Record<string, any> = {};
       for (const row of rows) result[row.key] = JSON.parse(row.value);
       return result;
     },
     delete(key: string) {
+      if (closed) return;
       sqlite.prepare("DELETE FROM kv WHERE key = ?").run(key);
     },
     keys() {
+      if (closed) return [];
       return (sqlite.prepare("SELECT key FROM kv").all() as any[]).map((r: any) => r.key);
     },
     close() {
+      if (closed) return;
+      closed = true;
       sqlite.close();
     },
     botToken,

@@ -255,9 +255,10 @@ ASKING THE USER (ask_user tool):
 - If the user clicks Skip or doesn't answer, proceed with the best default.
 
 PROGRESS REPORTING:
-- Call set_progress(percent, message) periodically so the user sees a live progress bar.
-- Guideline: 5% = started/reading files, 20% = planning done, 40% = frontend written, 60% = backend written, 75% = testing, 90% = fixing bugs, 95% = final checks, then done().
-- Include set_progress in parallel with other tool calls — it costs nothing.
+- You will receive a TASK CHECKLIST in the prompt. After completing each task, call check_todo(id) with the task number (1-based). This updates a live checklist the user sees.
+- Call check_todo in parallel with other tool calls — it costs nothing.
+- Call done() ONLY after ALL checklist tasks are checked off.
+- You may also call set_progress(percent, message) for fine-grained status updates between checklist items.
 
 PARALLEL TOOL CALLS — USE AGGRESSIVELY:
 - Read multiple files at once: read_file(routes.js) + read_file(app.js) + read_file(styles.css) in ONE turn
@@ -441,6 +442,17 @@ const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "check_todo",
+    description: "Mark a checklist item as done. Call this after completing each task from your checklist. The user sees a live checklist that updates when you call this.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        id: { type: "number" as const, description: "Task ID (1-based index from your checklist)" },
+      },
+      required: ["id"],
+    },
+  },
+  {
     name: "done",
     description: "Call this when you've finished all changes. Provide a detailed summary of what was done.",
     input_schema: {
@@ -492,7 +504,8 @@ export class AgentService {
   private async callWithRetry(params: any, maxRetries = 3): Promise<Anthropic.Message> {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        return await this.client.messages.create(params);
+        const stream = this.client.messages.stream(params);
+        return await stream.finalMessage();
       } catch (err: any) {
         const status = err?.status || err?.error?.status;
         if (status === 429 && attempt < maxRetries) {
@@ -526,14 +539,49 @@ export class AgentService {
     return `\nPAID FEATURES STATUS:\n- Stars Payment System: ${starsStatus}\n- TON Payment System: ${tonStatus}\n`;
   }
 
+  async generateChecklist(description: string, plan?: string, lang?: string): Promise<string[]> {
+    try {
+      const langNote = lang && lang !== "en"
+        ? ` Write the task items in ${lang === "ru" ? "Russian" : "Ukrainian"}.`
+        : "";
+      const prompt = plan
+        ? `Break down this app build plan into concrete implementation tasks (short, actionable items a developer would check off). Return ONLY a JSON array of strings.${langNote}\n\nPlan:\n${plan}\n\nDescription:\n${description}`
+        : `Break down this update request into concrete implementation tasks (short, actionable items a developer would check off). If the request is simple (1-2 small changes), return just 2-3 items. Only use more items (up to 8) for complex multi-part requests. Return ONLY a JSON array of strings.${langNote}\n\nRequest:\n${description}`;
+
+      const response = await this.client.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 1024,
+        messages: [{ role: "user", content: prompt }],
+      });
+
+      const text = response.content[0]?.type === "text" ? response.content[0].text : "[]";
+      const arrMatch = text.match(/\[[\s\S]*\]/);
+      const raw = arrMatch ? arrMatch[0] : text;
+      let items: unknown;
+      try { items = JSON.parse(raw); } catch { items = null; }
+      if (Array.isArray(items) && items.length > 0) {
+        return items.filter((s): s is string => typeof s === "string").slice(0, 10);
+      }
+    } catch (err) {
+      console.error("[Agent] Failed to generate checklist:", err);
+    }
+    return [];
+  }
+
   async buildApp(
     projectId: string,
     description: string,
     plan: string,
     onProgress?: (p: AgentProgress) => Promise<void>,
     onAskUser?: (question: string, options: string[]) => Promise<string>,
+    checklist?: string[],
+    onCheckTodo?: (id: number) => Promise<void>,
+    lang?: string,
   ): Promise<AgentResult> {
     const featureGating = await this.buildFeatureGating(projectId);
+    const langInstruction = lang && lang !== "en"
+      ? `\n\nIMPORTANT: All user-facing text in the app (UI labels, buttons, messages, placeholders, titles) must be written in ${lang === "ru" ? "Russian" : "Ukrainian"}. The code, comments, and variable names should stay in English.`
+      : "";
 
     const prompt = `Build a complete Telegram Mini App from scratch.
 
@@ -546,9 +594,9 @@ Description: ${description}
 Plan:
 ${plan}
 ${featureGating}
-Create all necessary files (frontend/index.html, frontend/styles.css, frontend/app.js, backend/routes.js) and configure the bot. Database is handled via db.get/db.set in routes.js — no schema setup needed. Make it beautiful and functional.`;
+Create all necessary files (frontend/index.html, frontend/styles.css, frontend/app.js, backend/routes.js) and configure the bot. Database is handled via db.get/db.set in routes.js — no schema setup needed. Make it beautiful and functional.${langInstruction}`;
 
-    return this.runAgent(projectId, prompt, onProgress, onAskUser);
+    return this.runAgent(projectId, prompt, onProgress, onAskUser, checklist, onCheckTodo);
   }
 
   async updateApp(
@@ -557,6 +605,9 @@ Create all necessary files (frontend/index.html, frontend/styles.css, frontend/a
     onProgress?: (p: AgentProgress) => Promise<void>,
     attachments?: { localPath: string; projectPath: string; originalName: string; caption?: string }[],
     onAskUser?: (question: string, options: string[]) => Promise<string>,
+    checklist?: string[],
+    onCheckTodo?: (id: number) => Promise<void>,
+    lang?: string,
   ): Promise<AgentResult> {
     const project: any = await projectService.getProject(projectId);
     const contextParts: string[] = [];
@@ -580,6 +631,10 @@ Create all necessary files (frontend/index.html, frontend/styles.css, frontend/a
 
     const featureGating = await this.buildFeatureGating(projectId);
 
+    const langInstruction = lang && lang !== "en"
+      ? `\n\nIMPORTANT: All user-facing text in the app (UI labels, buttons, messages, placeholders, titles) must be written in ${lang === "ru" ? "Russian" : "Ukrainian"}. The code, comments, and variable names should stay in English.`
+      : "";
+
     const prompt = `Update an existing Telegram Mini App.
 
 Project ID: ${projectId}
@@ -588,9 +643,9 @@ API URL: ${config.baseUrl}/api/${projectId}/
 
 ${context}Update request: ${updateDescription}
 ${attachmentInfo}${featureGating}
-Use grep and read_file to verify current state before making changes. Use edit_file for targeted modifications.`;
+Use grep and read_file to verify current state before making changes. Use edit_file for targeted modifications.${langInstruction}`;
 
-    return this.runAgent(projectId, prompt, onProgress, onAskUser);
+    return this.runAgent(projectId, prompt, onProgress, onAskUser, checklist, onCheckTodo);
   }
 
   private async runAgent(
@@ -598,6 +653,8 @@ Use grep and read_file to verify current state before making changes. Use edit_f
     userPrompt: string,
     onProgress?: (p: AgentProgress) => Promise<void>,
     onAskUser?: (question: string, options: string[]) => Promise<string>,
+    checklist?: string[],
+    onCheckTodo?: (id: number) => Promise<void>,
   ): Promise<AgentResult> {
     const progress = onProgress || (async () => {});
     const projectDir = path.join(PROJECTS_DIR, projectId);
@@ -616,8 +673,15 @@ Use grep and read_file to verify current state before making changes. Use edit_f
 
     const tierConfig = QUALITY_TIERS[qualityTier] || QUALITY_TIERS[1];
 
+    let finalPrompt = userPrompt;
+    const checklistDone = new Set<number>();
+    if (checklist && checklist.length > 0) {
+      const checklistText = checklist.map((item, i) => `${i + 1}. ${item}`).join("\n");
+      finalPrompt += `\n\nYOUR TASK CHECKLIST (complete each item, then call check_todo(id) to mark it done):\n${checklistText}\n\nYou MUST call check_todo(id) after completing each task. Call done() only after ALL tasks are checked off.`;
+    }
+
     const messages: Anthropic.MessageParam[] = [
-      { role: "user", content: userPrompt },
+      { role: "user", content: finalPrompt },
     ];
 
     let summary = "";
@@ -634,7 +698,7 @@ Use grep and read_file to verify current state before making changes. Use edit_f
 
       const response = await this.callWithRetry({
         model: tierConfig.model,
-        max_tokens: 16000,
+        max_tokens: tierConfig.thinking + 8000,
         thinking: { type: "enabled", budget_tokens: tierConfig.thinking },
         system: AGENT_SYSTEM_PROMPT,
         tools: TOOLS,
@@ -1010,9 +1074,28 @@ Use grep and read_file to verify current state before making changes. Use edit_f
               break;
             }
 
+            case "check_todo": {
+              const todoId = Math.round(args.id);
+              if (checklist && todoId >= 1 && todoId <= checklist.length) {
+                checklistDone.add(todoId);
+                if (onCheckTodo) {
+                  try { await onCheckTodo(todoId); } catch {}
+                }
+                result = `OK: Task ${todoId} marked as done (${checklistDone.size}/${checklist.length} completed)`;
+                console.log(`[Agent] ✅ check_todo(${todoId}): "${checklist[todoId - 1]}" — ${checklistDone.size}/${checklist.length} done`);
+              } else {
+                result = `Error: Invalid task ID ${todoId}`;
+              }
+              break;
+            }
+
             case "done": {
               summary = args.summary || "Changes applied";
               currentPercent = 100;
+              if (checklist && checklist.length > 0 && checklistDone.size < checklist.length) {
+                const missing = checklist.filter((_, i) => !checklistDone.has(i + 1));
+                console.log(`[Agent] ⚠️ done() called with ${checklist.length - checklistDone.size} unchecked tasks: ${missing.join(", ")}`);
+              }
               await progress({ action: "✅ Done", detail: summary, percent: 100 });
               console.log(`[Agent] ✅ Done after ${iterations} iterations | Total tokens: in=${totalInputTokens} out=${totalOutputTokens}`);
 
@@ -1185,6 +1268,7 @@ Use grep and read_file to verify current state before making changes. Use edit_f
       case "telegram_api": return args.method || "";
       case "load_skill": return args.name || "";
       case "server_logs": return `${args.lines || 30} lines`;
+      case "check_todo": return `task #${args.id}`;
       case "done": return (args.summary || "").substring(0, 80);
       default: return JSON.stringify(args).substring(0, 80);
     }

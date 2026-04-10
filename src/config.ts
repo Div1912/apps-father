@@ -13,6 +13,7 @@ export const config = {
   nowpaymentsApiKey: process.env.NOWPAYMENTS_API_KEY || "",
   nowpaymentsIpnSecret: process.env.NOWPAYMENTS_IPN_SECRET || "",
   adminPassword: process.env.ADMIN_PASSWORD || "admin",
+  cryptoBotToken: process.env.CRYPTO_BOT_TOKEN || "",
 
   get baseUrl(): string {
     if (this.nodeEnv === "development") {

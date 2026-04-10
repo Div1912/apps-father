@@ -283,6 +283,85 @@ router.post("/api/config", (req: Request, res: Response) => {
   }
 });
 
+// --- Vouchers ---
+
+router.get("/api/vouchers", async (_req: Request, res: Response) => {
+  try {
+    const vouchers = await prisma.voucher.findMany({
+      orderBy: { createdAt: "desc" },
+      include: { _count: { select: { redemptions: true } } },
+    });
+    res.json(vouchers.map(v => ({
+      id: v.id,
+      code: v.code,
+      amountUsd: Number(v.amountUsd),
+      maxUses: v.maxUses,
+      usedCount: v.usedCount,
+      active: v.active,
+      createdAt: v.createdAt,
+      link: `https://t.me/apps_father_bot?start=${v.code}`,
+    })));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/api/vouchers", async (req: Request, res: Response) => {
+  try {
+    const { amount, maxUses } = req.body;
+    const val = parseFloat(amount);
+    const uses = parseInt(maxUses, 10);
+    if (isNaN(val) || val <= 0) { res.status(400).json({ error: "Invalid amount" }); return; }
+    if (isNaN(uses) || uses <= 0) { res.status(400).json({ error: "Invalid maxUses" }); return; }
+
+    const code = "v_" + crypto.randomBytes(4).toString("hex");
+    const voucher = await prisma.voucher.create({
+      data: {
+        code,
+        amountUsd: new Decimal(val.toFixed(4)),
+        maxUses: uses,
+      },
+    });
+    res.json({
+      id: voucher.id,
+      code: voucher.code,
+      amountUsd: Number(voucher.amountUsd),
+      maxUses: voucher.maxUses,
+      usedCount: 0,
+      active: true,
+      createdAt: voucher.createdAt,
+      link: `https://t.me/apps_father_bot?start=${voucher.code}`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put("/api/vouchers/:id", async (req: Request<{id: string}>, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const data: any = {};
+    if (req.body.amount !== undefined) data.amountUsd = new Decimal(parseFloat(req.body.amount).toFixed(4));
+    if (req.body.maxUses !== undefined) data.maxUses = parseInt(req.body.maxUses, 10);
+    if (req.body.active !== undefined) data.active = Boolean(req.body.active);
+    const voucher = await prisma.voucher.update({ where: { id }, data });
+    res.json({ id: voucher.id, amountUsd: Number(voucher.amountUsd), maxUses: voucher.maxUses, active: voucher.active });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete("/api/vouchers/:id", async (req: Request<{id: string}>, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    await prisma.voucherRedemption.deleteMany({ where: { voucherId: id } });
+    await prisma.voucher.delete({ where: { id } });
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- Helpers ---
 
 function walkDir(dir: string, base: string): { path: string; name: string }[] {
@@ -478,6 +557,7 @@ function renderApp() {
         <button class="nav-item active" data-page="dashboard"><span class="icon">📊</span> Dashboard</button>
         <button class="nav-item" data-page="users"><span class="icon">👤</span> Users</button>
         <button class="nav-item" data-page="projects"><span class="icon">📁</span> Projects</button>
+        <button class="nav-item" data-page="vouchers"><span class="icon">🎟️</span> Vouchers</button>
         <button class="nav-item" data-page="config"><span class="icon">⚙️</span> Configuration</button>
       </div>
       <div class="sidebar-foot">
@@ -488,6 +568,7 @@ function renderApp() {
       <div class="page active" id="page-dashboard"></div>
       <div class="page" id="page-users"></div>
       <div class="page" id="page-projects"></div>
+      <div class="page" id="page-vouchers"></div>
       <div class="page" id="page-config"></div>
     </div>
   </div>\`;
@@ -509,6 +590,7 @@ function loadPage(page) {
     case 'dashboard': loadDashboard(); break;
     case 'users': loadUsers(); break;
     case 'projects': loadProjects(); break;
+    case 'vouchers': loadVouchers(); break;
     case 'config': loadConfig(); break;
   }
 }
@@ -670,6 +752,68 @@ function loadProjectFile(projectId, filePath) {
   api('/projects/'+projectId+'/file?path='+encodeURIComponent(filePath)).then(d => {
     $('#code-pre').textContent = d.content;
   }).catch(() => { $('#code-pre').textContent = 'Failed to load file'; });
+}
+
+// === VOUCHERS ===
+function loadVouchers() {
+  const el = $('#page-vouchers');
+  el.innerHTML = \`
+    <div class="page-hdr"><div><h2>Vouchers</h2><div class="sub">Create and manage voucher codes</div></div></div>
+    <div class="section-title">Create Voucher</div>
+    <div class="inline-form">
+      <input type="number" id="v-amount" placeholder="Amount ($)" step="0.01" style="width:120px" />
+      <input type="number" id="v-max" placeholder="Max uses" step="1" value="1" style="width:100px" />
+      <button class="btn btn-primary btn-sm" id="v-create">Create</button>
+    </div>
+    <div class="section-title">All Vouchers</div>
+    <div id="vouchers-list"></div>
+  \`;
+
+  $('#v-create').addEventListener('click', () => {
+    const amount = $('#v-amount').value;
+    const maxUses = $('#v-max').value;
+    if (!amount || parseFloat(amount) <= 0) { toast('Enter a valid amount','err'); return; }
+    api('/vouchers', { method:'POST', body:{ amount, maxUses: maxUses||'1' } }).then(v => {
+      toast('Voucher created: '+v.code);
+      $('#v-amount').value = '';
+      $('#v-max').value = '1';
+      refreshVoucherList();
+    }).catch(() => toast('Failed to create','err'));
+  });
+
+  refreshVoucherList();
+}
+
+function refreshVoucherList() {
+  api('/vouchers').then(vouchers => {
+    const el = $('#vouchers-list');
+    if (!vouchers.length) { el.innerHTML = '<div class="empty-state"><div class="big">🎟️</div>No vouchers yet</div>'; return; }
+    el.innerHTML = '<table><thead><tr><th>Code</th><th>Amount</th><th>Used / Max</th><th>Status</th><th>Link</th><th>Created</th><th>Actions</th></tr></thead><tbody>' +
+      vouchers.map(v => '<tr><td><code>'+esc(v.code)+'</code></td><td>'+fmtMoney(v.amountUsd)+'</td><td>'+v.usedCount+' / '+v.maxUses+'</td><td>'+(v.active ? '<span class="badge deployed">active</span>' : '<span class="badge error">inactive</span>')+'</td><td><button class="btn btn-sm" data-copy-link="'+esc(v.link)+'">Copy</button></td><td>'+fmtDate(v.createdAt)+'</td><td><button class="btn btn-sm" data-toggle-v="'+v.id+'" data-active="'+v.active+'">'+(v.active?'Disable':'Enable')+'</button> <button class="btn btn-sm" style="color:var(--red)" data-del-v="'+v.id+'">Delete</button></td></tr>').join('') +
+      '</tbody></table>';
+
+    $$('[data-copy-link]').forEach(b => b.addEventListener('click', () => {
+      navigator.clipboard.writeText(b.dataset.copyLink).then(() => toast('Link copied!')).catch(() => {
+        const ta = document.createElement('textarea'); ta.value = b.dataset.copyLink; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('Link copied!');
+      });
+    }));
+
+    $$('[data-toggle-v]').forEach(b => b.addEventListener('click', () => {
+      const newActive = b.dataset.active === 'true' ? false : true;
+      api('/vouchers/'+b.dataset.toggleV, { method:'PUT', body:{ active: newActive } }).then(() => {
+        toast(newActive ? 'Voucher enabled' : 'Voucher disabled');
+        refreshVoucherList();
+      });
+    }));
+
+    $$('[data-del-v]').forEach(b => b.addEventListener('click', () => {
+      if (!confirm('Delete this voucher?')) return;
+      api('/vouchers/'+b.dataset.delV, { method:'DELETE' }).then(() => {
+        toast('Voucher deleted');
+        refreshVoucherList();
+      }).catch(() => toast('Failed to delete','err'));
+    }));
+  });
 }
 
 // === CONFIG ===

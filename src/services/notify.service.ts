@@ -16,13 +16,25 @@ function notifyAdmins(text: string): void {
   }
 }
 
-export function notifyNewUser(telegramId: number, username?: string, firstName?: string): void {
+export function notifyNewUser(telegramId: number, username?: string, firstName?: string, referredBy?: number): void {
   const name = firstName || "Unknown";
   const uname = username ? ` (@${username})` : "";
+  const source = referredBy ? `\n<b>Source:</b> Referred by <code>${referredBy}</code>` : "\n<b>Source:</b> Direct";
   notifyAdmins(
     `👤 <b>New user registered</b>\n\n` +
     `<b>Name:</b> ${name}${uname}\n` +
-    `<b>Telegram ID:</b> <code>${telegramId}</code>`
+    `<b>Telegram ID:</b> <code>${telegramId}</code>` +
+    source
+  );
+}
+
+export function notifyReferralBonus(referrerTelegramId: number, referrerUsername: string | undefined, bonus: number, fromTelegramId: number): void {
+  const uname = referrerUsername ? ` (@${referrerUsername})` : "";
+  notifyAdmins(
+    `🎁 <b>Referral bonus paid</b>\n\n` +
+    `<b>Referrer:</b> ${referrerTelegramId}${uname}\n` +
+    `<b>Bonus:</b> +$${bonus.toFixed(2)}\n` +
+    `<b>From user:</b> <code>${fromTelegramId}</code>`
   );
 }
 

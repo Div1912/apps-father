@@ -9,6 +9,7 @@ import { registerManagedBotHandlers } from "./handlers/managed-bot";
 import { registerCallbackHandlers } from "./handlers/callback";
 import { registerConversationHandlers } from "./handlers/conversation";
 import { registerPhotoHandlers } from "./handlers/photo";
+import { billingService } from "../services/billing.service";
 
 export function createBot(): Bot<BotContext> {
   const bot = new Bot<BotContext>(config.botToken);
@@ -34,8 +35,31 @@ export function createBot(): Bot<BotContext> {
   registerCallbackHandlers(bot);
   registerPhotoHandlers(bot);
 
-  // "Main Menu" reply keyboard button triggers /start
-  bot.hears("Main Menu", startCommand);
+  // Stars payments — auto-approve pre_checkout and process successful_payment
+  bot.on("pre_checkout_query" as any, async (ctx: any) => {
+    try {
+      await ctx.answerPreCheckoutQuery(true);
+    } catch (err) {
+      console.error("[Bot] pre_checkout_query error:", err);
+      try { await ctx.answerPreCheckoutQuery(false, { error_message: "Payment error" }); } catch {}
+    }
+  });
+
+  bot.on("message:successful_payment" as any, async (ctx: any) => {
+    try {
+      const payment = ctx.message.successful_payment;
+      console.log(`[Bot] Stars payment received: user=${ctx.from.id}, amount=${payment.total_amount} ${payment.currency}, payload=${payment.invoice_payload}`);
+      const payload = JSON.parse(payment.invoice_payload);
+      if (payload.type === "topup" && payload.paymentId) {
+        await billingService.handleStarsPayment(payload.paymentId);
+      }
+    } catch (err) {
+      console.error("[Bot] successful_payment error:", err);
+    }
+  });
+
+  // "Main Menu" reply keyboard button triggers /start (all languages)
+  bot.hears(/^(Main Menu|Главное меню|Головне меню)$/i, startCommand);
 
   // Conversation handlers must be registered last (catch-all for text)
   registerConversationHandlers(bot);
