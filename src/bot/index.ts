@@ -1,4 +1,4 @@
-import { Bot, session } from "grammy";
+import { Bot, session, InlineKeyboard } from "grammy";
 import { config } from "../config";
 import { BotContext, SessionData } from "../types";
 import { startCommand } from "./commands/start";
@@ -30,6 +30,10 @@ export function createBot(): Bot<BotContext> {
   bot.command("newproject", newProjectCommand);
   bot.command("projects", projectsCommand);
   bot.command("help", helpCommand);
+  bot.command("miniapp", async (ctx) => {
+    const kb = new InlineKeyboard().webApp("Open Mini App", `${config.baseUrl}/telegram-mini-app`);
+    await ctx.reply("Manage your apps from the Mini App ✨", { reply_markup: kb });
+  });
 
   registerManagedBotHandlers(bot);
   registerCallbackHandlers(bot);

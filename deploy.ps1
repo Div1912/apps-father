@@ -14,6 +14,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "Upload OK" -ForegroundColor Green
 
+Write-Host "=== Uploading mini_app ===" -ForegroundColor Cyan
+ssh root@204.168.219.20 "mkdir -p /opt/apps-father/mini_app"
+scp -r mini_app/* root@204.168.219.20:/opt/apps-father/mini_app/
+Write-Host "Mini App OK" -ForegroundColor Green
+
 Write-Host "=== Syncing package.json & deps ===" -ForegroundColor Cyan
 scp package.json root@204.168.219.20:/opt/apps-father/package.json
 ssh root@204.168.219.20 "cd /opt/apps-father && npm install --omit=dev --no-audit --no-fund 2>&1 | tail -3"

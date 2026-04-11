@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html class="">
+<head>
+  <meta charset="UTF-8">
+  <title>Apps Father</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="format-detection" content="telephone=no">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <link href="bootstrap.min.css" rel="stylesheet">
+  <link href="bootstrap-extra.css" rel="stylesheet">
+  <link href="styles.css?r=3" rel="stylesheet">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body class="emoji_image">
+
+  <div id="aj_progress" class="progress-bar" style="width:100%;transition:width .3s linear,box-shadow .2s;position:fixed;z-index:1000;top:0;height:3px;box-shadow:inset 0 0 0 var(--accent-color,#39ade7);"></div>
+
+  <!-- ═══ LIST VIEW ═══ -->
+  <div id="view-list" class="view-container">
+    <div id="aj_content">
+      <main class="tm-main">
+        <section class="tm-main-intro">
+          <img src="apps-father-avatar.png?r=1" class="tm-main-intro-picture" style="
+              box-shadow: 0px 7px 20px 20px #1cafe630;
+              border-radius: 50%;
+          ">
+          <h1 class="tm-main-intro-header">Apps Father</h1>
+          <p class="tm-main-intro-text" style="max-width:312px;">
+            Create and manage your Telegram Mini Apps with AI. Build, update, and publish — all from here.
+          </p>
+        </section>
+
+        <section class="tm-section" id="balance-section">
+          <div class="tm-table-wrap">
+            <a class="tm-row tm-row-link" id="btn-topup">
+              <span class="tm-icon af-icon-wallet"></span>
+              <div>
+                <div class="tm-row-value">Balance: <b id="balance-amount">...</b></div>
+                <div class="tm-row-description">Tap to top up</div>
+              </div>
+            </a>
+          </div>
+        </section>
+
+        <form class="tm-section tm-main-search-form" onsubmit="return false">
+          <div class="icon-before icon-search tm-field tm-search-field">
+            <input type="search" class="form-control tm-input tm-search-input" id="search-input" placeholder="Search" autocomplete="off" spellcheck="false">
+            <span class="icon-before icon-search-clear tm-search-clear" id="search-clear"></span>
+          </div>
+        </form>
+
+        <section class="tm-section">
+          <div class="tm-section-header">
+            <h2 class="tm-section-header-text">My Apps</h2>
+          </div>
+          <div class="tm-table-wrap" id="app-list">
+            <div class="loading-spinner"></div>
+          </div>
+          <div class="tm-table-wrap hidden" id="no-results">
+            <div class="tm-row-container tm-row-results-empty">
+              <img src="no-result.png" width="56" height="56">
+              <b>No Results</b>
+              <div id="no-results-text"></div>
+            </div>
+          </div>
+          <div class="tm-table-wrap" style="margin-top:1px;">
+            <a class="tm-row tm-row-add" id="btn-create-app">
+              <span>Create New App</span>
+            </a>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ═══ DETAIL VIEW ═══ -->
+  <div id="view-detail" class="view-container hidden">
+    <div>
+      <main class="tm-main">
+        <section class="tm-main-intro">
+          <div class="tr-bot-anchor">
+            <div id="detail-avatar" class="tm-main-intro-picture-placeholder"></div>
+            <h1 class="tm-main-intro-header" id="detail-name"></h1>
+          </div>
+          <p class="tm-main-intro-text tm-username-link" style="max-width:312px;" id="detail-username"></p>
+          <p class="tm-main-intro-text" style="max-width:312px;margin-top:8px;" id="detail-description"></p>
+        </section>
+
+        <section class="tm-section tm-menu-items" id="section-token" style="display:none">
+          <div class="tm-api-token-wrap">
+            <div class="tm-api-token">
+              <div class="js-spoiler spoiler-active" id="token-spoiler">
+                <span id="token-text"></span>
+              </div>
+            </div>
+            <div class="tm-api-token-actions">
+              <div class="tm-active-button" id="btn-copy-token">Copy</div>
+              <div class="tm-revoke-button" id="btn-revoke-token">Revoke</div>
+            </div>
+          </div>
+          <p class="help-text">Use this token to access the HTTP API. Keep it secure. <a href="https://core.telegram.org/bots/api" target="_blank">Read more</a></p>
+        </section>
+
+        <section class="tm-section tm-menu-items" id="section-app">
+          <div class="tm-section-header">
+            <h2 class="tm-section-header-text">App</h2>
+          </div>
+          <div class="tm-table-wrap" id="detail-app-rows"></div>
+        </section>
+
+        <section class="tm-section tm-menu-items" id="section-dev">
+          <div class="tm-section-header">
+            <h2 class="tm-section-header-text">Development</h2>
+          </div>
+          <div class="tm-table-wrap" id="detail-dev-rows"></div>
+        </section>
+
+        <section class="tm-section tm-menu-items" id="section-monetization" style="display:none">
+          <div class="tm-section-header">
+            <h2 class="tm-section-header-text">Monetization</h2>
+          </div>
+          <div class="tm-table-wrap" id="detail-money-rows"></div>
+        </section>
+
+        <section class="tm-section tm-menu-items" id="section-settings">
+          <div class="tm-section-header">
+            <h2 class="tm-section-header-text">Settings</h2>
+          </div>
+          <div class="tm-table-wrap" id="detail-settings-rows"></div>
+        </section>
+
+        <section class="tm-section tm-menu-items">
+          <div class="tm-section-header">
+            <h2 class="tm-section-header-text">Actions</h2>
+          </div>
+          <div class="tm-table-wrap" id="detail-actions-rows"></div>
+        </section>
+
+        <section class="tm-section">
+          <p class="help-text" style="text-align:center;" id="detail-info"></p>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ═══ EDIT INFO VIEW ═══ -->
+  <div id="view-edit-info" class="view-container hidden">
+    <div>
+      <main class="tm-main">
+        <section class="tm-main-intro">
+          <div class="tr-bot-anchor">
+            <div id="edit-avatar" class="tm-main-intro-picture-placeholder"></div>
+            <h1 class="tm-main-intro-header" id="edit-bot-title"></h1>
+          </div>
+          <p class="tm-main-intro-text tm-username-link" id="edit-bot-username"></p>
+        </section>
+
+        <form class="tm-section" id="edit-info-form" onsubmit="return false">
+          <div class="tm-section-header">
+            <h2 class="tm-section-header-text">Info</h2>
+          </div>
+          <div class="tm-field" style="border-radius: 6px 6px 0 0; margin-bottom: 1px;">
+            <input type="text" class="form-control tm-input" id="edit-name" placeholder="Bot Name" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="tm-field" style="border-radius: 0 0 6px 6px;">
+            <textarea rows="1" maxlength="120" class="form-control tm-input" id="edit-about" placeholder="About (Optional)" autocomplete="off" style="min-height:42px;"></textarea>
+          </div>
+          <p class="help-text">People will see this text on the bot's profile page.</p>
+        </form>
+
+        <form class="tm-section" onsubmit="return false">
+          <div class="tm-section-header">
+            <h2 class="tm-section-header-text">Description</h2>
+          </div>
+          <div class="tm-field" style="border-radius: 6px;">
+            <textarea maxlength="512" rows="3" class="form-control tm-input" id="edit-description" placeholder="Enter bot description" style="min-height:82px;"></textarea>
+          </div>
+          <p class="help-text">People will see the description when they open a chat with your bot, in a block titled 'What can this bot do?'.</p>
+        </form>
+      </main>
+    </div>
+  </div>
+
+  <script src="app.js?r=1"></script>
+</body>
+</html>
