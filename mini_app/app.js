@@ -88,9 +88,10 @@ function getInitials(name) {
 
 function avatarSvgDataUri(name) {
   const [c1, c2] = getGradient(name);
-  const initials = getInitials(name);
-  const svg = `<svg width="160" height="160" preserveAspectRatio="none" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="g" x1="0%" x2="0%" y1="0%" y2="100%"><stop offset="0%" stop-color="${c1}"/><stop offset="100%" stop-color="${c2}"/></linearGradient></defs><style>text{font:600 44px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-user-select:none;user-select:none}</style><rect width="100" height="100" fill="url(#g)"/><text text-anchor="middle" x="50" y="66" fill="#fff">${initials}</text></svg>`;
-  return 'data:image/svg+xml;base64,' + btoa(svg);
+  const initials = getInitials(name).replace(/[<>&"']/g, '');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 100 100"><defs><linearGradient id="g" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient></defs><rect width="100" height="100" fill="url(%23g)"/><text text-anchor="middle" x="50" y="66" fill="%23fff" font-size="44" font-weight="600" font-family="sans-serif">${initials}</text></svg>`;
+  try { return 'data:image/svg+xml,' + encodeURIComponent(svg); }
+  catch { return 'data:image/svg+xml,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 100 100"><rect width="100" height="100" fill="${c1}"/></svg>`); }
 }
 
 function statusLabel(status) {
@@ -441,7 +442,9 @@ let isPlanningMode = false;
 let planAnimInstance = null;
 
 function openChat(projectId) {
-  currentProject = projects.find(p => p.id === projectId);
+  if (!currentProject || currentProject.id !== projectId) {
+    currentProject = projects.find(p => p.id === projectId);
+  }
   if (!currentProject) return;
   chatProjectId = projectId;
 
@@ -2203,6 +2206,347 @@ function openQuality(projectId) {
   showView('quality');
 }
 
+// ═══ ADMIN PANEL ═══
+
+let isAdmin = false;
+let admTab = 'dashboard';
+let admChatReturn = false;
+
+async function checkAdmin() {
+  try {
+    const res = await fetch(`${API_BASE}/admin/check`, { headers: apiHeaders() });
+    const data = await res.json();
+    isAdmin = data.isAdmin === true;
+    const btn = document.getElementById('btn-admin');
+    if (btn) btn.classList.toggle('hidden', !isAdmin);
+  } catch {}
+}
+
+function admApi(path, opts = {}) {
+  return fetch(`${API_BASE}/admin${path}`, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...apiHeaders(), ...(opts.headers || {}) },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  }).then(r => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  });
+}
+
+function admFmtDate(d) {
+  return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+function admFmtMoney(n) { return '$' + Number(n).toFixed(2); }
+function admFmtTokens(n) { return n > 999999 ? (n/1000000).toFixed(1)+'M' : n > 999 ? (n/1000).toFixed(0)+'K' : String(n); }
+function admBadge(status) { return `<span class="adm-badge ${status}">${status}</span>`; }
+
+function openAdmin() {
+  admTab = 'dashboard';
+  showView('admin');
+  initAdmTabs();
+  loadAdmTab('dashboard');
+}
+
+function initAdmTabs() {
+  document.querySelectorAll('.adm-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.adm-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      admTab = tab.dataset.tab;
+      loadAdmTab(admTab);
+    });
+  });
+}
+
+function loadAdmTab(tab) {
+  const el = document.getElementById('adm-content');
+  el.innerHTML = '<div class="loading-spinner"></div>';
+  switch (tab) {
+    case 'dashboard': loadAdmDashboard(el); break;
+    case 'users': loadAdmUsers(el); break;
+    case 'projects': loadAdmProjects(el); break;
+    case 'vouchers': loadAdmVouchers(el); break;
+    case 'config': loadAdmConfig(el); break;
+  }
+}
+
+async function loadAdmDashboard(el) {
+  try {
+    const d = await admApi('/stats');
+    let html = `<div class="adm-stats">
+      <div class="adm-stat-card"><div class="adm-stat-label">Users</div><div class="adm-stat-value blue">${d.userCount}</div></div>
+      <div class="adm-stat-card"><div class="adm-stat-label">Projects</div><div class="adm-stat-value">${d.projectCount}</div></div>
+      <div class="adm-stat-card"><div class="adm-stat-label">Revenue</div><div class="adm-stat-value green">${admFmtMoney(d.totalTopups)}</div></div>
+      <div class="adm-stat-card"><div class="adm-stat-label">Spent</div><div class="adm-stat-value yellow">${admFmtMoney(d.totalSpent)}</div></div>
+    </div>`;
+    html += `<div class="adm-section-title">Recent Activity</div>`;
+    if (!d.recentUsage.length) {
+      html += `<div class="adm-empty">No activity yet</div>`;
+    } else {
+      html += `<div class="adm-table-scroll"><table class="adm-table"><thead><tr><th>User</th><th>Project</th><th>Op</th><th>Cost</th></tr></thead><tbody>`;
+      for (const u of d.recentUsage) {
+        html += `<tr><td>${esc(u.username)}</td><td>${esc(u.project)}</td><td>${u.operation}</td><td>${admFmtMoney(u.cost)}</td></tr>`;
+      }
+      html += `</tbody></table></div>`;
+    }
+    el.innerHTML = html;
+  } catch (err) { el.innerHTML = `<div class="adm-empty">Failed to load: ${esc(err.message)}</div>`; }
+}
+
+async function loadAdmUsers(el) {
+  try {
+    const users = await admApi('/users');
+    if (!users.length) { el.innerHTML = '<div class="adm-empty">No users yet</div>'; return; }
+    let html = `<div class="tm-table-wrap">`;
+    for (const u of users) {
+      html += `<div class="adm-row" data-user-id="${u.id}">
+        <div class="adm-row-main">
+          <div class="adm-row-title">${esc(u.username || u.firstName || 'User ' + u.id)}</div>
+          <div class="adm-row-sub">${u.projectCount} app${u.projectCount !== 1 ? 's' : ''} · Joined ${admFmtDate(u.createdAt)}</div>
+        </div>
+        <div class="adm-row-right"><div class="adm-row-value">${admFmtMoney(u.balance)}</div></div>
+        <div class="adm-row-chevron">›</div>
+      </div>`;
+    }
+    html += `</div>`;
+    el.innerHTML = html;
+    el.querySelectorAll('[data-user-id]').forEach(row => {
+      row.addEventListener('click', () => openAdmUserDetail(row.dataset.userId));
+    });
+  } catch (err) { el.innerHTML = `<div class="adm-empty">Failed to load users: ${esc(String(err))}</div>`; }
+}
+
+async function openAdmUserDetail(userId) {
+  showView('admin-user');
+  const nameEl = document.getElementById('adm-user-name');
+  const subEl = document.getElementById('adm-user-sub');
+  const contentEl = document.getElementById('adm-user-content');
+  nameEl.textContent = 'Loading...';
+  subEl.textContent = '';
+  contentEl.innerHTML = '<div class="loading-spinner"></div>';
+
+  try {
+    const u = await admApi('/users/' + userId);
+    nameEl.textContent = u.username || u.firstName || 'User ' + u.id;
+    subEl.textContent = 'Telegram ID: ' + u.telegramId;
+
+    let html = `<div class="adm-info-grid">
+      <div class="adm-info-card"><div class="lbl">Balance</div><div class="val" id="adm-bal-val">${admFmtMoney(u.balance)}</div></div>
+      <div class="adm-info-card"><div class="lbl">Total Spent</div><div class="val">${admFmtMoney(u.totalSpent)}</div></div>
+      <div class="adm-info-card"><div class="lbl">Projects</div><div class="val">${u.projects.length}</div></div>
+      <div class="adm-info-card"><div class="lbl">Slots</div><div class="val">${u.appSlots}</div></div>
+    </div>`;
+
+    if (u.referredBy) {
+      html += `<div class="adm-section-title">Referred By</div>
+        <div style="padding:0 16px;font-size:13px;color:rgba(255,255,255,0.6);margin-bottom:8px;">${u.referredBy}</div>`;
+    }
+
+    html += `<div class="adm-section-title">Balance Management</div>
+      <div class="adm-inline-form">
+        <select id="adm-bal-action"><option value="set">Set to</option><option value="add">Add</option></select>
+        <input type="number" id="adm-bal-amount" placeholder="Amount" step="0.01" style="width:100px">
+        <button class="adm-btn adm-btn-primary" id="adm-bal-btn">Apply</button>
+      </div>`;
+
+    if (u.projects.length) {
+      html += `<div class="adm-section-title">Projects</div><div class="tm-table-wrap" style="">`;
+      for (const p of u.projects) {
+        html += `<div class="adm-row" data-proj-id="${p.id}">
+          <div class="adm-row-main">
+            <div class="adm-row-title">${esc(p.name)}</div>
+            <div class="adm-row-sub">${p.botUsername ? '@' + esc(p.botUsername) : 'No bot'}</div>
+          </div>
+          <div class="adm-row-right">${admBadge(p.status)}</div>
+          <div class="adm-row-chevron">›</div>
+        </div>`;
+      }
+      html += `</div>`;
+    }
+
+    if (u.payments.length) {
+      html += `<div class="adm-section-title">Payments</div>
+        <div class="adm-table-scroll"><table class="adm-table"><thead><tr><th>Amount</th><th>Status</th><th>Date</th></tr></thead><tbody>`;
+      for (const p of u.payments) {
+        html += `<tr><td>${admFmtMoney(p.amount)}</td><td>${admBadge(p.status)}</td><td>${admFmtDate(p.createdAt)}</td></tr>`;
+      }
+      html += `</tbody></table></div>`;
+    }
+
+    if (u.usageLogs.length) {
+      html += `<div class="adm-section-title">Usage History</div>
+        <div class="adm-table-scroll"><table class="adm-table"><thead><tr><th>Project</th><th>Op</th><th>Cost</th><th>Date</th></tr></thead><tbody>`;
+      for (const l of u.usageLogs) {
+        html += `<tr><td>${esc(l.project)}</td><td>${l.operation}</td><td>${admFmtMoney(l.cost)}</td><td>${admFmtDate(l.createdAt)}</td></tr>`;
+      }
+      html += `</tbody></table></div>`;
+    }
+
+    contentEl.innerHTML = html;
+
+    document.getElementById('adm-bal-btn')?.addEventListener('click', async () => {
+      const action = document.getElementById('adm-bal-action').value;
+      const amount = document.getElementById('adm-bal-amount').value;
+      try {
+        const d = await admApi('/users/' + userId + '/balance', { method: 'POST', body: { action, amount } });
+        document.getElementById('adm-bal-val').textContent = admFmtMoney(d.balance);
+        document.getElementById('adm-bal-amount').value = '';
+        showToast('Balance updated to ' + admFmtMoney(d.balance), 'success');
+      } catch { showToast('Failed to update balance', 'error'); }
+    });
+
+    contentEl.querySelectorAll('[data-proj-id]').forEach(row => {
+      row.addEventListener('click', () => {
+        openAdmProjectChat(row.dataset.projId);
+      });
+    });
+  } catch (err) { contentEl.innerHTML = `<div class="adm-empty">Failed to load user: ${esc(String(err))}</div>`; }
+}
+
+async function openAdmProjectChat(projectId) {
+  try {
+    const p = await admApi('/projects/' + projectId);
+    currentProject = {
+      id: p.id, name: p.name, status: p.status, description: p.description,
+      botUsername: p.botUsername, totalCostUsd: p.totalCost, userId: p.userId,
+    };
+    admChatReturn = true;
+    openChat(projectId);
+  } catch { showToast('Failed to open project', 'error'); }
+}
+
+async function loadAdmProjects(el) {
+  try {
+    const allProjects = await admApi('/projects');
+    if (!allProjects.length) { el.innerHTML = '<div class="adm-empty">No projects yet</div>'; return; }
+    let html = `<div class="tm-table-wrap">`;
+    for (const p of allProjects) {
+      const avatarSrc = avatarSvgDataUri(p.name);
+      const username = p.botUsername ? `@${esc(p.botUsername)}` : '';
+      const statusDot = p.status === 'building'
+        ? '<span class="loader" style="width:16px;height:16px;margin-right:8px"></span>'
+        : `<span class="tm-status-dot ${p.status}"></span>`;
+      html += `<a class="tm-row tm-row-link" data-proj-id="${p.id}" style="align-items:center;">` +
+        `<img class="tm-row-pic tm-row-pic-user" src="${avatarSrc}">` +
+        `<div style="flex:1;min-width:0;overflow:hidden;"><div class="tm-row-value" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.name)}</div>` +
+        `<div class="tm-row-description" style="white-space:nowrap;">${username}</div></div>` +
+        `<div class="tm-row-status">${statusDot}${statusLabel(p.status)}</div>` +
+        `</a>`;
+    }
+    html += `</div>`;
+    el.innerHTML = html;
+    el.querySelectorAll('[data-proj-id]').forEach(row => {
+      row.addEventListener('click', () => openAdmProjectChat(row.dataset.projId));
+    });
+  } catch (err) { el.innerHTML = `<div class="adm-empty">Failed to load projects: ${esc(String(err))}</div>`; }
+}
+
+async function loadAdmVouchers(el) {
+  try {
+    const vouchers = await admApi('/vouchers');
+    let html = `<div class="adm-section-title">Create Voucher</div>
+      <div class="adm-inline-form">
+        <input type="number" id="adm-v-amount" placeholder="Amount ($)" step="0.01" style="width:100px">
+        <input type="number" id="adm-v-max" placeholder="Max uses" value="1" step="1" style="width:80px">
+        <button class="adm-btn adm-btn-primary" id="adm-v-create">Create</button>
+      </div>
+      <div class="adm-section-title">All Vouchers</div>`;
+
+    if (!vouchers.length) {
+      html += `<div class="adm-empty">No vouchers yet</div>`;
+    } else {
+      html += `<div class="tm-table-wrap">`;
+      for (const v of vouchers) {
+        html += `<div class="adm-row" style="cursor:default;">
+          <div class="adm-row-main">
+            <div class="adm-row-title"><span class="adm-voucher-code">${esc(v.code)}</span> · ${admFmtMoney(v.amountUsd)}</div>
+            <div class="adm-row-sub">${v.usedCount}/${v.maxUses} used · ${admFmtDate(v.createdAt)}</div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            ${admBadge(v.active ? 'active' : 'inactive')}
+            <button class="adm-btn" data-toggle-v="${v.id}" data-active="${v.active}" style="font-size:11px;padding:4px 10px;">${v.active ? 'Off' : 'On'}</button>
+            <button class="adm-btn adm-btn-danger" data-del-v="${v.id}" style="font-size:11px;padding:4px 10px;">Del</button>
+            <button class="adm-btn" data-copy-link="${esc(v.link)}" style="font-size:11px;padding:4px 10px;">Link</button>
+          </div>
+        </div>`;
+      }
+      html += `</div>`;
+    }
+    el.innerHTML = html;
+
+    document.getElementById('adm-v-create')?.addEventListener('click', async () => {
+      const amount = document.getElementById('adm-v-amount').value;
+      const maxUses = document.getElementById('adm-v-max').value || '1';
+      if (!amount || parseFloat(amount) <= 0) { showToast('Enter a valid amount', 'error'); return; }
+      try {
+        const v = await admApi('/vouchers', { method: 'POST', body: { amount, maxUses } });
+        showToast('Voucher created: ' + v.code, 'success');
+        loadAdmTab('vouchers');
+      } catch { showToast('Failed to create', 'error'); }
+    });
+
+    el.querySelectorAll('[data-toggle-v]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const newActive = btn.dataset.active === 'true' ? false : true;
+        await admApi('/vouchers/' + btn.dataset.toggleV, { method: 'PUT', body: { active: newActive } });
+        showToast(newActive ? 'Voucher enabled' : 'Voucher disabled', 'success');
+        loadAdmTab('vouchers');
+      });
+    });
+
+    el.querySelectorAll('[data-del-v]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await admApi('/vouchers/' + btn.dataset.delV, { method: 'DELETE' });
+          showToast('Voucher deleted', 'success');
+          loadAdmTab('vouchers');
+        } catch { showToast('Failed to delete', 'error'); }
+      });
+    });
+
+    el.querySelectorAll('[data-copy-link]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        navigator.clipboard.writeText(btn.dataset.copyLink).then(() => showToast('Link copied', 'success')).catch(() => showToast('Copy failed', 'error'));
+      });
+    });
+  } catch (err) { el.innerHTML = `<div class="adm-empty">Failed to load vouchers: ${esc(String(err))}</div>`; }
+}
+
+async function loadAdmConfig(el) {
+  try {
+    const cfg = await admApi('/config');
+    el.innerHTML = `
+      <div>
+        <div class="adm-config-row">
+          <div><div class="adm-config-label">Markup Multiplier</div><div class="adm-config-desc">Applied on top of base rates</div></div>
+          <input type="number" id="adm-cfg-markup" value="${cfg.markupMultiplier}" step="0.5">
+        </div>
+        <div class="adm-config-row">
+          <div><div class="adm-config-label">Min Top-up</div><div class="adm-config-desc">Minimum USD amount</div></div>
+          <input type="number" id="adm-cfg-topup" value="${cfg.minTopup}" step="1">
+        </div>
+        <div class="adm-config-row">
+          <div><div class="adm-config-label">Max Agent Iterations</div><div class="adm-config-desc">Tool calls per run</div></div>
+          <input type="number" id="adm-cfg-iter" value="${cfg.maxAgentIterations}" step="1">
+        </div>
+        <div style="margin-top:16px;">
+          <button class="adm-btn adm-btn-primary" id="adm-cfg-save" style="width:100%;">Save Configuration</button>
+        </div>
+      </div>`;
+    document.getElementById('adm-cfg-save').addEventListener('click', async () => {
+      const data = {
+        markupMultiplier: parseFloat(document.getElementById('adm-cfg-markup').value),
+        minTopup: parseFloat(document.getElementById('adm-cfg-topup').value),
+        maxAgentIterations: parseInt(document.getElementById('adm-cfg-iter').value),
+      };
+      try {
+        await admApi('/config', { method: 'POST', body: data });
+        showToast('Configuration saved', 'success');
+      } catch { showToast('Failed to save', 'error'); }
+    });
+  } catch (err) { el.innerHTML = `<div class="adm-empty">Failed to load config</div>`; }
+}
+
 function showView(view) {
   currentView = view;
   document.body.classList.toggle('scroll-lock', view === 'chat');
@@ -2215,6 +2559,8 @@ function showView(view) {
   document.getElementById('view-referral').classList.toggle('hidden', view !== 'referral');
   document.getElementById('view-help').classList.toggle('hidden', view !== 'help');
   document.getElementById('view-release-notes').classList.toggle('hidden', view !== 'release-notes');
+  document.getElementById('view-admin').classList.toggle('hidden', view !== 'admin');
+  document.getElementById('view-admin-user').classList.toggle('hidden', view !== 'admin-user');
   document.getElementById('view-versions').classList.toggle('hidden', view !== 'versions');
   document.getElementById('view-version-detail').classList.toggle('hidden', view !== 'version-detail');
   document.getElementById('view-quality').classList.toggle('hidden', view !== 'quality');
@@ -2551,6 +2897,12 @@ function init() {
         showView('list');
       } else if (currentView === 'release-notes') {
         showView('list');
+      } else if (currentView === 'admin-user') {
+        showView('admin');
+        loadAdmTab('users');
+        document.querySelectorAll('.adm-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'users'));
+      } else if (currentView === 'admin') {
+        showView('list');
       } else if (currentView === 'detail') {
         showView('chat');
       } else if (currentView === 'chat') {
@@ -2558,7 +2910,12 @@ function init() {
         chatProjectId = null;
         currentProject = null;
         currentToken = null;
-        showView('list');
+        if (admChatReturn) {
+          admChatReturn = false;
+          openAdmin();
+        } else {
+          showView('list');
+        }
       } else {
         showView('list');
         currentProject = null;
@@ -2627,7 +2984,9 @@ function init() {
   document.getElementById('btn-referral-page').addEventListener('click', () => openReferral());
   document.getElementById('btn-release-notes-page').addEventListener('click', () => openReleaseNotes());
   document.getElementById('btn-help-page').addEventListener('click', () => openHelp());
+  document.getElementById('btn-admin')?.addEventListener('click', () => openAdmin());
 
+  checkAdmin();
   initTokenActions();
   initChatInput();
   initAutosize();

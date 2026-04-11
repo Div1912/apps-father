@@ -8,7 +8,7 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <link href="bootstrap.min.css" rel="stylesheet">
   <link href="bootstrap-extra.css" rel="stylesheet">
-  <link href="styles.css?r=64" rel="stylesheet">
+  <link href="styles.css?r=66" rel="stylesheet">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
@@ -37,6 +37,9 @@
           right: -32px;
           color: #10b9ec;
       ">beta</span></h1>
+          <button id="btn-admin" class="admin-fab hidden" aria-label="Admin Panel">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15v2"/><path d="M12 3a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2h-2V7a4 4 0 0 0-4-4z"/></svg>
+          </button>
           <p class="tm-main-intro-text" style="max-width:312px;">
             Create and manage your Telegram Mini Apps with AI. Build, update, and publish — all from here.
           </p>
@@ -250,6 +253,41 @@
             </a>
           </div>
         </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ═══ ADMIN PANEL VIEW ═══ -->
+  <div id="view-admin" class="view-container hidden">
+    <div>
+      <main class="tm-main">
+        <section class="tm-main-intro">
+          <h1 class="tm-main-intro-header">Admin Panel</h1>
+          <p class="tm-main-intro-text" style="max-width:312px;">Platform management</p>
+        </section>
+        <section class="tm-section" style="padding-top:0;">
+          <div class="adm-tabs" id="adm-tabs">
+            <button class="adm-tab active" data-tab="dashboard">Dashboard</button>
+            <button class="adm-tab" data-tab="users">Users</button>
+            <button class="adm-tab" data-tab="projects">Projects</button>
+            <button class="adm-tab" data-tab="vouchers">Vouchers</button>
+            <button class="adm-tab" data-tab="config">Config</button>
+          </div>
+        </section>
+        <section class="tm-section" style="padding-top:0;" id="adm-content"></section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ═══ ADMIN USER DETAIL VIEW ═══ -->
+  <div id="view-admin-user" class="view-container hidden">
+    <div>
+      <main class="tm-main">
+        <section class="tm-main-intro">
+          <h1 class="tm-main-intro-header" id="adm-user-name"></h1>
+          <p class="tm-main-intro-text" style="max-width:312px;" id="adm-user-sub"></p>
+        </section>
+        <div id="adm-user-content"></div>
       </main>
     </div>
   </div>
@@ -533,6 +571,6 @@
     </div>
   </div>
 
-  <script src="app.js?r=58"></script>
+  <script src="app.js?r=66"></script>
 </body>
 </html>

@@ -26,6 +26,9 @@ import { processingProjects } from "../bot/processing";
 import { commitService } from "../services/commit.service";
 import { publishReport } from "../services/telegraph.service";
 import { claudeService } from "../services/claude.service";
+import { prisma } from "../db";
+import { runtimeConfig } from "../services/runtime-config.service";
+import { Decimal } from "@prisma/client/runtime/library";
 
 let expressApp: express.Application | null = null;
 let httpServer: http.Server | null = null;
@@ -220,7 +223,7 @@ export function createWebServer() {
 
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const project = await projectService.getProject(req.params.projectId);
-      if (!project || project.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
       if (!project.botTokenEncrypted) { res.status(404).json({ error: "No token" }); return; }
 
       const token = decryptToken(project.botTokenEncrypted);
@@ -253,7 +256,7 @@ export function createWebServer() {
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const project = await projectService.getProject(req.params.projectId);
-      if (!project || project.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
       const before = req.query.before ? parseInt(req.query.before as string) : undefined;
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
@@ -271,7 +274,7 @@ export function createWebServer() {
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const project = await projectService.getProject(req.params.projectId);
-      if (!project || project.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
       const { text, type: msgType, attachmentIds } = req.body;
       if (!text || !text.trim()) { res.status(400).json({ error: "Empty message" }); return; }
@@ -526,7 +529,7 @@ export function createWebServer() {
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const project = await projectService.getProject(req.params.projectId);
-      if (!project || project.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
       const suggestions = await agentService.getSuggestions(req.params.projectId);
       res.json({ suggestions });
@@ -543,7 +546,7 @@ export function createWebServer() {
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId;
       const project = await projectService.getProject(projectId);
-      if (!project || project.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
       const { description } = req.body;
       if (!description?.trim()) { res.status(400).json({ error: "Description required" }); return; }
@@ -586,7 +589,7 @@ export function createWebServer() {
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId;
       const project = await projectService.getProject(projectId);
-      if (!project || project.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
       if (!project.plan) { res.status(400).json({ error: "No plan to approve" }); return; }
       if (processingProjects.has(projectId)) { res.status(409).json({ error: "Already processing" }); return; }
@@ -732,7 +735,7 @@ export function createWebServer() {
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId;
       const project = await projectService.getProject(projectId);
-      if (!project || project.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
       const { feedback } = req.body;
       if (!feedback?.trim()) { res.status(400).json({ error: "Feedback required" }); return; }
@@ -772,7 +775,7 @@ export function createWebServer() {
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const project = await projectService.getProject(req.params.projectId);
-      if (!project || project.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
       const { answer } = req.body;
       const resolved = resolveAnswer(req.params.projectId, answer || "");
@@ -791,7 +794,7 @@ export function createWebServer() {
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const project = await projectService.getProject(req.params.projectId as string);
-      if (!project || project.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
       const commits = await commitService.getCommits(req.params.projectId as string);
       const allMessages = chatService.getHistory(req.params.projectId as string, undefined, 10000);
@@ -822,7 +825,7 @@ export function createWebServer() {
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
-      if (!project || project.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
       const { version } = req.body;
       if (version !== undefined && version !== null) {
@@ -843,7 +846,7 @@ export function createWebServer() {
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
-      if (!project || project.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
       const { version } = req.body;
       if (typeof version !== "number") { res.status(400).json({ error: "Version required" }); return; }
@@ -862,7 +865,7 @@ export function createWebServer() {
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
-      if (!project || project.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
       const ver = parseInt(req.params.version as string, 10);
       const logPath = commitService.getLogPath(projectId, ver);
@@ -884,7 +887,7 @@ export function createWebServer() {
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
-      if (!project || project.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
       const { tier } = req.body;
       if (typeof tier !== "number" || tier < 1 || tier > 4) { res.status(400).json({ error: "Invalid tier (1-4)" }); return; }
@@ -908,7 +911,7 @@ export function createWebServer() {
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
-      if (!project || project.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
       const { username } = req.body;
       if (!username) { res.status(400).json({ error: "Username is required" }); return; }
@@ -937,7 +940,7 @@ export function createWebServer() {
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
-      if (!project || project.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
       try {
         const { botRunnerService } = await import("../services/bot-runner.service");
@@ -968,7 +971,7 @@ export function createWebServer() {
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
-      if (!project || project.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
       if (!project.botTokenEncrypted) { res.status(400).json({ error: "No bot token" }); return; }
 
       const token = decryptToken(project.botTokenEncrypted);
@@ -1057,7 +1060,7 @@ export function createWebServer() {
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
-      if (!project || project.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
       const { getProjectFeatures, PAID_FEATURES } = await import("../services/features.service");
       const owned = await getProjectFeatures(projectId);
@@ -1085,7 +1088,7 @@ export function createWebServer() {
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
-      if (!project || project.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
       const { featureId } = req.body;
       if (!featureId) { res.status(400).json({ error: "featureId required" }); return; }
@@ -1109,7 +1112,7 @@ export function createWebServer() {
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
-      if (!project || project.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
       const files = (req as any).files as Express.Multer.File[];
       if (!files || files.length === 0) { res.status(400).json({ error: "No files" }); return; }
@@ -1127,6 +1130,254 @@ export function createWebServer() {
       console.error("[Chat API] Upload error:", err);
       res.status(500).json({ error: "Internal server error" });
     }
+  });
+
+  // ── Mini App Admin API ──
+
+  const ADMIN_TELEGRAM_IDS = [8784357184, 8796958409];
+  function isAdminTelegramId(telegramId: number | undefined): boolean {
+    return !!telegramId && ADMIN_TELEGRAM_IDS.includes(telegramId);
+  }
+  const PROJECTS_DIR = path.join(process.cwd(), "projects");
+
+  function adminGuard(req: express.Request, res: express.Response): { telegramId: number } | null {
+    const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+    if (!auth.valid || !auth.telegramId) { res.status(401).json({ error: "Unauthorized" }); return null; }
+    if (!ADMIN_TELEGRAM_IDS.includes(auth.telegramId)) { res.status(403).json({ error: "Forbidden" }); return null; }
+    return { telegramId: auth.telegramId };
+  }
+
+  app.get("/telegram-mini-app/api/admin/check", (req, res) => {
+    const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+    if (!auth.valid || !auth.telegramId) { res.json({ isAdmin: false }); return; }
+    res.json({ isAdmin: ADMIN_TELEGRAM_IDS.includes(auth.telegramId) });
+  });
+
+  app.get("/telegram-mini-app/api/admin/stats", async (req, res) => {
+    if (!adminGuard(req, res)) return;
+    try {
+      const [userCount, projectCount, totalSpent, totalTopups] = await Promise.all([
+        prisma.user.count(),
+        prisma.project.count(),
+        prisma.usageLog.aggregate({ _sum: { costUsd: true } }),
+        prisma.payment.aggregate({ _sum: { amountUsd: true }, where: { status: "confirmed" } }),
+      ]);
+      const recentUsage = await prisma.usageLog.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 20,
+        include: { user: { select: { username: true, firstName: true } }, project: { select: { name: true } } },
+      });
+      res.json({
+        userCount, projectCount,
+        totalSpent: Number(totalSpent._sum.costUsd || 0),
+        totalTopups: Number(totalTopups._sum.amountUsd || 0),
+        recentUsage: recentUsage.map(u => ({
+          id: u.id,
+          username: u.user.username || u.user.firstName || `User ${u.userId}`,
+          project: u.project?.name || "-",
+          operation: u.operation,
+          inputTokens: u.inputTokens,
+          outputTokens: u.outputTokens,
+          cost: Number(u.costUsd),
+          createdAt: u.createdAt,
+        })),
+      });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/telegram-mini-app/api/admin/users", async (req, res) => {
+    if (!adminGuard(req, res)) return;
+    try {
+      const users = await prisma.user.findMany({
+        include: { _count: { select: { projects: true } } },
+        orderBy: { createdAt: "desc" },
+      });
+      res.json(users.map(u => ({
+        id: u.id,
+        telegramId: u.telegramId.toString(),
+        username: u.username,
+        firstName: u.firstName,
+        balance: Number(u.balance),
+        appSlots: u.appSlots,
+        referredBy: u.referredBy?.toString() || null,
+        projectCount: u._count.projects,
+        createdAt: u.createdAt,
+      })));
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/telegram-mini-app/api/admin/users/:id", async (req, res) => {
+    if (!adminGuard(req, res)) return;
+    try {
+      const userId = parseInt(req.params.id);
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        include: {
+          projects: { orderBy: { updatedAt: "desc" } },
+          payments: { orderBy: { createdAt: "desc" }, take: 20 },
+          usageLogs: { orderBy: { createdAt: "desc" }, take: 30, include: { project: { select: { name: true } } } },
+        },
+      });
+      if (!user) { res.status(404).json({ error: "User not found" }); return; }
+      const totalSpent = await prisma.usageLog.aggregate({ _sum: { costUsd: true }, where: { userId } });
+      res.json({
+        id: user.id,
+        telegramId: user.telegramId.toString(),
+        username: user.username,
+        firstName: user.firstName,
+        balance: Number(user.balance),
+        appSlots: user.appSlots,
+        referredBy: user.referredBy?.toString() || null,
+        totalSpent: Number(totalSpent._sum.costUsd || 0),
+        createdAt: user.createdAt,
+        projects: user.projects.map(p => ({
+          id: p.id, name: p.name, status: p.status, botUsername: p.botUsername,
+          totalCost: Number(p.totalCostUsd), createdAt: p.createdAt, updatedAt: p.updatedAt,
+        })),
+        payments: user.payments.map(p => ({
+          id: p.id, amount: Number(p.amountUsd), status: p.status,
+          createdAt: p.createdAt, confirmedAt: p.confirmedAt,
+        })),
+        usageLogs: user.usageLogs.map(l => ({
+          id: l.id, project: l.project?.name || "-", operation: l.operation,
+          inputTokens: l.inputTokens, outputTokens: l.outputTokens,
+          cost: Number(l.costUsd), createdAt: l.createdAt,
+        })),
+      });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/telegram-mini-app/api/admin/users/:id/balance", async (req, res) => {
+    if (!adminGuard(req, res)) return;
+    try {
+      const userId = parseInt(req.params.id);
+      const { action, amount } = req.body;
+      const val = parseFloat(amount);
+      if (isNaN(val) || val < 0) { res.status(400).json({ error: "Invalid amount" }); return; }
+      let updated;
+      if (action === "set") {
+        updated = await prisma.user.update({ where: { id: userId }, data: { balance: new Decimal(val.toFixed(4)) } });
+      } else if (action === "add") {
+        updated = await prisma.user.update({ where: { id: userId }, data: { balance: { increment: new Decimal(val.toFixed(4)) } } });
+      } else { res.status(400).json({ error: "action must be 'set' or 'add'" }); return; }
+      res.json({ balance: Number(updated.balance) });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/telegram-mini-app/api/admin/projects", async (req, res) => {
+    if (!adminGuard(req, res)) return;
+    try {
+      const projects = await prisma.project.findMany({
+        include: { user: { select: { username: true, firstName: true } } },
+        orderBy: { updatedAt: "desc" },
+      });
+      res.json(projects.map(p => ({
+        id: p.id, name: p.name, status: p.status,
+        owner: p.user.username || p.user.firstName || `User ${p.userId}`,
+        userId: p.userId, botUsername: p.botUsername,
+        totalCost: Number(p.totalCostUsd),
+        description: p.description?.substring(0, 120),
+        createdAt: p.createdAt, updatedAt: p.updatedAt,
+      })));
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/telegram-mini-app/api/admin/projects/:id", async (req, res) => {
+    if (!adminGuard(req, res)) return;
+    try {
+      const project = await prisma.project.findUnique({
+        where: { id: req.params.id },
+        include: { user: { select: { username: true, firstName: true, id: true } } },
+      });
+      if (!project) { res.status(404).json({ error: "Not found" }); return; }
+      res.json({
+        id: project.id, name: project.name, status: project.status,
+        description: project.description, plan: project.plan,
+        projectSummary: project.projectSummary, botUsername: project.botUsername,
+        totalCost: Number(project.totalCostUsd),
+        owner: project.user.username || project.user.firstName || `User ${project.user.id}`,
+        userId: project.userId, createdAt: project.createdAt, updatedAt: project.updatedAt,
+      });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/telegram-mini-app/api/admin/projects/:id/status", async (req, res) => {
+    if (!adminGuard(req, res)) return;
+    try {
+      await prisma.project.update({ where: { id: req.params.id }, data: { status: req.body.status } });
+      res.json({ ok: true });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/telegram-mini-app/api/admin/config", (req, res) => {
+    if (!adminGuard(req, res)) return;
+    res.json(runtimeConfig.get());
+  });
+
+  app.post("/telegram-mini-app/api/admin/config", (req, res) => {
+    if (!adminGuard(req, res)) return;
+    try {
+      runtimeConfig.update(req.body);
+      res.json(runtimeConfig.get());
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/telegram-mini-app/api/admin/vouchers", async (req, res) => {
+    if (!adminGuard(req, res)) return;
+    try {
+      const vouchers = await prisma.voucher.findMany({
+        orderBy: { createdAt: "desc" },
+        include: { _count: { select: { redemptions: true } } },
+      });
+      res.json(vouchers.map(v => ({
+        id: v.id, code: v.code, amountUsd: Number(v.amountUsd),
+        maxUses: v.maxUses, usedCount: v.usedCount, active: v.active,
+        createdAt: v.createdAt,
+        link: `https://t.me/apps_father_bot?start=${v.code}`,
+      })));
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/telegram-mini-app/api/admin/vouchers", async (req, res) => {
+    if (!adminGuard(req, res)) return;
+    try {
+      const val = parseFloat(req.body.amount);
+      const uses = parseInt(req.body.maxUses, 10);
+      if (isNaN(val) || val <= 0) { res.status(400).json({ error: "Invalid amount" }); return; }
+      if (isNaN(uses) || uses <= 0) { res.status(400).json({ error: "Invalid maxUses" }); return; }
+      const code = "v_" + crypto.randomBytes(4).toString("hex");
+      const voucher = await prisma.voucher.create({
+        data: { code, amountUsd: new Decimal(val.toFixed(4)), maxUses: uses },
+      });
+      res.json({
+        id: voucher.id, code: voucher.code, amountUsd: Number(voucher.amountUsd),
+        maxUses: voucher.maxUses, usedCount: 0, active: true, createdAt: voucher.createdAt,
+        link: `https://t.me/apps_father_bot?start=${voucher.code}`,
+      });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.put("/telegram-mini-app/api/admin/vouchers/:id", async (req, res) => {
+    if (!adminGuard(req, res)) return;
+    try {
+      const id = parseInt(req.params.id, 10);
+      const data: any = {};
+      if (req.body.amount !== undefined) data.amountUsd = new Decimal(parseFloat(req.body.amount).toFixed(4));
+      if (req.body.maxUses !== undefined) data.maxUses = parseInt(req.body.maxUses, 10);
+      if (req.body.active !== undefined) data.active = Boolean(req.body.active);
+      const voucher = await prisma.voucher.update({ where: { id }, data });
+      res.json({ id: voucher.id, amountUsd: Number(voucher.amountUsd), maxUses: voucher.maxUses, active: voucher.active });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.delete("/telegram-mini-app/api/admin/vouchers/:id", async (req, res) => {
+    if (!adminGuard(req, res)) return;
+    try {
+      const id = parseInt(req.params.id, 10);
+      await prisma.voucherRedemption.deleteMany({ where: { voucherId: id } });
+      await prisma.voucher.delete({ where: { id } });
+      res.json({ ok: true });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   app.use("/telegram-mini-app", express.static(path.join(__dirname, "..", "..", "mini_app")));
