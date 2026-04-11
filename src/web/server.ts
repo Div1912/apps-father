@@ -204,6 +204,10 @@ export function createWebServer() {
         const stars = Math.floor(rawStars / 10) * 10;
         const result = await billingService.createStarsInvoice(user.id, amountUsd, stars);
         invoiceUrl = result.invoiceUrl;
+      } else if (method === "ton") {
+        const result = await billingService.createTonPayment(user.id, amountUsd);
+        res.json({ ok: true, ton: true, paymentId: result.paymentId, walletAddress: result.walletAddress, amountNano: result.amountNano });
+        return;
       } else {
         const result = await billingService.createTopUp(user.id, amountUsd);
         invoiceUrl = result.invoiceUrl;
@@ -213,6 +217,20 @@ export function createWebServer() {
     } catch (err: any) {
       console.error("[MiniApp API] Topup error:", err);
       res.status(400).json({ error: err.message || "Failed to create payment" });
+    }
+  });
+
+  app.post("/telegram-mini-app/api/ton-verify", async (req, res) => {
+    try {
+      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { paymentId } = req.body;
+      if (!paymentId) { res.status(400).json({ error: "Missing paymentId" }); return; }
+      const result = await billingService.verifyTonPayment(parseInt(paymentId));
+      res.json(result);
+    } catch (err: any) {
+      console.error("[MiniApp API] TON verify error:", err);
+      res.json({ confirmed: false });
     }
   });
 
@@ -1156,19 +1174,22 @@ export function createWebServer() {
   app.get("/telegram-mini-app/api/admin/stats", async (req, res) => {
     if (!adminGuard(req, res)) return;
     try {
-      const [userCount, projectCount, totalSpent, totalTopups] = await Promise.all([
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      const [userCount, projectCount, totalSpent, totalTopups, payingUsers, activeUsers7d] = await Promise.all([
         prisma.user.count(),
         prisma.project.count(),
         prisma.usageLog.aggregate({ _sum: { costUsd: true } }),
         prisma.payment.aggregate({ _sum: { amountUsd: true }, where: { status: "confirmed" } }),
+        prisma.payment.groupBy({ by: ["userId"], where: { status: "confirmed" } }).then(g => g.length),
+        prisma.usageLog.groupBy({ by: ["userId"], where: { createdAt: { gte: sevenDaysAgo } } }).then(g => g.length),
       ]);
       const recentUsage = await prisma.usageLog.findMany({
         orderBy: { createdAt: "desc" },
-        take: 20,
+        take: 50,
         include: { user: { select: { username: true, firstName: true } }, project: { select: { name: true } } },
       });
       res.json({
-        userCount, projectCount,
+        userCount, projectCount, payingUsers, activeUsers7d,
         totalSpent: Number(totalSpent._sum.costUsd || 0),
         totalTopups: Number(totalTopups._sum.amountUsd || 0),
         recentUsage: recentUsage.map(u => ({

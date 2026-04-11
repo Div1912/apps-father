@@ -2,12 +2,12 @@ import { InputFile } from "grammy";
 import path from "path";
 import { BotContext } from "../../types";
 import { projectService } from "../../services/project.service";
-import { billingService } from "../../services/billing.service";
-import { welcomeKeyboard, replyKeyboard } from "../keyboards";
+import { createAppKeyboard } from "../keyboards";
 import { EMOJI, ce } from "../emoji";
 import { prisma } from "../../db";
 import { Decimal } from "@prisma/client/runtime/library";
 import { Lang, t } from "../i18n";
+import { config } from "../../config";
 
 function getWelcomeCaption(lang: Lang): string {
   return (
@@ -43,7 +43,6 @@ export async function startCommand(ctx: BotContext) {
 
   const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name, referredBy);
 
-  // Load language from DB into session
   ctx.session.language = (user.language as Lang) || "en";
   const lang = ctx.session.language;
 
@@ -83,31 +82,35 @@ export async function startCommand(ctx: BotContext) {
     }
   }
 
-  const balance = await billingService.getUserBalance(user.id);
-
   const imagePath = path.join(__dirname, "..", "..", "..", "assets", "bot_images", "welcome.png");
+  const miniAppUrl = `${config.baseUrl}/telegram-mini-app`;
+
+  const chatId = ctx.chat!.id;
+
+  try {
+    const hideMsg = await ctx.reply("⠀", { reply_markup: { remove_keyboard: true } });
+    setTimeout(() => ctx.api.deleteMessage(chatId, hideMsg.message_id).catch(() => {}), 1500);
+  } catch {}
 
   try {
     await ctx.replyWithPhoto(new InputFile(imagePath), {
       caption: getWelcomeCaption(lang),
       parse_mode: "HTML",
-      reply_markup: replyKeyboard(lang),
+      reply_markup: {
+        inline_keyboard: [[createAppKeyboard(lang, miniAppUrl)]],
+      },
     });
   } catch (err) {
     console.error("[Start] Failed to send photo, sending text:", err);
     await ctx.reply(getWelcomeCaption(lang), {
       parse_mode: "HTML",
-      reply_markup: replyKeyboard(lang),
+      reply_markup: {
+        inline_keyboard: [[createAppKeyboard(lang, miniAppUrl)]],
+      },
     });
   }
 
-  await ctx.reply(getNavWelcomeText(balance, lang), {
-    parse_mode: "HTML",
-    reply_markup: welcomeKeyboard(lang),
-  });
-
   if (voucherMsg) {
-    const chatId = ctx.chat!.id;
     setTimeout(async () => {
       try {
         await ctx.api.sendMessage(chatId, voucherMsg!, { parse_mode: "HTML" });

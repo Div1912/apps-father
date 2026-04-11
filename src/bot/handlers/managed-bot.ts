@@ -111,14 +111,6 @@ async function handleManagedBotAsync(bot: Bot<BotContext>, creator: any, newBot:
     );
 
     await botRunnerService.startBot(project.id, botToken, newBot.username || "");
-
-    await sendToUser(
-      `${ce(EMOJI.indicator_success)} <b>${t(lang, "managed_bot_created", { name: projectName })}</b>\n` +
-      `<blockquote>Bot: @${newBot.username}</blockquote>\n\n` +
-      `${ce(EMOJI.idea)} <b>${t(lang, "managed_bot_describe")}</b>\n` +
-      t(lang, "managed_bot_describe_body"),
-      { parse_mode: "HTML" }
-    );
   } catch (err) {
     console.error("[ManagedBot] Error handling managed bot:", err);
     await sendToUser(

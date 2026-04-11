@@ -8,10 +8,12 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <link href="bootstrap.min.css" rel="stylesheet">
   <link href="bootstrap-extra.css" rel="stylesheet">
-  <link href="styles.css?r=66" rel="stylesheet">
+  <link href="styles.css?r=71" rel="stylesheet">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+  <script src="https://unpkg.com/@tonconnect/ui@2.0.9/dist/tonconnect-ui.min.js"></script>
+  <script src="https://unpkg.com/tonweb@0.0.66/dist/tonweb.js"></script>
 </head>
 <body class="emoji_image">
 
@@ -40,7 +42,7 @@
           <button id="btn-admin" class="admin-fab hidden" aria-label="Admin Panel">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15v2"/><path d="M12 3a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2h-2V7a4 4 0 0 0-4-4z"/></svg>
           </button>
-          <p class="tm-main-intro-text" style="max-width:312px;">
+          <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="app_subtitle">
             Create and manage your Telegram Mini Apps with AI. Build, update, and publish — all from here.
           </p>
         </section>
@@ -50,8 +52,8 @@
             <a class="tm-row tm-row-link" id="btn-topup">
               <span class="tm-icon af-icon-wallet"></span>
               <div>
-                <div class="tm-row-value">Balance: <b id="balance-amount">...</b></div>
-                <div class="tm-row-description">Tap to top up</div>
+                <div class="tm-row-value"><span data-i18n="balance_prefix">Balance:</span> <b id="balance-amount">...</b></div>
+                <div class="tm-row-description" data-i18n="balance_tap">Tap to top up</div>
               </div>
             </a>
           </div>
@@ -59,7 +61,7 @@
 
         <form class="tm-section tm-main-search-form" onsubmit="return false">
           <div class="icon-before icon-search tm-field tm-search-field">
-            <input type="search" class="form-control tm-input tm-search-input" id="search-input" placeholder="Search" autocomplete="off" spellcheck="false">
+            <input type="search" class="form-control tm-input tm-search-input" id="search-input" placeholder="Search" data-i18n="search" autocomplete="off" spellcheck="false">
             <span class="icon-before icon-search-clear tm-search-clear" id="search-clear"></span>
           </div>
         </form>
@@ -74,7 +76,7 @@
           <div class="tm-table-wrap hidden" id="no-results">
             <div class="tm-row-container tm-row-results-empty">
               <img src="no-result.png" width="56" height="56">
-              <b>No Results</b>
+              <b data-i18n="no_results">No Results</b>
               <div id="no-results-text"></div>
             </div>
           </div>
@@ -84,25 +86,29 @@
           <div class="tm-table-wrap">
             <a class="tm-row tm-row-link" id="btn-referral-page">
               <span class="tm-icon af-icon-referral"></span>
-              <span>Referral Program</span>
+              <span data-i18n="referral_program">Referral Program</span>
             </a>
             <a class="tm-row tm-row-link" id="btn-release-notes-page">
               <span class="tm-icon af-icon-release-notes"></span>
-              <span>Release Notes</span>
+              <span data-i18n="release_notes">Release Notes</span>
             </a>
             <a class="tm-row tm-row-link" id="btn-help-page">
               <span class="tm-icon af-icon-help"></span>
-              <span>Help</span>
+              <span data-i18n="help">Help</span>
+            </a>
+            <a class="tm-row tm-row-link" id="btn-language-page">
+              <span class="tm-icon af-icon-language"></span>
+              <span data-i18n="language">Language</span>
             </a>
           </div>
         </section>
 
         <section class="tm-section">
           <div class="tm-section-header">
-            <h2 class="tm-section-header-text">Samples</h2>
+            <h2 class="tm-section-header-text" data-i18n="samples">Samples</h2>
           </div>
           <div class="tm-table-wrap" id="samples-list"></div>
-          <p class="help-text">Apps built with Apps Father</p>
+          <p class="help-text" data-i18n="samples_desc">Apps built with Apps Father</p>
         </section>
       </main>
     </div>
@@ -114,13 +120,13 @@
       <main class="tm-main">
         <section class="tm-main-intro" style="padding-bottom: 0;">
           <div class="topup-animation" id="topup-anim"></div>
-          <h1 class="tm-main-intro-header">Top Up Balance</h1>
+          <h1 class="tm-main-intro-header" data-i18n="topup_title">Top Up Balance</h1>
           <p class="tm-main-intro-text" style="max-width:312px;" id="topup-balance-text"></p>
         </section>
 
         <section class="tm-section">
           <div class="tm-section-header" style="position:relative;">
-            <h2 class="tm-section-header-text">Amount</h2>
+            <h2 class="tm-section-header-text" data-i18n="topup_amount">Amount</h2>
             <div class="topup-amounts" id="topup-amounts">
               <button class="topup-amount-btn" data-amount="10">$10</button>
               <button class="topup-amount-btn" data-amount="25">$25</button>
@@ -132,28 +138,47 @@
             <span class="topup-input-prefix">$</span>
             <input type="number" class="topup-input" id="topup-input" value="50" min="10" step="1">
           </div>
-          <p class="help-text">Minimum top-up is $10</p>
+          <p class="help-text" data-i18n="topup_min">Minimum top-up is $10</p>
         </section>
 
         <section class="tm-section">
           <div class="tm-section-header">
-            <h2 class="tm-section-header-text">Payment Method</h2>
+            <h2 class="tm-section-header-text" data-i18n="topup_method">Payment Method</h2>
           </div>
           <div class="tm-table-wrap" id="topup-methods">
-            <a class="tm-row tm-row-link topup-method active" data-method="cryptobot">
-              <img class="tm-row-pic tm-row-pic-user" src="assets/icons/cryptobot.png" style="width:30px;height:30px;border-radius:50%;">
-              <span>Crypto Bot</span>
-            </a>
-            <a class="tm-row tm-row-link topup-method" data-method="crypto">
-              <img class="tm-row-pic tm-row-pic-user" src="assets/icons/usdt.png" style="width:30px;height:30px;border-radius:50%;">
-              <span>Other Crypto</span>
+            <a class="tm-row tm-row-link topup-method active" data-method="ton">
+              <img class="tm-row-pic tm-row-pic-user" src="assets/icons/toncoin.png" style="width:30px;height:30px;border-radius:50%;">
+              <span data-i18n="topup_ton">TON</span>
             </a>
             <a class="tm-row tm-row-link topup-method" data-method="stars">
               <img class="tm-row-pic tm-row-pic-user" src="assets/icons/stars.png?r=1" style="width:30px;height:30px;border-radius:50%;">
-              <span>Telegram Stars</span>
+              <span data-i18n="topup_stars">Telegram Stars</span>
+            </a>
+            <a class="tm-row tm-row-link topup-method" data-method="cryptobot">
+              <img class="tm-row-pic tm-row-pic-user" src="assets/icons/cryptobot.png" style="width:30px;height:30px;border-radius:50%;">
+              <span data-i18n="topup_crypto_bot">Crypto Bot</span>
+            </a>
+            <a class="tm-row tm-row-link topup-method" data-method="crypto">
+              <img class="tm-row-pic tm-row-pic-user" src="assets/icons/usdt.png" style="width:30px;height:30px;border-radius:50%;">
+              <span data-i18n="topup_other_crypto">Other Crypto</span>
             </a>
           </div>
-          <p class="help-text">Your balance will be credited after payment confirmation.</p>
+          <div class="ton-wallet-panel hidden" id="ton-wallet-panel">
+            <div class="ton-wallet-connected" id="ton-wallet-connected" style="display:none;">
+              <div class="ton-wallet-info">
+                <div class="ton-wallet-label">Connected wallet</div>
+                <div class="ton-wallet-address" id="ton-wallet-address"></div>
+              </div>
+              <button class="ton-wallet-disconnect" id="ton-wallet-disconnect">Disconnect</button>
+            </div>
+            <div class="ton-wallet-not-connected" id="ton-wallet-not-connected" style="display:none;">
+              <div class="ton-wallet-info">
+                <div class="ton-wallet-label">No wallet connected</div>
+              </div>
+              <button class="ton-wallet-connect-btn" id="ton-wallet-connect-btn">Connect</button>
+            </div>
+          </div>
+          <p class="help-text" data-i18n="topup_note">Your balance will be credited after payment confirmation.</p>
         </section>
       </main>
     </div>
@@ -165,7 +190,7 @@
       <main class="tm-main">
         <section class="tm-main-intro">
           <div class="slots-animation" id="slots-anim"></div>
-          <h1 class="tm-main-intro-header">App Slots Full</h1>
+          <h1 class="tm-main-intro-header" data-i18n="slots_full_title">App Slots Full</h1>
           <p class="tm-main-intro-text" style="max-width:312px;text-align:center;" id="slots-full-info"></p>
         </section>
         <section class="tm-section">
@@ -181,29 +206,29 @@
       <main class="tm-main">
         <section class="tm-main-intro">
           <div class="referral-animation" id="referral-anim"></div>
-          <h1 class="tm-main-intro-header">Referral Program</h1>
-          <p class="tm-main-intro-text" style="max-width:312px;">Invite friends and earn from every top-up they make</p>
+          <h1 class="tm-main-intro-header" data-i18n="referral_title">Referral Program</h1>
+          <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="referral_subtitle">Invite friends and earn from every top-up they make</p>
         </section>
         <section class="tm-section">
           <div class="tm-section-header">
-            <h2 class="tm-section-header-text">How it works</h2>
+            <h2 class="tm-section-header-text" data-i18n="referral_how">How it works</h2>
           </div>
           <div class="tm-info-block" id="referral-content"></div>
         </section>
         <section class="tm-section tm-menu-items">
           <div class="tm-section-header">
-            <h2 class="tm-section-header-text">Your Link</h2>
+            <h2 class="tm-section-header-text" data-i18n="referral_your_link">Your Link</h2>
           </div>
           <div class="tm-api-token-wrap">
             <div class="tm-api-token" style="overflow:hidden">
               <div id="referral-link-text"></div>
             </div>
             <div class="tm-api-token-actions" style="gap:8px">
-              <div class="tm-active-button ref-btn-copy" id="btn-copy-referral">Copy</div>
-              <div class="tm-active-button" id="btn-share-referral">Share</div>
+              <div class="tm-active-button ref-btn-copy" id="btn-copy-referral" data-i18n="referral_copy">Copy</div>
+              <div class="tm-active-button" id="btn-share-referral" data-i18n="referral_share">Share</div>
             </div>
           </div>
-          <p class="help-text">Share this link with friends. You'll earn 15% from their top-ups.</p>
+          <p class="help-text" data-i18n="referral_help">Share this link with friends. You'll earn 15% from their top-ups.</p>
         </section>
       </main>
     </div>
@@ -214,8 +239,8 @@
     <div>
       <main class="tm-main">
         <section class="tm-main-intro">
-          <h1 class="tm-main-intro-header">Release Notes</h1>
-          <p class="tm-main-intro-text" style="max-width:312px;">What's new in Apps Father</p>
+          <h1 class="tm-main-intro-header" data-i18n="rn_title">Release Notes</h1>
+          <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="rn_subtitle">What's new in Apps Father</p>
         </section>
         <div id="release-notes-content"></div>
       </main>
@@ -227,8 +252,8 @@
     <div>
       <main class="tm-main">
         <section class="tm-main-intro">
-          <h1 class="tm-main-intro-header">Apps Father Help</h1>
-          <p class="tm-main-intro-text" style="max-width:312px;">Everything you need to know about building apps</p>
+          <h1 class="tm-main-intro-header" data-i18n="help_title">Apps Father Help</h1>
+          <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="help_subtitle">Everything you need to know about building apps</p>
         </section>
         <section class="tm-section">
           <div class="tm-info-block" id="help-content"></div>
@@ -237,19 +262,50 @@
           <div class="tm-table-wrap">
             <a class="tm-row tm-row-link" id="btn-help-guide">
               <span class="tm-icon af-icon-guide"></span>
-              <span>Guide</span>
+              <span data-i18n="help_guide">Guide</span>
             </a>
             <a class="tm-row tm-row-link" id="btn-help-promo">
               <span class="tm-icon af-icon-promo"></span>
-              <span>Promo</span>
+              <span data-i18n="help_promo">Promo</span>
             </a>
             <a class="tm-row tm-row-link" id="btn-help-channel">
               <span class="tm-icon af-icon-channel"></span>
-              <span>Channel</span>
+              <span data-i18n="help_channel">Channel</span>
             </a>
             <a class="tm-row tm-row-link" id="btn-help-community">
               <span class="tm-icon af-icon-community"></span>
-              <span>Community</span>
+              <span data-i18n="help_community">Community</span>
+            </a>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ═══ LANGUAGE VIEW ═══ -->
+  <div id="view-language" class="view-container hidden">
+    <div>
+      <main class="tm-main">
+        <section class="tm-main-intro">
+          <h1 class="tm-main-intro-header" data-i18n="lang_title">Language</h1>
+          <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="lang_subtitle">Select your preferred language</p>
+        </section>
+        <section class="tm-section tm-menu-items">
+          <div class="tm-table-wrap" id="lang-list">
+            <a class="tm-row tm-row-link lang-option" data-lang="en">
+              <span class="tm-row-pic tm-row-pic-user" style="width:30px;height:30px;border-radius:50%;font-size:20px;display:flex;align-items:center;justify-content:center;">🇬🇧</span>
+              <span>English</span>
+              <span class="lang-check hidden">✓</span>
+            </a>
+            <a class="tm-row tm-row-link lang-option" data-lang="ru">
+              <span class="tm-row-pic tm-row-pic-user" style="width:30px;height:30px;border-radius:50%;font-size:20px;display:flex;align-items:center;justify-content:center;">🇷🇺</span>
+              <span>Русский</span>
+              <span class="lang-check hidden">✓</span>
+            </a>
+            <a class="tm-row tm-row-link lang-option" data-lang="ua">
+              <span class="tm-row-pic tm-row-pic-user" style="width:30px;height:30px;border-radius:50%;font-size:20px;display:flex;align-items:center;justify-content:center;">🇺🇦</span>
+              <span>Українська</span>
+              <span class="lang-check hidden">✓</span>
             </a>
           </div>
         </section>
@@ -265,16 +321,90 @@
           <h1 class="tm-main-intro-header">Admin Panel</h1>
           <p class="tm-main-intro-text" style="max-width:312px;">Platform management</p>
         </section>
-        <section class="tm-section" style="padding-top:0;">
-          <div class="adm-tabs" id="adm-tabs">
-            <button class="adm-tab active" data-tab="dashboard">Dashboard</button>
-            <button class="adm-tab" data-tab="users">Users</button>
-            <button class="adm-tab" data-tab="projects">Projects</button>
-            <button class="adm-tab" data-tab="vouchers">Vouchers</button>
-            <button class="adm-tab" data-tab="config">Config</button>
-          </div>
+        <section class="tm-section tm-menu-items">
+          <div class="tm-table-wrap" id="adm-menu-rows"></div>
         </section>
-        <section class="tm-section" style="padding-top:0;" id="adm-content"></section>
+        <section class="tm-section">
+          <p class="help-text" style="text-align:center;" id="adm-info"></p>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ═══ ADMIN DASHBOARD ═══ -->
+  <div id="view-adm-dashboard" class="view-container hidden">
+    <div>
+      <main class="tm-main">
+        <section class="tm-main-intro">
+          <h1 class="tm-main-intro-header">Dashboard</h1>
+          <p class="tm-main-intro-text" style="max-width:312px;">Platform statistics</p>
+        </section>
+        <section class="tm-section" style="padding-top:0;" id="adm-dashboard-content"></section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ═══ ADMIN ACTIVITIES ═══ -->
+  <div id="view-adm-activities" class="view-container hidden">
+    <div>
+      <main class="tm-main">
+        <section class="tm-main-intro">
+          <h1 class="tm-main-intro-header">Activities</h1>
+          <p class="tm-main-intro-text" style="max-width:312px;">Recent user actions</p>
+        </section>
+        <section class="tm-section" style="padding-top:0;" id="adm-activities-content"></section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ═══ ADMIN USERS ═══ -->
+  <div id="view-adm-users" class="view-container hidden">
+    <div>
+      <main class="tm-main">
+        <section class="tm-main-intro">
+          <h1 class="tm-main-intro-header">Users</h1>
+          <p class="tm-main-intro-text" style="max-width:312px;">All registered users</p>
+        </section>
+        <section class="tm-section" style="padding-top:0;" id="adm-users-content"></section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ═══ ADMIN APPS ═══ -->
+  <div id="view-adm-apps" class="view-container hidden">
+    <div>
+      <main class="tm-main">
+        <section class="tm-main-intro">
+          <h1 class="tm-main-intro-header">Apps</h1>
+          <p class="tm-main-intro-text" style="max-width:312px;">All projects</p>
+        </section>
+        <section class="tm-section" style="padding-top:0;" id="adm-apps-content"></section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ═══ ADMIN VOUCHERS ═══ -->
+  <div id="view-adm-vouchers" class="view-container hidden">
+    <div>
+      <main class="tm-main">
+        <section class="tm-main-intro">
+          <h1 class="tm-main-intro-header">Vouchers</h1>
+          <p class="tm-main-intro-text" style="max-width:312px;">Manage voucher codes</p>
+        </section>
+        <section class="tm-section" style="padding-top:0;" id="adm-vouchers-content"></section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ═══ ADMIN CONFIG ═══ -->
+  <div id="view-adm-config" class="view-container hidden">
+    <div>
+      <main class="tm-main">
+        <section class="tm-main-intro">
+          <h1 class="tm-main-intro-header">Configuration</h1>
+          <p class="tm-main-intro-text" style="max-width:312px;">Runtime settings</p>
+        </section>
+        <section class="tm-section" style="padding-top:0;" id="adm-config-content"></section>
       </main>
     </div>
   </div>
@@ -287,7 +417,7 @@
           <h1 class="tm-main-intro-header" id="adm-user-name"></h1>
           <p class="tm-main-intro-text" style="max-width:312px;" id="adm-user-sub"></p>
         </section>
-        <div id="adm-user-content"></div>
+        <div id="adm-user-content" class="tm-section" style="padding-top:0;"></div>
       </main>
     </div>
   </div>
@@ -312,7 +442,7 @@
               </div>
             </div>
             <div class="tm-api-token-actions">
-              <div class="tm-active-button" id="btn-copy-token">Copy</div>
+              <div class="tm-active-button" id="btn-copy-token" data-i18n="detail_copy">Copy</div>
               <div class="tm-revoke-button" id="btn-revoke-token" style="display: none;">Revoke</div>
             </div>
           </div>
@@ -321,35 +451,35 @@
 
         <section class="tm-section tm-menu-items" id="section-app">
           <div class="tm-section-header">
-            <h2 class="tm-section-header-text">App</h2>
+            <h2 class="tm-section-header-text" data-i18n="detail_app">App</h2>
           </div>
           <div class="tm-table-wrap" id="detail-app-rows"></div>
         </section>
 
         <section class="tm-section tm-menu-items" id="section-dev">
           <div class="tm-section-header">
-            <h2 class="tm-section-header-text">Development</h2>
+            <h2 class="tm-section-header-text" data-i18n="detail_dev">Development</h2>
           </div>
           <div class="tm-table-wrap" id="detail-dev-rows"></div>
         </section>
 
         <section class="tm-section tm-menu-items" id="section-monetization" style="display:none">
           <div class="tm-section-header">
-            <h2 class="tm-section-header-text">Monetization</h2>
+            <h2 class="tm-section-header-text" data-i18n="detail_monetization">Monetization</h2>
           </div>
           <div class="tm-table-wrap" id="detail-money-rows"></div>
         </section>
 
         <section class="tm-section tm-menu-items" id="section-settings">
           <div class="tm-section-header">
-            <h2 class="tm-section-header-text">Settings</h2>
+            <h2 class="tm-section-header-text" data-i18n="detail_settings">Settings</h2>
           </div>
           <div class="tm-table-wrap" id="detail-settings-rows"></div>
         </section>
 
         <section class="tm-section tm-menu-items">
           <div class="tm-section-header">
-            <h2 class="tm-section-header-text">Actions</h2>
+            <h2 class="tm-section-header-text" data-i18n="detail_actions">Actions</h2>
           </div>
           <div class="tm-table-wrap" id="detail-actions-rows"></div>
         </section>
@@ -366,7 +496,7 @@
     <div>
       <main class="tm-main">
         <section class="tm-main-intro">
-          <h1 class="tm-main-intro-header">Versions</h1>
+          <h1 class="tm-main-intro-header" data-i18n="versions_title">Versions</h1>
           <p class="tm-main-intro-text" id="versions-subtitle"></p>
         </section>
         <section class="tm-section tm-menu-items">
@@ -387,7 +517,7 @@
 
         <section class="tm-section">
           <div class="tm-section-header">
-            <h2 class="tm-section-header-text">Changelog</h2>
+            <h2 class="tm-section-header-text" data-i18n="version_changelog">Changelog</h2>
           </div>
           <div class="version-changelog-card" id="version-detail-changelog"></div>
         </section>
@@ -404,7 +534,7 @@
     <div>
       <main class="tm-main">
         <section class="tm-main-intro">
-          <h1 class="tm-main-intro-header">Premium Features</h1>
+          <h1 class="tm-main-intro-header" data-i18n="features_title">Premium Features</h1>
           <p class="tm-main-intro-text" id="features-balance" style="max-width:312px;"></p>
         </section>
         <section class="tm-section">
@@ -421,8 +551,8 @@
     <div>
       <main class="tm-main">
         <section class="tm-main-intro">
-          <h1 class="tm-main-intro-header">AI Quality Tier</h1>
-          <p class="tm-main-intro-text" style="max-width:312px;">Select the AI model quality for building and updating your app</p>
+          <h1 class="tm-main-intro-header" data-i18n="quality_title">AI Quality Tier</h1>
+          <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="quality_subtitle">Select the AI model quality for building and updating your app</p>
         </section>
         <section class="tm-section tm-menu-items">
           <div class="tm-table-wrap" id="quality-tier-list"></div>
@@ -438,32 +568,32 @@
         <section class="tm-main-intro">
           <div id="edit-avatar" class="tm-main-intro-picture tr-bot-avatar"></div>
           <div class="set-photo-button" id="btn-set-photo">
-            <span>Set New Photo</span>
+            <span data-i18n="edit_set_photo">Set New Photo</span>
           </div>
           <input type="file" id="edit-photo-input" accept="image/*" style="display:none">
         </section>
 
         <form class="tm-section" id="edit-info-form" onsubmit="return false">
           <div class="tm-section-header">
-            <h2 class="tm-section-header-text">Info</h2>
+            <h2 class="tm-section-header-text" data-i18n="edit_info">Info</h2>
           </div>
           <div class="tm-field" style="border-radius: 6px 6px 0 0; margin-bottom: 1px;">
-            <input type="text" class="form-control tm-input" id="edit-name" placeholder="Bot Name" autocomplete="off" spellcheck="false">
+            <input type="text" class="form-control tm-input" id="edit-name" placeholder="Bot Name" data-i18n="edit_bot_name" autocomplete="off" spellcheck="false">
           </div>
           <div class="tm-field" style="border-radius: 0 0 6px 6px;">
-            <textarea rows="1" maxlength="120" class="form-control tm-input tm-autosize" id="edit-about" placeholder="About (Optional)" autocomplete="off"></textarea>
+            <textarea rows="1" maxlength="120" class="form-control tm-input tm-autosize" id="edit-about" placeholder="About (Optional)" data-i18n="edit_about" autocomplete="off"></textarea>
           </div>
-          <p class="help-text">People will see this text on the bot's profile page.</p>
+          <p class="help-text" data-i18n="edit_about_help">People will see this text on the bot's profile page.</p>
         </form>
 
         <form class="tm-section" onsubmit="return false">
           <div class="tm-section-header">
-            <h2 class="tm-section-header-text">Welcome message</h2>
+            <h2 class="tm-section-header-text" data-i18n="edit_welcome">Welcome message</h2>
           </div>
           <div class="tm-field" style="border-radius: 6px;">
-            <textarea maxlength="512" rows="1" class="form-control tm-input tm-autosize" id="edit-description" placeholder="Enter bot description"></textarea>
+            <textarea maxlength="512" rows="1" class="form-control tm-input tm-autosize" id="edit-description" placeholder="Enter bot description" data-i18n="edit_welcome_placeholder"></textarea>
           </div>
-          <p class="help-text">People will see the description when they open a chat with your bot, in a block titled 'What can this bot do?'.</p>
+          <p class="help-text" data-i18n="edit_welcome_help">People will see the description when they open a chat with your bot, in a block titled 'What can this bot do?'.</p>
         </form>
       </main>
     </div>
@@ -474,17 +604,17 @@
     <div>
       <main class="tm-main">
         <section class="tm-main-intro">
-          <h1 class="tm-main-intro-header">Transfer Ownership</h1>
-          <p class="tm-main-intro-text" style="max-width:312px;">Transfer this app to another Apps Father user. The new owner must have an account in Apps Father.</p>
+          <h1 class="tm-main-intro-header" data-i18n="transfer_title">Transfer Ownership</h1>
+          <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="transfer_desc">Transfer this app to another Apps Father user. The new owner must have an account in Apps Father.</p>
         </section>
         <form class="tm-section" id="transfer-form" onsubmit="return false">
           <div class="tm-section-header">
-            <h2 class="tm-section-header-text">New Owner</h2>
+            <h2 class="tm-section-header-text" data-i18n="transfer_new_owner">New Owner</h2>
           </div>
           <div class="tm-field" style="border-radius: 6px;">
             <input type="text" class="form-control tm-input" id="transfer-username" placeholder="@username" autocomplete="off" spellcheck="false">
           </div>
-          <p class="help-text">Enter the Telegram username of the new owner. They must be registered in Apps Father.</p>
+          <p class="help-text" data-i18n="transfer_help">Enter the Telegram username of the new owner. They must be registered in Apps Father.</p>
         </form>
       </main>
     </div>
@@ -495,12 +625,12 @@
     <div>
       <main class="tm-main">
         <section class="tm-main-intro">
-          <h1 class="tm-main-intro-header">Delete App</h1>
-          <p class="tm-main-intro-text" style="max-width:312px;">This action is permanent and cannot be undone. All versions, data, and the bot configuration will be removed.</p>
+          <h1 class="tm-main-intro-header" data-i18n="delete_title">Delete App</h1>
+          <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="delete_desc">This action is permanent and cannot be undone. All versions, data, and the bot configuration will be removed.</p>
         </section>
         <form class="tm-section" id="delete-form" onsubmit="return false">
           <div class="tm-section-header">
-            <h2 class="tm-section-header-text">Confirm Deletion</h2>
+            <h2 class="tm-section-header-text" data-i18n="delete_confirm">Confirm Deletion</h2>
           </div>
           <div class="tm-field" style="border-radius: 6px;">
             <input type="text" class="form-control tm-input" id="delete-confirm-input" placeholder="" autocomplete="off" spellcheck="false">
@@ -528,18 +658,18 @@
     <div class="chat-header-dropdown hidden" id="chat-header-dropdown">
       <a class="chat-header-dropdown-item" id="btn-dropdown-test">
         <span class="tm-icon af-icon-test"></span>
-        <span>Run & Test</span>
+        <span data-i18n="chat_run_test">Run & Test</span>
       </a>
       <a class="chat-header-dropdown-item" id="btn-dropdown-open-bot">
         <span class="tm-icon af-icon-open"></span>
-        <span>Open Bot</span>
+        <span data-i18n="chat_open_bot">Open Bot</span>
       </a>
     </div>
 
     <div class="chat-messages" id="chat-messages">
       <div class="chat-welcome hidden" id="chat-welcome">
         <div class="chat-welcome-animation" id="chat-welcome-anim"></div>
-        <div class="chat-welcome-text">Tell me your idea and I'll generate a plan for you</div>
+        <div class="chat-welcome-text" id="chat-welcome-text" data-i18n="chat_welcome_plan">Tell me your idea and I'll generate a plan for you</div>
       </div>
       <div class="loading-spinner" id="chat-skeleton"></div>
       <div class="chat-messages-inner" id="chat-messages-inner"></div>
@@ -553,17 +683,17 @@
     <div class="chat-input-area" id="chat-input-area">
       <div class="chat-attachments-preview hidden" id="chat-attachments-preview"></div>
       <div class="chat-mode-pills" id="chat-mode-pills">
-        <button class="chat-pill active" data-mode="update"><svg class="pill-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>Update</button>
-        <button class="chat-pill" data-mode="question"><svg class="pill-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3M12 17h.01"/></svg>Ask</button>
-        <button class="chat-pill" data-mode="suggestion"><svg class="pill-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 22h4M12 2a7 7 0 015 11.9V17H7v-3.1A7 7 0 0112 2z"/></svg>Suggestions</button>
+        <button class="chat-pill active" data-mode="update"><svg class="pill-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg><span data-i18n="chat_update">Update</span></button>
+        <button class="chat-pill" data-mode="question"><svg class="pill-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3M12 17h.01"/></svg><span data-i18n="chat_ask">Ask</span></button>
+        <button class="chat-pill" data-mode="suggestion"><svg class="pill-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 22h4M12 2a7 7 0 015 11.9V17H7v-3.1A7 7 0 0112 2z"/></svg><span data-i18n="chat_suggestions">Suggestions</span></button>
       </div>
-      <button class="btn-get-suggestions hidden" id="btn-get-suggestions">Get Suggestions For Next Update</button>
+      <button class="btn-get-suggestions hidden" id="btn-get-suggestions" data-i18n="chat_get_suggestions">Get Suggestions For Next Update</button>
       <div class="chat-input-bar">
         <input type="file" id="file-input" multiple accept="image/*,.pdf,.json,.csv,.txt,.js,.ts,.html,.css" style="display:none">
         <button type="button" class="chat-btn-attach" id="btn-attach" title="Attach files">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         </button>
-        <textarea class="chat-input" id="chat-input" placeholder="Describe your update..." rows="1"></textarea>
+        <textarea class="chat-input" id="chat-input" placeholder="Describe your update..." data-i18n="chat_placeholder" rows="1"></textarea>
         <button class="chat-btn-send" id="btn-send" title="Send">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3.478 2.404a.75.75 0 00-.926.941l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.404z"/></svg>
         </button>
@@ -571,6 +701,7 @@
     </div>
   </div>
 
-  <script src="app.js?r=66"></script>
+  <script src="i18n.js?r=3"></script>
+  <script src="app.js?r=71"></script>
 </body>
 </html>

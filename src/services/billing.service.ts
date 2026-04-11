@@ -247,6 +247,148 @@ export class BillingService {
     return { paymentId: payment.id, invoiceUrl: data.result };
   }
 
+  static readonly TON_WALLET = "UQCoZZWxI49ZtHqiUfc5v23OzY0lGG31LNEvyxu_NDlE4wNV";
+
+  async createTonPayment(
+    userId: number,
+    amountUsd: number
+  ): Promise<{ paymentId: number; walletAddress: string; amountNano: string }> {
+    if (amountUsd < runtimeConfig.getMinTopup()) {
+      throw new Error(`Minimum top-up is $${runtimeConfig.getMinTopup()}`);
+    }
+
+    const tonPrice = await this.getTonUsdPrice();
+    const tonAmount = amountUsd / tonPrice;
+    const amountNano = BigInt(Math.ceil(tonAmount * 1e9)).toString();
+
+    const payment = await prisma.payment.create({
+      data: {
+        userId,
+        amountUsd: new Decimal(amountUsd.toFixed(4)),
+        status: "pending",
+      },
+    });
+
+    console.log(`[Billing] TON payment #${payment.id} created: $${amountUsd} = ${tonAmount.toFixed(4)} TON (${amountNano} nanoTON)`);
+
+    return {
+      paymentId: payment.id,
+      walletAddress: BillingService.TON_WALLET,
+      amountNano,
+    };
+  }
+
+  async getTonUsdPrice(): Promise<number> {
+    try {
+      const res = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd");
+      const data: any = await res.json();
+      const price = data?.["the-open-network"]?.usd;
+      if (price && price > 0) return price;
+    } catch (err) {
+      console.error("[Billing] CoinGecko price fetch failed:", err);
+    }
+    return 3.5;
+  }
+
+  async verifyTonPayment(paymentId: number): Promise<{ confirmed: boolean; balance?: number }> {
+    const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
+    if (!payment) throw new Error("Payment not found");
+    if (payment.status === "confirmed") {
+      const user = await prisma.user.findUnique({ where: { id: payment.userId } });
+      return { confirmed: true, balance: Number(user?.balance || 0) };
+    }
+
+    const tonPrice = await this.getTonUsdPrice();
+    const tonAmount = Number(payment.amountUsd) / tonPrice;
+    const expectedNano = BigInt(Math.ceil(tonAmount * 1e9));
+
+    try {
+      const url = `https://toncenter.com/api/v3/transactions?account=${encodeURIComponent(BillingService.TON_WALLET)}&limit=30&sort=desc`;
+      const apiRes = await fetch(url, { headers: { "Content-Type": "application/json" } });
+      if (!apiRes.ok) {
+        console.error("[Billing] TonCenter error:", apiRes.status);
+        return { confirmed: false };
+      }
+
+      const data: any = await apiRes.json();
+      const txList = data.transactions || [];
+      const paymentIdStr = String(paymentId);
+
+      for (const tx of txList) {
+        const inMsg = tx.in_msg;
+        if (!inMsg) continue;
+
+        let msgBody = "";
+        try {
+          if (inMsg.message_content?.decoded?.type === "text_comment") {
+            msgBody = inMsg.message_content.decoded.comment || "";
+          } else if (inMsg.message_content?.body) {
+            msgBody = inMsg.message_content.body;
+          }
+        } catch {}
+
+        if (!msgBody.includes(paymentIdStr)) continue;
+
+        const receivedNano = BigInt(inMsg.value || "0");
+        if (receivedNano < expectedNano) continue;
+
+        await this.confirmTonPayment(payment.id);
+        const user = await prisma.user.findUnique({ where: { id: payment.userId } });
+        return { confirmed: true, balance: Number(user?.balance || 0) };
+      }
+    } catch (err) {
+      console.error("[Billing] TON verify error:", err);
+    }
+
+    return { confirmed: false };
+  }
+
+  private async confirmTonPayment(paymentId: number): Promise<void> {
+    const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
+    if (!payment || payment.status === "confirmed") return;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.payment.update({
+        where: { id: paymentId },
+        data: { status: "confirmed", confirmedAt: new Date() },
+      });
+      await tx.user.update({
+        where: { id: payment.userId },
+        data: { balance: { increment: payment.amountUsd } },
+      });
+    });
+
+    console.log(`[Billing] TON payment #${paymentId} confirmed — $${payment.amountUsd} credited to user ${payment.userId}`);
+
+    const user = await prisma.user.findUnique({ where: { id: payment.userId } });
+    if (user) {
+      const newBalance = Number(user.balance);
+      const text =
+        `<b><tg-emoji emoji-id="5377544696656599429">✅</tg-emoji> Payment confirmed!</b>\n\n` +
+        `<b><tg-emoji emoji-id="5377851954321989517">💲</tg-emoji> +$${Number(payment.amountUsd).toFixed(2)}</b> has been added to your balance.\n\n` +
+        `<blockquote>New balance: <b>$${newBalance.toFixed(2)}</b></blockquote>`;
+
+      await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: user.telegramId.toString(), text, parse_mode: "HTML" }),
+      }).catch(() => {});
+
+      notifyDeposit(Number(user.telegramId), user.username ?? undefined, Number(payment.amountUsd), newBalance);
+
+      if (user.referredBy) {
+        try {
+          const bonus = Number(payment.amountUsd) * 0.15;
+          const referrer = await prisma.user.update({
+            where: { telegramId: user.referredBy },
+            data: { balance: { increment: new Decimal(bonus.toFixed(4)) } },
+          });
+          notifyReferralBonus(Number(referrer.telegramId), referrer.username ?? undefined, bonus, Number(referrer.balance));
+        } catch {}
+      }
+    }
+  }
+
   async handleStarsPayment(paymentId: number): Promise<void> {
     const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
     if (!payment || payment.status === "confirmed") return;

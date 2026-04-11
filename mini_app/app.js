@@ -95,11 +95,7 @@ function avatarSvgDataUri(name) {
 }
 
 function statusLabel(status) {
-  const map = {
-    released: 'Released', deployed: 'Ready', building: 'Building',
-    planning: 'Planning', created: 'Created', error: 'Error',
-  };
-  return map[status] || status;
+  return t('status_' + status) || status;
 }
 
 function hasFeature(project, feature) {
@@ -172,14 +168,20 @@ function renderAppList(filter) {
   noResults.classList.add('hidden');
   listEl.classList.remove('hidden');
 
-  document.getElementById('apps-header-count').textContent = `My Apps (${slots.used}/${slots.total})`;
+  document.getElementById('apps-header-count').textContent = `${t('my_apps')} (${slots.used}/${slots.total})`;
 
-  let html = `<a class="tm-row tm-row-add" id="btn-create-app"><span class="tm-icon"></span><span>Create New App</span></a>`;
+  let html = `<a class="tm-row tm-row-add" id="btn-create-app"><span class="tm-icon"></span><span>${t('create_new_app')}</span></a>`;
   for (const p of filtered) {
-    const avatarSrc = p.avatarUrl || avatarSvgDataUri(p.name);
     const username = p.botUsername ? `@${p.botUsername}` : '';
+    let avatarHtml;
+    if (p.avatarUrl) {
+      avatarHtml = `<img class="tm-row-pic tm-row-pic-user" src="${p.avatarUrl}">`;
+    } else {
+      const [c1, c2] = getGradient(p.name);
+      avatarHtml = `<div class="tm-row-pic tm-row-pic-user avatar-gradient" style="background:linear-gradient(135deg,${c1},${c2})">${getInitials(p.name)}</div>`;
+    }
     html += `<a class="tm-row tm-row-link" data-id="${p.id}">` +
-      `<img class="tm-row-pic tm-row-pic-user" src="${avatarSrc}">` +
+      avatarHtml +
       `<div><div class="tm-row-value">${esc(p.name)}</div>` +
       `<div class="tm-row-description">${esc(username)}</div></div>` +
       `<div class="tm-row-status">${p.status === 'building' ? '<span class="loader" style="width:16px;height:16px;margin-right:8px"></span>' : '<span class="tm-status-dot ' + p.status + '"></span>'}${statusLabel(p.status)}</div>` +
@@ -261,8 +263,7 @@ function pollForNewApp(prevCount) {
 let slotsAnimInstance = null;
 
 function openSlotsFull() {
-  document.getElementById('slots-full-info').textContent =
-    `You have used all ${slots.total} app slot${slots.total > 1 ? 's' : ''}. Purchase an additional slot to create more apps.`;
+  document.getElementById('slots-full-info').textContent = t('slots_full_title');
   document.getElementById('slots-full-detail').innerHTML =
     `<b>$25</b> per additional slot<br>Current slots: <b>${slots.used}/${slots.total}</b>`;
   loadSlotsTgs();
@@ -298,7 +299,7 @@ async function buySlot() {
       return;
     }
     slots.total = data.newSlots;
-    showToast(`Slot purchased! You now have ${slots.used}/${data.newSlots} slots.`, 'success');
+    showToast(t('toast_slot_purchased'), 'success');
     await loadProjects();
     showView('list');
   } catch (err) {
@@ -310,15 +311,19 @@ async function buySlot() {
 // ── Top Up ──
 
 let topupAmount = 50;
-let topupMethod = 'cryptobot';
+let topupMethod = 'ton';
 let topupAnimInstance = null;
 let topupReturnView = null;
 let userBalance = 0;
+let tonConnectUI = null;
+let tonVerifyInterval = null;
+let tonVerifyAttempts = 0;
+const TON_MAX_VERIFY = 60;
 
 function openTopup(returnTo) {
   topupReturnView = returnTo || currentView || 'list';
   topupAmount = 50;
-  topupMethod = 'cryptobot';
+  topupMethod = 'ton';
 
   document.getElementById('topup-input').value = topupAmount;
   document.querySelectorAll('.topup-amount-btn').forEach(b => {
@@ -328,6 +333,7 @@ function openTopup(returnTo) {
     m.classList.toggle('active', m.dataset.method === topupMethod);
   });
 
+  updateTonWalletPanel();
   loadTopupBalance();
   loadTopupTgs();
   showView('topup');
@@ -368,7 +374,8 @@ function loadTopupTgs() {
 
 function updateTopupButton() {
   if (!tg?.MainButton) return;
-  tg.MainButton.setText(`Pay $${topupAmount} — ${topupMethod === 'cryptobot' ? 'Crypto Bot' : topupMethod === 'stars' ? 'Stars' : 'Crypto'}`);
+  const methodName = topupMethod === 'cryptobot' ? t('topup_crypto_bot') : topupMethod === 'ton' ? 'TON' : topupMethod === 'stars' ? 'Stars' : 'Crypto';
+  tg.MainButton.setText(`Pay $${topupAmount} — ${methodName}`);
   tg.MainButton.color = '#248BDA';
   tg.MainButton.textColor = '#ffffff';
 }
@@ -377,7 +384,7 @@ async function submitTopup() {
   const inputVal = parseInt(document.getElementById('topup-input').value);
   const amount = isNaN(inputVal) ? topupAmount : inputVal;
   if (amount < 10) {
-    showToast('Minimum top-up is $10', 'error');
+    showToast(t('toast_topup_min'), 'error');
     return;
   }
   tg?.MainButton?.showProgress();
@@ -395,6 +402,11 @@ async function submitTopup() {
       return;
     }
 
+    if (data.ton) {
+      await handleTonPayment(data);
+      return;
+    }
+
     if (topupMethod === 'stars') {
       tg?.openInvoice(data.invoiceUrl);
     } else {
@@ -403,6 +415,155 @@ async function submitTopup() {
   } catch (err) {
     tg?.MainButton?.hideProgress();
     showToast('Error: ' + err.message, 'error');
+  }
+}
+
+function initTonConnect() {
+  if (tonConnectUI) return;
+  try {
+    tonConnectUI = new TON_CONNECT_UI.TonConnectUI({
+      manifestUrl: `${location.origin}/telegram-mini-app/tonconnect-manifest.json`,
+    });
+    tonConnectUI.onStatusChange(() => updateTonWalletPanel());
+  } catch (err) {
+    console.error('TonConnect init error:', err);
+  }
+}
+
+function formatTonAddress(raw) {
+  if (!raw) return '';
+  if (raw.length > 16) return raw.slice(0, 8) + '...' + raw.slice(-6);
+  return raw;
+}
+
+function updateTonWalletPanel() {
+  const panel = document.getElementById('ton-wallet-panel');
+  if (!panel) return;
+
+  const show = topupMethod === 'ton';
+  panel.classList.toggle('hidden', !show);
+  if (!show) return;
+
+  initTonConnect();
+
+  const connectedEl = document.getElementById('ton-wallet-connected');
+  const notConnectedEl = document.getElementById('ton-wallet-not-connected');
+  const addrEl = document.getElementById('ton-wallet-address');
+
+  if (tonConnectUI && tonConnectUI.connected && tonConnectUI.account) {
+    const addr = tonConnectUI.account.address || '';
+    connectedEl.style.display = 'flex';
+    notConnectedEl.style.display = 'none';
+    addrEl.textContent = formatTonAddress(addr);
+  } else {
+    connectedEl.style.display = 'none';
+    notConnectedEl.style.display = 'flex';
+  }
+}
+
+async function encodeTextComment(text) {
+  try {
+    const cell = new TonWeb.boc.Cell();
+    cell.bits.writeUint(0, 32);
+    cell.bits.writeString(text);
+    const bocBytes = await cell.toBoc();
+    return TonWeb.utils.bytesToBase64(bocBytes);
+  } catch (e) {
+    console.error('BOC encode error:', e);
+    return undefined;
+  }
+}
+
+async function handleTonPayment(data) {
+  initTonConnect();
+  if (!tonConnectUI) {
+    showToast('TON Connect not available', 'error');
+    return;
+  }
+
+  const connected = tonConnectUI.connected;
+  if (!connected) {
+    try {
+      await tonConnectUI.openModal();
+      await new Promise((resolve, reject) => {
+        const unsub = tonConnectUI.onStatusChange((wallet) => {
+          unsub();
+          if (wallet) resolve(wallet);
+          else reject(new Error('Wallet not connected'));
+        });
+      });
+    } catch {
+      showToast('Wallet connection cancelled', 'info');
+      return;
+    }
+  }
+
+  const { paymentId, walletAddress, amountNano } = data;
+
+  try {
+    const payload = await encodeTextComment(String(paymentId));
+
+    const transaction = {
+      validUntil: Math.floor(Date.now() / 1000) + 600,
+      messages: [{
+        address: walletAddress,
+        amount: amountNano,
+        payload: payload
+      }]
+    };
+
+    showToast('Confirm in your TON wallet...', 'info');
+    await tonConnectUI.sendTransaction(transaction);
+    showToast('Transaction sent! Verifying...', 'success');
+    startTonVerifying(paymentId);
+  } catch (err) {
+    console.error('TON transaction error:', err);
+    showToast('Transaction cancelled or failed', 'error');
+  }
+}
+
+function startTonVerifying(paymentId) {
+  stopTonVerifying();
+  tonVerifyAttempts = 0;
+  tg?.MainButton?.setText('Verifying payment...');
+  tg?.MainButton?.showProgress();
+
+  tonVerifyInterval = setInterval(async () => {
+    tonVerifyAttempts++;
+    try {
+      const res = await fetch(`${API_BASE}/ton-verify`, {
+        method: 'POST',
+        headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paymentId }),
+      });
+      const result = await res.json();
+
+      if (result.confirmed) {
+        stopTonVerifying();
+        tg?.MainButton?.hideProgress();
+        updateTopupButton();
+        showToast('Payment confirmed! Balance updated.', 'success');
+        tg?.HapticFeedback?.notificationOccurred('success');
+        loadTopupBalance();
+        return;
+      }
+    } catch (e) {
+      console.error('TON verify poll error:', e);
+    }
+
+    if (tonVerifyAttempts >= TON_MAX_VERIFY) {
+      stopTonVerifying();
+      tg?.MainButton?.hideProgress();
+      updateTopupButton();
+      showToast('Still processing. Balance will update automatically.', 'info');
+    }
+  }, 3000);
+}
+
+function stopTonVerifying() {
+  if (tonVerifyInterval) {
+    clearInterval(tonVerifyInterval);
+    tonVerifyInterval = null;
   }
 }
 
@@ -432,7 +593,25 @@ function initTopupEvents() {
       topupMethod = row.dataset.method;
       document.querySelectorAll('.topup-method').forEach(m => m.classList.toggle('active', m === row));
       updateTopupButton();
+      updateTonWalletPanel();
     });
+  });
+
+  document.getElementById('ton-wallet-disconnect')?.addEventListener('click', async () => {
+    if (tonConnectUI) {
+      try {
+        await tonConnectUI.disconnect();
+        showToast('Wallet disconnected', 'info');
+      } catch {}
+      updateTonWalletPanel();
+    }
+  });
+
+  document.getElementById('ton-wallet-connect-btn')?.addEventListener('click', async () => {
+    initTonConnect();
+    if (tonConnectUI) {
+      try { await tonConnectUI.openModal(); } catch {}
+    }
   });
 }
 
@@ -494,7 +673,7 @@ function enterPlanningMode(active) {
     suggestBtn.classList.add('hidden');
     inputBar.style.display = '';
     attachBtn.style.display = 'none';
-    input.placeholder = 'Describe your app idea...';
+    input.placeholder = t('chat_placeholder');
     loadTgsAnimation();
   } else {
     welcome.classList.add('hidden');
@@ -510,9 +689,9 @@ function enterPlanningMode(active) {
 
 function showEmptyChat() {
   const welcome = document.getElementById('chat-welcome');
-  const welcomeText = document.querySelector('.chat-welcome-text');
+  const welcomeText = document.getElementById('chat-welcome-text');
   welcome.classList.remove('hidden');
-  welcomeText.textContent = 'Send a message to continue building your app';
+  welcomeText.textContent = t('chat_welcome_msg');
   loadTgsAnimation();
 }
 
@@ -662,20 +841,20 @@ function handleWSMessage(data) {
       const el = document.getElementById(`msg-${data.messageId}`);
       if (el) {
         el.className = 'chat-bubble chat-bubble--result';
-        let html = `<div class="chat-result-header">Update Completed</div>`;
+        let html = `<div class="chat-result-header">${t('chat_update_completed') || 'Update Completed'}</div>`;
         html += `<div class="chat-bubble-content">${formatContent(data.summary || '')}</div>`;
         if (data.changelogUrl) {
           html += `<div class="changelog-card" onclick="tg.openLink('${data.changelogUrl}', {try_instant_view: true})">
             <div class="changelog-card-text">
-              <div class="changelog-card-title">Full Change Log</div>
-              <div class="changelog-card-desc">Tap to view on Telegraph</div>
+              <div class="changelog-card-title">${t('version_change_log')}</div>
+              <div class="changelog-card-desc">Telegraph</div>
             </div>
             <div class="changelog-card-arrow">›</div>
           </div>`;
         }
         html += `<div class="result-actions">
-          <button class="result-action-btn result-action-test" onclick="openTestPreview('${chatProjectId}')">▶ Run & Test</button>
-          <button class="result-action-btn result-action-release" onclick="releaseLatest()">Release Update</button>
+          <button class="result-action-btn result-action-test" onclick="openTestPreview('${chatProjectId}')">▶ ${t('chat_run_test')}</button>
+          <button class="result-action-btn result-action-release" onclick="releaseLatest()">${t('chat_release_update')}</button>
         </div>`;
         if (typeof data.costUsd === 'number') {
           html += `<div class="chat-progress-cost">Cost: $${data.costUsd.toFixed(4)}${typeof data.balance === 'number' ? ` · Balance: $${data.balance.toFixed(2)}` : ''}</div>`;
@@ -743,9 +922,9 @@ function appendMessage(msg, animate = true) {
     const bal = msg.metadata?.balance ?? 0;
     el.innerHTML = `
       <div class="balance-error-icon">💳</div>
-      <div class="balance-error-title">Insufficient Balance</div>
-      <div class="balance-error-desc">Your balance is $${Number(bal).toFixed(2)}. Minimum $5.00 required.</div>
-      <button class="balance-error-btn" onclick="openTopup()">Top Up Balance</button>`;
+      <div class="balance-error-title">${t('chat_insufficient')}</div>
+      <div class="balance-error-desc">$${Number(bal).toFixed(2)}</div>
+      <button class="balance-error-btn" onclick="openTopup()">${t('chat_topup_btn')}</button>`;
     if (isProcessing) {
       isProcessing = false;
       setInputDisabled(false);
@@ -765,7 +944,7 @@ function appendMessage(msg, animate = true) {
     el.className = 'chat-bubble chat-bubble--question';
     let html = `<div class="question-card">`;
     html += `<div class="question-card-icon">❓</div>`;
-    html += `<div class="question-card-title">Agent needs your input</div>`;
+    html += `<div class="question-card-title">${t('chat_question_title') || 'Agent needs your input'}</div>`;
     html += `<div class="question-card-text">${formatContent(msg.content)}</div>`;
     const options = msg.metadata?.options || [];
     if (options.length > 0) {
@@ -821,21 +1000,21 @@ function appendMessage(msg, animate = true) {
     });
   } else if (msg.type === 'result') {
     el.className = 'chat-bubble chat-bubble--result';
-    let html = `<div class="chat-result-header">Update Completed</div>`;
+    let html = `<div class="chat-result-header">${t('chat_update_completed') || 'Update Completed'}</div>`;
     html += `<div class="chat-bubble-content">${formatContent(msg.content)}</div>`;
     const changelogUrl = msg.metadata?.changelogUrl;
     if (changelogUrl) {
       html += `<div class="changelog-card" onclick="tg.openLink('${changelogUrl}', {try_instant_view: true})">
         <div class="changelog-card-text">
-          <div class="changelog-card-title">Full Change Log</div>
-          <div class="changelog-card-desc">Tap to view on Telegraph</div>
+          <div class="changelog-card-title">${t('version_change_log')}</div>
+          <div class="changelog-card-desc">Telegraph</div>
         </div>
         <div class="changelog-card-arrow">›</div>
       </div>`;
     }
     html += `<div class="result-actions">
-      <button class="result-action-btn result-action-test" onclick="openTestPreview('${msg.metadata?.projectId || chatProjectId}')">▶ Run & Test</button>
-      <button class="result-action-btn result-action-release" onclick="releaseLatest()">Release Update</button>
+      <button class="result-action-btn result-action-test" onclick="openTestPreview('${msg.metadata?.projectId || chatProjectId}')">▶ ${t('chat_run_test')}</button>
+      <button class="result-action-btn result-action-release" onclick="releaseLatest()">${t('chat_release_update')}</button>
     </div>`;
     if (typeof msg.costUsd === 'number') {
       html += `<div class="chat-progress-cost">Cost: $${msg.costUsd.toFixed(4)}${typeof msg.balance === 'number' ? ` · Balance: $${msg.balance.toFixed(2)}` : ''}</div>`;
@@ -849,8 +1028,8 @@ function appendMessage(msg, animate = true) {
       html += `<div class="chat-progress-cost">Cost: $${msg.metadata.costUsd.toFixed(4)}${typeof msg.metadata?.balance === 'number' ? ` · Balance: $${msg.metadata.balance.toFixed(2)}` : ''}</div>`;
     }
     html += `<div class="chat-plan-actions">
-      <button class="chat-plan-btn chat-plan-btn--build" onclick="approvePlan()">Let's Build</button>
-      <button class="chat-plan-btn chat-plan-btn--edit" onclick="startEditPlan()">Edit</button>
+      <button class="chat-plan-btn chat-plan-btn--build" onclick="approvePlan()">${t('chat_lets_build')}</button>
+      <button class="chat-plan-btn chat-plan-btn--edit" onclick="startEditPlan()">${t('chat_edit')}</button>
     </div>`;
     el.innerHTML = html;
   } else if (msg.type === 'progress') {
@@ -1202,7 +1381,7 @@ async function approvePlan() {
 
 function startEditPlan() {
   const input = document.getElementById('chat-input');
-  input.placeholder = 'Describe what to change in the plan...';
+  input.placeholder = t('chat_placeholder');
   input.focus();
 }
 
@@ -1250,7 +1429,7 @@ async function releaseLatest() {
   const projectId = chatProjectId || currentProject?.id;
   if (!projectId) return;
 
-  tg?.showConfirm('Are you sure you want to release this update?', async (confirmed) => {
+  tg?.showConfirm(t('chat_release_confirm'), async (confirmed) => {
     if (!confirmed) return;
     try {
       const res = await fetch(`${API_BASE}/versions/${projectId}/release`, {
@@ -1263,7 +1442,7 @@ async function releaseLatest() {
         showToast(data.error || 'Release failed', 'error');
         return;
       }
-      showToast(`Version ${data.released} released!`, 'success');
+      showToast(t('toast_released'), 'success');
     } catch (err) {
       showToast('Error: ' + err.message, 'error');
     }
@@ -1403,9 +1582,9 @@ async function openDetail(id) {
 
   let appRows = '';
   if (isLive) {
-    appRows += menuRowAction('Test App', 'af-icon-test', 'open-test-preview');
+    appRows += menuRowAction(t('detail_test_app'), 'af-icon-test', 'open-test-preview');
     if (p.botUsername) {
-      appRows += menuRowAction('Open App & Bot', 'af-icon-open', 'open-bot');
+      appRows += menuRowAction(t('detail_open_bot'), 'af-icon-open', 'open-bot');
     }
   }
   document.getElementById('detail-app-rows').innerHTML = appRows;
@@ -1416,20 +1595,20 @@ async function openDetail(id) {
   document.getElementById('detail-app-rows').querySelector('[data-action="open-bot"]')
     ?.addEventListener('click', () => tg?.openTelegramLink(`https://t.me/${p.botUsername}`));
 
-  let devRows = menuRowAction('Update App', 'af-icon-update', 'open-update');
-  if (isLive) devRows += menuRowAction('Release Version', 'af-icon-release', 'open-release');
-  devRows += menuRowAction('Versions', 'af-icon-versions', 'open-versions');
-  devRows += menuRowAction('Get Update Suggestions', 'af-icon-suggest', 'open-suggestions');
+  let devRows = menuRowAction(t('detail_update_app'), 'af-icon-update', 'open-update');
+  if (isLive) devRows += menuRowAction(t('detail_release_version'), 'af-icon-release', 'open-release');
+  devRows += menuRowAction(t('detail_versions'), 'af-icon-versions', 'open-versions');
+  devRows += menuRowAction(t('detail_suggestions'), 'af-icon-suggest', 'open-suggestions');
   document.getElementById('detail-dev-rows').innerHTML = devRows;
 
-  let moneyRows = menuRowAction('Features', 'af-icon-features', 'open-features');
+  let moneyRows = menuRowAction(t('detail_features'), 'af-icon-features', 'open-features');
   if (hasFeature(p, 'ton_payment')) moneyRows += menuRow('Wallet', 'af-icon-wallet');
   document.getElementById('detail-money-rows').innerHTML = moneyRows;
   document.getElementById('section-monetization').style.display = '';
 
   let settingsRows = '';
-  settingsRows += menuRowAction('Edit Bot Info', 'af-icon-edit-info', 'open-edit-info');
-  settingsRows += menuRowAction('Quality Tier', 'af-icon-quality', 'open-quality');
+  settingsRows += menuRowAction(t('detail_edit_info'), 'af-icon-edit-info', 'open-edit-info');
+  settingsRows += menuRowAction(t('detail_quality'), 'af-icon-quality', 'open-quality');
   if (hasFeature(p, 'get_code')) settingsRows += menuRow('Edit Code', 'af-icon-code', `${baseUrl}/editor/${p.id}/`);
   if (hasFeature(p, 'admin_panel')) settingsRows += menuRow('Admin Panel', 'af-icon-admin', `${baseUrl}/admin/${p.id}/`);
   document.getElementById('detail-settings-rows').innerHTML = settingsRows;
@@ -1494,8 +1673,8 @@ async function openDetail(id) {
     });
 
   let actionsRows = '';
-  actionsRows += `<a class="tm-row tm-row-add" data-action="open-transfer"><span class="tm-icon" style="--icon-s:var(--image-url-transfer-ownership)"></span><span>Transfer Ownership</span></a>`;
-  actionsRows += `<a class="tm-row tm-row-destructive" data-action="open-delete"><span class="tm-icon" style="--icon-s:var(--image-url-trash)"></span><span>Delete App</span></a>`;
+  actionsRows += `<a class="tm-row tm-row-add" data-action="open-transfer"><span class="tm-icon" style="--icon-s:var(--image-url-transfer-ownership)"></span><span>${t('detail_transfer')}</span></a>`;
+  actionsRows += `<a class="tm-row tm-row-destructive" data-action="open-delete"><span class="tm-icon" style="--icon-s:var(--image-url-trash)"></span><span>${t('detail_delete')}</span></a>`;
   document.getElementById('detail-actions-rows').innerHTML = actionsRows;
 
   document.getElementById('detail-actions-rows').querySelector('[data-action="open-transfer"]')
@@ -1656,7 +1835,7 @@ async function saveEditInfo() {
       });
       showToast(friendlyErrors.join(' '), 'error');
     } else {
-      showToast('Bot info updated!', 'success');
+      showToast(t('toast_saved'), 'success');
       if (name !== editOriginal.name) {
         currentProject.name = name;
         const p = projects.find(pp => pp.id === currentProject.id);
@@ -1752,7 +1931,7 @@ async function submitDelete() {
       return;
     }
 
-    showToast('App deleted', 'success');
+    showToast(t('toast_deleted'), 'success');
     currentProject = null;
     currentToken = null;
     chatProjectId = null;
@@ -1787,9 +1966,9 @@ function openReferral() {
 
   document.getElementById('referral-content').innerHTML = `
     <div class="tm-info-list" style="gap:0">
-      <div class="tm-info-item" style="padding:0"><b>1.</b> Share your personal invite link</div>
-      <div class="tm-info-item" style="padding:0"><b>2.</b> Your friend signs up and tops up their balance</div>
-      <div class="tm-info-item" style="padding:0"><b>3.</b> You receive <b>15%</b> of their top-up as a bonus</div>
+      <div class="tm-info-item" style="padding:0"><b>1.</b> ${t('referral_step1')}</div>
+      <div class="tm-info-item" style="padding:0"><b>2.</b> ${t('referral_step2')}</div>
+      <div class="tm-info-item" style="padding:0"><b>3.</b> ${t('referral_step3')}</div>
     </div>
   `;
 
@@ -1801,8 +1980,8 @@ function openReferral() {
   document.getElementById('btn-copy-referral').onclick = () => {
     navigator.clipboard.writeText(refLink).then(() => {
       const btn = document.getElementById('btn-copy-referral');
-      btn.textContent = 'Copied!';
-      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+      btn.textContent = t('toast_copied');
+      setTimeout(() => { btn.textContent = t('referral_copy'); }, 1500);
     });
   };
 
@@ -1845,23 +2024,23 @@ async function openReleaseNotes() {
 
 function openHelp() {
   document.getElementById('help-content').innerHTML = `
-    <div class="tm-info-heading">How it works</div>
+    <div class="tm-info-heading">${t('help_how')}</div>
     <div class="tm-info-list" style="gap:0">
-      <div class="tm-info-item" style="padding:0"><b>1.</b> Create a new project</div>
-      <div class="tm-info-item" style="padding:0"><b>2.</b> A new bot will be created for your app</div>
-      <div class="tm-info-item" style="padding:0"><b>3.</b> Describe what your app should do</div>
-      <div class="tm-info-item" style="padding:0"><b>4.</b> I'll generate a plan for you to review</div>
-      <div class="tm-info-item" style="padding:0"><b>5.</b> Approve the plan and I'll build the app</div>
-      <div class="tm-info-item" style="padding:0"><b>6.</b> Test your app via the bot's Launch button</div>
-      <div class="tm-info-item" style="padding:0"><b>7.</b> Request updates and improvements anytime</div>
+      <div class="tm-info-item" style="padding:0"><b>1.</b> ${t('help_s1')}</div>
+      <div class="tm-info-item" style="padding:0"><b>2.</b> ${t('help_s2')}</div>
+      <div class="tm-info-item" style="padding:0"><b>3.</b> ${t('help_s3')}</div>
+      <div class="tm-info-item" style="padding:0"><b>4.</b> ${t('help_s4')}</div>
+      <div class="tm-info-item" style="padding:0"><b>5.</b> ${t('help_s5')}</div>
+      <div class="tm-info-item" style="padding:0"><b>6.</b> ${t('help_s6')}</div>
+      <div class="tm-info-item" style="padding:0"><b>7.</b> ${t('help_s7')}</div>
     </div>
-    <div class="tm-info-heading">Features</div>
+    <div class="tm-info-heading">${t('help_features')}</div>
     <div class="tm-info-list" style="gap:0">
-      <div class="tm-info-item" style="padding:0">AI-generated Mini Apps with database & backend</div>
-      <div class="tm-info-item" style="padding:0">Send images to use as design references</div>
-      <div class="tm-info-item" style="padding:0">AI-powered improvement suggestions</div>
-      <div class="tm-info-item" style="padding:0">Version management & releases</div>
-      <div class="tm-info-item" style="padding:0">Admin analytics panel for each project</div>
+      <div class="tm-info-item" style="padding:0">${t('help_f1')}</div>
+      <div class="tm-info-item" style="padding:0">${t('help_f2')}</div>
+      <div class="tm-info-item" style="padding:0">${t('help_f3')}</div>
+      <div class="tm-info-item" style="padding:0">${t('help_f4')}</div>
+      <div class="tm-info-item" style="padding:0">${t('help_f5')}</div>
     </div>
   `;
 
@@ -1920,8 +2099,8 @@ function initTokenActions() {
     if (!currentToken) return;
     navigator.clipboard.writeText(currentToken).then(() => {
       const btn = document.getElementById('btn-copy-token');
-      btn.textContent = 'Copied!';
-      setTimeout(() => btn.textContent = 'Copy', 1500);
+      btn.textContent = t('toast_copied');
+      setTimeout(() => btn.textContent = t('detail_copy'), 1500);
     });
   });
 
@@ -2009,18 +2188,18 @@ function openVersionDetail(versionNum) {
   let actionsHtml = '';
 
   if (!v.isReleased) {
-    actionsHtml += `<a class="tm-row tm-row-link" id="btn-release-version"><span class="tm-icon af-icon-release"></span><span>Release this Version</span></a>`;
-    actionsHtml += `<a class="tm-row tm-row-link" id="btn-revert-version"><span class="tm-icon af-icon-revert"></span><span>Revert to this Version</span></a>`;
+    actionsHtml += `<a class="tm-row tm-row-link" id="btn-release-version"><span class="tm-icon af-icon-release"></span><span>${t('version_release')}</span></a>`;
+    actionsHtml += `<a class="tm-row tm-row-link" id="btn-revert-version"><span class="tm-icon af-icon-revert"></span><span>${t('version_revert')}</span></a>`;
   } else {
     actionsHtml += `<a class="tm-row tm-row-link" style="opacity:0.5;pointer-events:none;"><span class="tm-icon af-icon-release"></span><span>Currently Released</span></a>`;
   }
 
   if (v.changelogUrl) {
-    actionsHtml += `<a class="tm-row tm-row-link" id="btn-changelog-link"><span class="tm-icon af-icon-changelog"></span><span>Change Log</span></a>`;
+    actionsHtml += `<a class="tm-row tm-row-link" id="btn-changelog-link"><span class="tm-icon af-icon-changelog"></span><span>${t('version_change_log')}</span></a>`;
   }
 
   if (v.hasLog) {
-    actionsHtml += `<a class="tm-row tm-row-link" id="btn-download-log"><span class="tm-icon af-icon-download"></span><span>Download Log</span></a>`;
+    actionsHtml += `<a class="tm-row tm-row-link" id="btn-download-log"><span class="tm-icon af-icon-download"></span><span>${t('version_download_log')}</span></a>`;
   }
 
   actionsEl.innerHTML = actionsHtml;
@@ -2209,8 +2388,8 @@ function openQuality(projectId) {
 // ═══ ADMIN PANEL ═══
 
 let isAdmin = false;
-let admTab = 'dashboard';
 let admChatReturn = false;
+let admLastSubpage = null;
 
 async function checkAdmin() {
   try {
@@ -2241,63 +2420,84 @@ function admFmtTokens(n) { return n > 999999 ? (n/1000000).toFixed(1)+'M' : n > 
 function admBadge(status) { return `<span class="adm-badge ${status}">${status}</span>`; }
 
 function openAdmin() {
-  admTab = 'dashboard';
   showView('admin');
-  initAdmTabs();
-  loadAdmTab('dashboard');
+  const rows = document.getElementById('adm-menu-rows');
+  rows.innerHTML =
+    menuRowAction('Dashboard', 'af-icon-dashboard', 'adm-open-dashboard') +
+    menuRowAction('Activities', 'af-icon-activities', 'adm-open-activities') +
+    menuRowAction('Users', 'af-icon-users', 'adm-open-users') +
+    menuRowAction('Apps', 'af-icon-apps', 'adm-open-apps') +
+    menuRowAction('Vouchers', 'af-icon-vouchers', 'adm-open-vouchers') +
+    menuRowAction('Configuration', 'af-icon-config', 'adm-open-config');
+  rows.querySelector('[data-action="adm-open-dashboard"]')?.addEventListener('click', openAdmDashboard);
+  rows.querySelector('[data-action="adm-open-activities"]')?.addEventListener('click', openAdmActivities);
+  rows.querySelector('[data-action="adm-open-users"]')?.addEventListener('click', openAdmUsers);
+  rows.querySelector('[data-action="adm-open-apps"]')?.addEventListener('click', openAdmApps);
+  rows.querySelector('[data-action="adm-open-vouchers"]')?.addEventListener('click', openAdmVouchers);
+  rows.querySelector('[data-action="adm-open-config"]')?.addEventListener('click', openAdmConfig);
+  admApi('/stats').then(d => {
+    document.getElementById('adm-info').innerHTML =
+      `Users: <b>${d.userCount}</b> · Apps: <b>${d.projectCount}</b> · Revenue: <b>${admFmtMoney(d.totalTopups)}</b>`;
+  }).catch(() => {});
 }
 
-function initAdmTabs() {
-  document.querySelectorAll('.adm-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.adm-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      admTab = tab.dataset.tab;
-      loadAdmTab(admTab);
-    });
-  });
-}
-
-function loadAdmTab(tab) {
-  const el = document.getElementById('adm-content');
+async function openAdmDashboard() {
+  admLastSubpage = 'adm-dashboard';
+  showView('adm-dashboard');
+  const el = document.getElementById('adm-dashboard-content');
   el.innerHTML = '<div class="loading-spinner"></div>';
-  switch (tab) {
-    case 'dashboard': loadAdmDashboard(el); break;
-    case 'users': loadAdmUsers(el); break;
-    case 'projects': loadAdmProjects(el); break;
-    case 'vouchers': loadAdmVouchers(el); break;
-    case 'config': loadAdmConfig(el); break;
-  }
-}
-
-async function loadAdmDashboard(el) {
   try {
     const d = await admApi('/stats');
-    let html = `<div class="adm-stats">
+    const conv = d.userCount > 0 ? ((d.payingUsers / d.userCount) * 100).toFixed(1) : '0.0';
+    let html = `<div class="adm-stats" style="width:100%;">
       <div class="adm-stat-card"><div class="adm-stat-label">Users</div><div class="adm-stat-value blue">${d.userCount}</div></div>
+      <div class="adm-stat-card"><div class="adm-stat-label">Paying Users</div><div class="adm-stat-value blue">${d.payingUsers || 0}</div></div>
+      <div class="adm-stat-card"><div class="adm-stat-label">Conversion</div><div class="adm-stat-value">${conv}%</div></div>
       <div class="adm-stat-card"><div class="adm-stat-label">Projects</div><div class="adm-stat-value">${d.projectCount}</div></div>
       <div class="adm-stat-card"><div class="adm-stat-label">Revenue</div><div class="adm-stat-value green">${admFmtMoney(d.totalTopups)}</div></div>
       <div class="adm-stat-card"><div class="adm-stat-label">Spent</div><div class="adm-stat-value yellow">${admFmtMoney(d.totalSpent)}</div></div>
+      <div class="adm-stat-card"><div class="adm-stat-label">Active (7d)</div><div class="adm-stat-value blue">${d.activeUsers7d || 0}</div></div>
+      <div class="adm-stat-card"><div class="adm-stat-label">Avg Spend</div><div class="adm-stat-value">${d.payingUsers > 0 ? admFmtMoney(d.totalTopups / d.payingUsers) : '$0.00'}</div></div>
     </div>`;
-    html += `<div class="adm-section-title">Recent Activity</div>`;
-    if (!d.recentUsage.length) {
-      html += `<div class="adm-empty">No activity yet</div>`;
-    } else {
-      html += `<div class="adm-table-scroll"><table class="adm-table"><thead><tr><th>User</th><th>Project</th><th>Op</th><th>Cost</th></tr></thead><tbody>`;
-      for (const u of d.recentUsage) {
-        html += `<tr><td>${esc(u.username)}</td><td>${esc(u.project)}</td><td>${u.operation}</td><td>${admFmtMoney(u.cost)}</td></tr>`;
-      }
-      html += `</tbody></table></div>`;
-    }
     el.innerHTML = html;
   } catch (err) { el.innerHTML = `<div class="adm-empty">Failed to load: ${esc(err.message)}</div>`; }
 }
 
-async function loadAdmUsers(el) {
+async function openAdmActivities() {
+  admLastSubpage = 'adm-activities';
+  showView('adm-activities');
+  const el = document.getElementById('adm-activities-content');
+  el.innerHTML = '<div class="loading-spinner"></div>';
+  try {
+    const d = await admApi('/stats');
+    if (!d.recentUsage.length) {
+      el.innerHTML = '<div class="adm-empty">No activity yet</div>';
+      return;
+    }
+    let html = '<div class="tm-table-wrap">';
+    for (const u of d.recentUsage) {
+      html += `<div class="adm-row" style="cursor:default;">
+        <div class="adm-row-main">
+          <div class="adm-row-title">${esc(u.username)}</div>
+          <div class="adm-row-sub">${esc(u.project)} · ${u.operation}</div>
+        </div>
+        <div class="adm-row-right"><div class="adm-row-value">${admFmtMoney(u.cost)}</div></div>
+      </div>`;
+    }
+    html += '</div>';
+    el.innerHTML = html;
+  } catch (err) { el.innerHTML = `<div class="adm-empty">Failed to load: ${esc(err.message)}</div>`; }
+}
+
+async function openAdmUsers() {
+  admLastSubpage = 'adm-users';
+  showView('adm-users');
+  const el = document.getElementById('adm-users-content');
+  el.innerHTML = '<div class="loading-spinner"></div>';
   try {
     const users = await admApi('/users');
     if (!users.length) { el.innerHTML = '<div class="adm-empty">No users yet</div>'; return; }
-    let html = `<div class="tm-table-wrap">`;
+    let html = '<div class="tm-table-wrap">';
     for (const u of users) {
       html += `<div class="adm-row" data-user-id="${u.id}">
         <div class="adm-row-main">
@@ -2308,7 +2508,7 @@ async function loadAdmUsers(el) {
         <div class="adm-row-chevron">›</div>
       </div>`;
     }
-    html += `</div>`;
+    html += '</div>';
     el.innerHTML = html;
     el.querySelectorAll('[data-user-id]').forEach(row => {
       row.addEventListener('click', () => openAdmUserDetail(row.dataset.userId));
@@ -2339,7 +2539,7 @@ async function openAdmUserDetail(userId) {
 
     if (u.referredBy) {
       html += `<div class="adm-section-title">Referred By</div>
-        <div style="padding:0 16px;font-size:13px;color:rgba(255,255,255,0.6);margin-bottom:8px;">${u.referredBy}</div>`;
+        <div style="padding:0;font-size:13px;color:rgba(255,255,255,0.6);margin-bottom:8px;">${u.referredBy}</div>`;
     }
 
     html += `<div class="adm-section-title">Balance Management</div>
@@ -2350,7 +2550,7 @@ async function openAdmUserDetail(userId) {
       </div>`;
 
     if (u.projects.length) {
-      html += `<div class="adm-section-title">Projects</div><div class="tm-table-wrap" style="">`;
+      html += `<div class="adm-section-title">Projects</div><div class="tm-table-wrap">`;
       for (const p of u.projects) {
         html += `<div class="adm-row" data-proj-id="${p.id}">
           <div class="adm-row-main">
@@ -2415,25 +2615,30 @@ async function openAdmProjectChat(projectId) {
   } catch { showToast('Failed to open project', 'error'); }
 }
 
-async function loadAdmProjects(el) {
+async function openAdmApps() {
+  admLastSubpage = 'adm-apps';
+  showView('adm-apps');
+  const el = document.getElementById('adm-apps-content');
+  el.innerHTML = '<div class="loading-spinner"></div>';
   try {
     const allProjects = await admApi('/projects');
     if (!allProjects.length) { el.innerHTML = '<div class="adm-empty">No projects yet</div>'; return; }
-    let html = `<div class="tm-table-wrap">`;
+    let html = '<div class="tm-table-wrap">';
     for (const p of allProjects) {
-      const avatarSrc = avatarSvgDataUri(p.name);
       const username = p.botUsername ? `@${esc(p.botUsername)}` : '';
+      const [c1, c2] = getGradient(p.name);
+      const avatarHtml = `<div class="tm-row-pic tm-row-pic-user avatar-gradient" style="background:linear-gradient(135deg,${c1},${c2})">${getInitials(p.name)}</div>`;
       const statusDot = p.status === 'building'
         ? '<span class="loader" style="width:16px;height:16px;margin-right:8px"></span>'
         : `<span class="tm-status-dot ${p.status}"></span>`;
       html += `<a class="tm-row tm-row-link" data-proj-id="${p.id}" style="align-items:center;">` +
-        `<img class="tm-row-pic tm-row-pic-user" src="${avatarSrc}">` +
+        avatarHtml +
         `<div style="flex:1;min-width:0;overflow:hidden;"><div class="tm-row-value" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.name)}</div>` +
         `<div class="tm-row-description" style="white-space:nowrap;">${username}</div></div>` +
         `<div class="tm-row-status">${statusDot}${statusLabel(p.status)}</div>` +
         `</a>`;
     }
-    html += `</div>`;
+    html += '</div>';
     el.innerHTML = html;
     el.querySelectorAll('[data-proj-id]').forEach(row => {
       row.addEventListener('click', () => openAdmProjectChat(row.dataset.projId));
@@ -2441,7 +2646,11 @@ async function loadAdmProjects(el) {
   } catch (err) { el.innerHTML = `<div class="adm-empty">Failed to load projects: ${esc(String(err))}</div>`; }
 }
 
-async function loadAdmVouchers(el) {
+async function openAdmVouchers() {
+  admLastSubpage = 'adm-vouchers';
+  showView('adm-vouchers');
+  const el = document.getElementById('adm-vouchers-content');
+  el.innerHTML = '<div class="loading-spinner"></div>';
   try {
     const vouchers = await admApi('/vouchers');
     let html = `<div class="adm-section-title">Create Voucher</div>
@@ -2453,9 +2662,9 @@ async function loadAdmVouchers(el) {
       <div class="adm-section-title">All Vouchers</div>`;
 
     if (!vouchers.length) {
-      html += `<div class="adm-empty">No vouchers yet</div>`;
+      html += '<div class="adm-empty">No vouchers yet</div>';
     } else {
-      html += `<div class="tm-table-wrap">`;
+      html += '<div class="tm-table-wrap">';
       for (const v of vouchers) {
         html += `<div class="adm-row" style="cursor:default;">
           <div class="adm-row-main">
@@ -2470,7 +2679,7 @@ async function loadAdmVouchers(el) {
           </div>
         </div>`;
       }
-      html += `</div>`;
+      html += '</div>';
     }
     el.innerHTML = html;
 
@@ -2481,7 +2690,7 @@ async function loadAdmVouchers(el) {
       try {
         const v = await admApi('/vouchers', { method: 'POST', body: { amount, maxUses } });
         showToast('Voucher created: ' + v.code, 'success');
-        loadAdmTab('vouchers');
+        openAdmVouchers();
       } catch { showToast('Failed to create', 'error'); }
     });
 
@@ -2490,7 +2699,7 @@ async function loadAdmVouchers(el) {
         const newActive = btn.dataset.active === 'true' ? false : true;
         await admApi('/vouchers/' + btn.dataset.toggleV, { method: 'PUT', body: { active: newActive } });
         showToast(newActive ? 'Voucher enabled' : 'Voucher disabled', 'success');
-        loadAdmTab('vouchers');
+        openAdmVouchers();
       });
     });
 
@@ -2499,7 +2708,7 @@ async function loadAdmVouchers(el) {
         try {
           await admApi('/vouchers/' + btn.dataset.delV, { method: 'DELETE' });
           showToast('Voucher deleted', 'success');
-          loadAdmTab('vouchers');
+          openAdmVouchers();
         } catch { showToast('Failed to delete', 'error'); }
       });
     });
@@ -2512,11 +2721,15 @@ async function loadAdmVouchers(el) {
   } catch (err) { el.innerHTML = `<div class="adm-empty">Failed to load vouchers: ${esc(String(err))}</div>`; }
 }
 
-async function loadAdmConfig(el) {
+async function openAdmConfig() {
+  admLastSubpage = 'adm-config';
+  showView('adm-config');
+  const el = document.getElementById('adm-config-content');
+  el.innerHTML = '<div class="loading-spinner"></div>';
   try {
     const cfg = await admApi('/config');
     el.innerHTML = `
-      <div>
+      <div style="width:100%;">
         <div class="adm-config-row">
           <div><div class="adm-config-label">Markup Multiplier</div><div class="adm-config-desc">Applied on top of base rates</div></div>
           <input type="number" id="adm-cfg-markup" value="${cfg.markupMultiplier}" step="0.5">
@@ -2560,6 +2773,12 @@ function showView(view) {
   document.getElementById('view-help').classList.toggle('hidden', view !== 'help');
   document.getElementById('view-release-notes').classList.toggle('hidden', view !== 'release-notes');
   document.getElementById('view-admin').classList.toggle('hidden', view !== 'admin');
+  document.getElementById('view-adm-dashboard').classList.toggle('hidden', view !== 'adm-dashboard');
+  document.getElementById('view-adm-activities').classList.toggle('hidden', view !== 'adm-activities');
+  document.getElementById('view-adm-users').classList.toggle('hidden', view !== 'adm-users');
+  document.getElementById('view-adm-apps').classList.toggle('hidden', view !== 'adm-apps');
+  document.getElementById('view-adm-vouchers').classList.toggle('hidden', view !== 'adm-vouchers');
+  document.getElementById('view-adm-config').classList.toggle('hidden', view !== 'adm-config');
   document.getElementById('view-admin-user').classList.toggle('hidden', view !== 'admin-user');
   document.getElementById('view-versions').classList.toggle('hidden', view !== 'versions');
   document.getElementById('view-version-detail').classList.toggle('hidden', view !== 'version-detail');
@@ -2567,6 +2786,7 @@ function showView(view) {
   document.getElementById('view-features').classList.toggle('hidden', view !== 'features');
   document.getElementById('view-slots-full').classList.toggle('hidden', view !== 'slots-full');
   document.getElementById('view-topup').classList.toggle('hidden', view !== 'topup');
+  document.getElementById('view-language').classList.toggle('hidden', view !== 'language');
 
   const headerDropdown = document.getElementById('chat-header-dropdown');
   if (headerDropdown) headerDropdown.classList.add('hidden');
@@ -2596,22 +2816,22 @@ function showView(view) {
 
   if (tg?.MainButton) {
     if (view === 'edit-info') {
-      tg.MainButton.setText('Update');
+      tg.MainButton.setText(t('edit_update'));
       tg.MainButton.color = tg.themeParams?.button_color || '#3390ec';
       tg.MainButton.textColor = tg.themeParams?.button_text_color || '#ffffff';
       tg.MainButton.show();
     } else if (view === 'transfer') {
-      tg.MainButton.setText('Transfer');
+      tg.MainButton.setText(t('transfer_btn'));
       tg.MainButton.color = tg.themeParams?.button_color || '#3390ec';
       tg.MainButton.textColor = tg.themeParams?.button_text_color || '#ffffff';
       tg.MainButton.show();
     } else if (view === 'delete') {
-      tg.MainButton.setText('Delete App');
+      tg.MainButton.setText(t('delete_btn'));
       tg.MainButton.color = '#e53935';
       tg.MainButton.textColor = '#ffffff';
       tg.MainButton.show();
     } else if (view === 'slots-full') {
-      tg.MainButton.setText('Buy App Slot — $25');
+      tg.MainButton.setText(t('slots_full_title') + ' — $25');
       tg.MainButton.color = tg.themeParams?.button_color || '#3390ec';
       tg.MainButton.textColor = tg.themeParams?.button_text_color || '#ffffff';
       tg.MainButton.show();
@@ -2663,7 +2883,6 @@ async function loadSamples() {
           <div class="tm-row-value">${esc(s.name)}</div>
           <div class="tm-row-description">@${esc(s.botUsername)}</div>
         </div>
-        <span class="tm-row-chevron">›</span>
       </a>`;
     }
     list.innerHTML = html;
@@ -2698,11 +2917,9 @@ function openSamplePreview(projectId, name) {
   document.body.appendChild(overlay);
 }
 
-const chatPlaceholders = {
-  update: 'Describe your update...',
-  question: 'Ask about your app...',
-  suggestion: 'Get improvement suggestions...',
-};
+function getChatPlaceholder(mode) {
+  return t('chat_placeholder');
+}
 
 function switchChatMode(mode) {
   chatMode = mode;
@@ -2721,7 +2938,7 @@ function switchChatMode(mode) {
     suggestBtn.classList.add('hidden');
     const input = document.getElementById('chat-input');
     if (input) {
-      input.placeholder = chatPlaceholders[mode] || chatPlaceholders.update;
+      input.placeholder = getChatPlaceholder(mode);
       input.focus();
     }
   }
@@ -2732,7 +2949,7 @@ async function fetchSuggestions() {
 
   const btn = document.getElementById('btn-get-suggestions');
   btn.disabled = true;
-  btn.textContent = 'Analyzing your app...';
+  btn.textContent = '...';
   btn.classList.add('loading');
 
   const processingEl = document.createElement('div');
@@ -2789,7 +3006,7 @@ async function fetchSuggestions() {
   }
 
   btn.disabled = false;
-  btn.textContent = 'Get Suggestions For Next Update';
+  btn.textContent = t('chat_get_suggestions');
   btn.classList.remove('loading');
 }
 
@@ -2850,6 +3067,22 @@ function initChatInput() {
   }, { passive: false });
 }
 
+function openLanguage() {
+  document.querySelectorAll('.lang-option .lang-check').forEach(el => {
+    const row = el.closest('.lang-option');
+    el.classList.toggle('hidden', row.dataset.lang !== currentLang);
+  });
+  document.querySelectorAll('.lang-option').forEach(row => {
+    row.addEventListener('click', () => {
+      setLang(row.dataset.lang);
+      document.querySelectorAll('.lang-option .lang-check').forEach(c => c.classList.add('hidden'));
+      row.querySelector('.lang-check').classList.remove('hidden');
+      showToast(t('toast_saved'), 'success');
+    });
+  });
+  showView('language');
+}
+
 function init() {
   document.addEventListener('click', (e) => {
     const t = e.target.closest('button, a, .tm-row, .chat-pill, .topup-amount-btn, .topup-method, .chat-plan-btn, .result-action-btn, .question-opt-btn, .feature-row, .quality-row');
@@ -2897,10 +3130,12 @@ function init() {
         showView('list');
       } else if (currentView === 'release-notes') {
         showView('list');
+      } else if (currentView === 'language') {
+        showView('list');
       } else if (currentView === 'admin-user') {
-        showView('admin');
-        loadAdmTab('users');
-        document.querySelectorAll('.adm-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'users'));
+        openAdmUsers();
+      } else if (currentView === 'adm-dashboard' || currentView === 'adm-activities' || currentView === 'adm-users' || currentView === 'adm-apps' || currentView === 'adm-vouchers' || currentView === 'adm-config') {
+        openAdmin();
       } else if (currentView === 'admin') {
         showView('list');
       } else if (currentView === 'detail') {
@@ -2984,8 +3219,10 @@ function init() {
   document.getElementById('btn-referral-page').addEventListener('click', () => openReferral());
   document.getElementById('btn-release-notes-page').addEventListener('click', () => openReleaseNotes());
   document.getElementById('btn-help-page').addEventListener('click', () => openHelp());
+  document.getElementById('btn-language-page')?.addEventListener('click', () => openLanguage());
   document.getElementById('btn-admin')?.addEventListener('click', () => openAdmin());
 
+  applyLang();
   checkAdmin();
   initTokenActions();
   initChatInput();

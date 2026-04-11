@@ -3,6 +3,13 @@ import { PAID_FEATURES } from "../services/features.service";
 import { config } from "../config";
 import { Lang, t, LANG_NAMES, translateFeatureLabel } from "./i18n";
 
+export function createAppKeyboard(lang: Lang = "en", miniAppUrl: string) {
+  return {
+    text: `${t(lang, "btn_create_app")}`,
+    web_app: { url: miniAppUrl },
+  };
+}
+
 export function replyKeyboard(lang: Lang = "en") {
   return {
     keyboard: [

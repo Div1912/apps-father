@@ -62,7 +62,6 @@ export function createBot(): Bot<BotContext> {
     }
   });
 
-  // "Main Menu" reply keyboard button triggers /start (all languages)
   bot.hears(/^(Main Menu|Главное меню|Головне меню)$/i, startCommand);
 
   // Conversation handlers must be registered last (catch-all for text)
