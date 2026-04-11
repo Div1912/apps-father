@@ -1,8 +1,11 @@
 import { Bot, webhookCallback } from "grammy";
+import { Router } from "express";
 import { config } from "../config";
 import { projectService } from "./project.service";
 import { decryptToken } from "./crypto.service";
 import Database from "better-sqlite3";
+import path from "path";
+import fs from "fs";
 import type { Request, Response, NextFunction } from "express";
 
 interface ManagedBotInstance {
@@ -25,6 +28,7 @@ export class BotRunnerService {
     const appUrl = `${config.baseUrl}/app/${projectId}/`;
 
     bot.command("start", async (ctx) => {
+      if (await this.hasCustomWebhook(projectId)) return;
       await ctx.reply(
         `Welcome! Tap the button below to launch the app.`,
         {
@@ -116,6 +120,7 @@ export class BotRunnerService {
     });
 
     bot.on("message:text", async (ctx) => {
+      if (await this.hasCustomWebhook(projectId)) return;
       await ctx.reply("Tap the button below to open the app!", {
         reply_markup: {
           inline_keyboard: [
@@ -129,7 +134,15 @@ export class BotRunnerService {
       console.error(`[BotRunner] Error in bot @${botUsername}:`, err);
     });
 
-    const webhookHandler = webhookCallback(bot, "express");
+    const grammyHandler = webhookCallback(bot, "express");
+
+    const webhookHandler = (req: Request, res: Response, next: NextFunction) => {
+      const body = req.body;
+      grammyHandler(req, res);
+      this.forwardToAppWebhook(projectId, token, botUsername, body).catch(err => {
+        console.error(`[BotRunner] Forward error for @${botUsername}:`, err.message);
+      });
+    };
 
     this.bots.set(projectId, { bot, projectId, botUsername, webhookHandler });
 
@@ -209,6 +222,100 @@ export class BotRunnerService {
       return (instance.bot as any).token;
     } catch {
       return null;
+    }
+  }
+
+  private async hasCustomWebhook(projectId: string): Promise<boolean> {
+    const routesFile = path.join(process.cwd(), "projects", projectId, "release", "backend", "routes.js");
+    if (!fs.existsSync(routesFile)) return false;
+    try {
+      const content = fs.readFileSync(routesFile, "utf-8");
+      return content.includes("bot-webhook");
+    } catch {
+      return false;
+    }
+  }
+
+  private async forwardToAppWebhook(
+    projectId: string,
+    token: string,
+    botUsername: string,
+    body: any,
+  ): Promise<void> {
+    const projectDir = path.join(process.cwd(), "projects", projectId);
+    const routesFile = path.join(projectDir, "release", "backend", "routes.js");
+    if (!fs.existsSync(routesFile)) return;
+
+    let content: string;
+    try {
+      content = fs.readFileSync(routesFile, "utf-8");
+    } catch { return; }
+    if (!content.includes("bot-webhook")) return;
+
+    let db: any = null;
+    try {
+      delete require.cache[require.resolve(routesFile)];
+      const routeModule = require(routesFile);
+      if (typeof routeModule !== "function") return;
+
+      const releaseDir = path.join(projectDir, "release");
+      const dataDir = path.join(releaseDir, "data");
+      fs.mkdirSync(dataDir, { recursive: true });
+      const sqlite = new Database(path.join(dataDir, "app.db"));
+      sqlite.pragma("journal_mode = WAL");
+      sqlite.exec("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)");
+
+      db = {
+        get(key: string) { const r = sqlite.prepare("SELECT value FROM kv WHERE key = ?").get(key) as any; return r ? JSON.parse(r.value) : null; },
+        set(key: string, value: any) { sqlite.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)").run(key, JSON.stringify(value)); },
+        getAll() { const rows = sqlite.prepare("SELECT key, value FROM kv").all() as any[]; const res: Record<string, any> = {}; for (const row of rows) res[row.key] = JSON.parse(row.value); return res; },
+        delete(key: string) { sqlite.prepare("DELETE FROM kv WHERE key = ?").run(key); },
+        keys() { return (sqlite.prepare("SELECT key FROM kv").all() as any[]).map((r: any) => r.key); },
+        close() { try { sqlite.close(); } catch {} },
+        botToken: token,
+        botUsername,
+        projectId,
+      };
+
+      const projectRouter = Router();
+      routeModule(projectRouter, db, projectId);
+
+      await new Promise<void>((resolve) => {
+        const fakeReq = {
+          method: "POST",
+          url: "/bot-webhook",
+          path: "/bot-webhook",
+          headers: { "content-type": "application/json" },
+          body,
+          params: {},
+          query: {},
+          get: (h: string) => h === "content-type" ? "application/json" : undefined,
+        } as any;
+
+        const fakeRes = {
+          statusCode: 200,
+          _headers: {} as Record<string, string>,
+          setHeader(k: string, v: string) { this._headers[k] = v; },
+          status(code: number) { this.statusCode = code; return this; },
+          json(data: any) { resolve(); },
+          send(data: any) { resolve(); },
+          end() { resolve(); },
+          get: (h: string) => undefined,
+          set: (k: string, v: string) => fakeRes,
+          type: (t: string) => fakeRes,
+        } as any;
+
+        projectRouter(fakeReq, fakeRes, () => {
+          resolve();
+        });
+
+        setTimeout(resolve, 5000);
+      });
+
+      db.close();
+    } catch (err: any) {
+      if (db) try { db.close(); } catch {}
+      throw err;
     }
   }
 }

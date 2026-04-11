@@ -597,6 +597,149 @@ export class AgentService {
     return [];
   }
 
+  async summarizeShort(fullSummary: string, updateNum: number): Promise<string> {
+    try {
+      const response = await this.client.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 400,
+        messages: [{ role: "user", content: `Summarize this technical changelog for a non-technical app owner. Output EXACTLY this format (plain text, no markdown symbols):
+
+Update #${updateNum}: [Short title, 3-5 words]
+
+[1 sentence description of what was done]
+
+- [Change 1 in simple words]
+- [Change 2 in simple words]
+- [Change 3 if needed]
+
+Rules:
+- No technical jargon (no "CSS", "HTML", "API", "endpoint", "component", "class", "function")
+- Use simple user-facing language (e.g. "Changed button color" not "Updated CSS background-color property")
+- Max 5 bullet points
+- Keep it very short
+
+CHANGELOG:
+${fullSummary.substring(0, 3000)}` }],
+      });
+      return response.content[0]?.type === "text" ? response.content[0].text.trim() : `Update #${updateNum}: Changes applied`;
+    } catch {
+      return `Update #${updateNum}: Changes applied`;
+    }
+  }
+
+  async answerQuestionStream(
+    projectId: string,
+    question: string,
+    onChunk: (text: string, fullText: string) => void,
+    lastUpdate?: string,
+    appDescription?: string,
+  ): Promise<string> {
+    const project: any = await projectService.getProject(projectId);
+    const context = this.loadLatestContext(projectId)
+      || project?.projectSummary
+      || "No project context available.";
+
+    const dbSummary = this.getDbSummary(projectId);
+    const description = appDescription || project?.description || "";
+
+    const prompt = `You are a friendly assistant helping an app owner (non-technical person) understand their Telegram Mini App.
+Answer in simple, everyday language. NO programming terms, NO code, NO file names, NO technical jargon.
+Talk as if explaining to a friend who doesn't know anything about coding.
+Use markdown formatting: **bold**, lists (- item), headings (## Title) to keep it readable.
+If the question is about app data/users/stats, give clear numbers and insights.
+Keep answers concise and actionable.
+
+APP DESCRIPTION:
+${description.substring(0, 2000)}
+
+PROJECT CONTEXT:
+${context.substring(0, 6000)}
+
+${lastUpdate ? `LAST UPDATE SUMMARY:\n${lastUpdate.substring(0, 2000)}\n` : ""}
+${dbSummary ? `DB KEYS SUMMARY:\n${dbSummary}\n` : ""}
+USER QUESTION: ${question}`;
+
+    const stream = this.client.messages.stream({
+      model: "claude-sonnet-4-6",
+      max_tokens: 2048,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    let fullText = "";
+    stream.on("text", (chunk) => {
+      fullText += chunk;
+      onChunk(chunk, fullText);
+    });
+
+    const finalMessage = await stream.finalMessage();
+    return finalMessage.content[0]?.type === "text" ? finalMessage.content[0].text : fullText || "Unable to answer.";
+  }
+
+  async getSuggestions(projectId: string): Promise<{ title: string; description: string }[]> {
+    const project: any = await projectService.getProject(projectId);
+    const context = this.loadLatestContext(projectId)
+      || project?.projectSummary
+      || "No project context available.";
+
+    const dbSummary = this.getDbSummary(projectId);
+    const description = project?.description || "";
+
+    const prompt = `You are a product advisor for a Telegram Mini App. Analyze the current app and suggest 5 practical improvements the owner could make next.
+
+APP DESCRIPTION:
+${description.substring(0, 2000)}
+
+PROJECT CONTEXT:
+${context.substring(0, 8000)}
+
+${dbSummary ? `DB KEYS SUMMARY:\n${dbSummary}\n` : ""}
+
+Return EXACTLY a JSON array of 5 objects, each with "title" (short, 3-8 words) and "description" (1-2 sentences, simple non-technical language explaining the benefit for users). No markdown, no code blocks, just raw JSON array.
+
+Focus on:
+- UX improvements
+- New features users would love
+- Design/visual enhancements
+- Performance or usability fixes
+- Engagement or retention ideas
+
+Keep suggestions practical and specific to THIS app.`;
+
+    const response = await this.client.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 1500,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const text = response.content[0]?.type === "text" ? response.content[0].text : "";
+    try {
+      const match = text.match(/\[[\s\S]*\]/);
+      if (match) return JSON.parse(match[0]);
+    } catch {}
+    return [{ title: "Improve your app", description: "Ask for a specific update to enhance your app." }];
+  }
+
+  private getDbSummary(projectId: string): string | null {
+    try {
+      const Database = require("better-sqlite3");
+      const dbPath = path.join(PROJECTS_DIR, projectId, "development", "data", "app.db");
+      if (!fs.existsSync(dbPath)) return null;
+      const db = new Database(dbPath, { readonly: true });
+      const rows = db.prepare("SELECT key FROM kv").all() as any[];
+      const keys = rows.map((r: any) => r.key);
+      const summary: string[] = [`Keys (${keys.length}): ${keys.slice(0, 30).join(", ")}`];
+      for (const key of keys.slice(0, 5)) {
+        const row = db.prepare("SELECT value FROM kv WHERE key = ?").get(key) as any;
+        if (row) {
+          const val = row.value.substring(0, 200);
+          summary.push(`  ${key}: ${val}${row.value.length > 200 ? "..." : ""}`);
+        }
+      }
+      db.close();
+      return summary.join("\n");
+    } catch { return null; }
+  }
+
   async buildApp(
     projectId: string,
     description: string,

@@ -30,11 +30,13 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
     "@prisma/client": "^6.19.3",
+    "@types/multer": "^2.1.0",
     "better-sqlite3": "^12.8.0",
     "crypto-js": "^4.2.0",
     "dotenv": "^17.4.1",
     "express": "^5.2.1",
     "grammy": "^1.42.0",
+    "multer": "^2.1.1",
     "node-cache": "^5.1.2",
     "uuid": "^13.0.0",
     "ws": "^8.20.0"

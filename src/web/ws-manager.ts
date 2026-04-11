@@ -143,11 +143,18 @@ function cleanupProject(projectId: string) {
   projectStates.delete(projectId);
 }
 
-export function setupWebSocket(server: import("http").Server) {
+export function setupWebSocket(server: import("http").Server, miniAppWss?: import("ws").WebSocketServer) {
   const wss = new WebSocketServer({ noServer: true });
 
   server.on("upgrade", async (request: IncomingMessage, socket, head) => {
     const url = request.url || "";
+
+    if (url.startsWith("/telegram-mini-app/ws") && miniAppWss) {
+      miniAppWss.handleUpgrade(request, socket, head, (ws) => {
+        miniAppWss.emit("connection", ws, request);
+      });
+      return;
+    }
 
     const devMatch = url.match(/^\/devws\/([a-f0-9-]+)/);
     const releaseMatch = url.match(/^\/ws\/([a-f0-9-]+)/);

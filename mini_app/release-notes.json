@@ -1,0 +1,61 @@
+[
+  {
+    "version": "2.0.0",
+    "date": "2026-04-11",
+    "title": "Major Platform Update",
+    "sections": [
+      {
+        "label": "Chat & Interaction",
+        "items": [
+          "Agent questions with selectable options and custom input",
+          "AI-powered update suggestions",
+          "Ask mode with streaming responses and haptic feedback",
+          "Chat input disabled during processing",
+          "Empty chat welcome screen with animation",
+          "Skeleton loading for chat history"
+        ]
+      },
+      {
+        "label": "App Management",
+        "items": [
+          "New app creation flow with slot system",
+          "Plan generation with \"Let's Build\" and \"Edit\" actions",
+          "Instant build start with progress feedback",
+          "Release updates directly from chat",
+          "Version changelog on Telegraph",
+          "Friendly error for small avatar uploads"
+        ]
+      },
+      {
+        "label": "Payments & Balance",
+        "items": [
+          "Top Up page with Crypto Bot, USDT, and Stars",
+          "Insufficient balance card with quick top-up action",
+          "Live cost tracking during updates"
+        ]
+      },
+      {
+        "label": "UI & UX",
+        "items": [
+          "Custom toast notification system",
+          "Haptic feedback on all interactions",
+          "Chat header dropdown with quick actions",
+          "Mode selector with icons",
+          "Mobile-optimized scroll and safe areas",
+          "Samples showcase section"
+        ]
+      },
+      {
+        "label": "Under the Hood",
+        "items": [
+          "Restructured project file hierarchy",
+          "Context compacting for faster updates",
+          "Reduced pricing across all tiers",
+          "Improved parallel builds",
+          "Image vision for design references",
+          "Summarizing step visible in progress flow"
+        ]
+      }
+    ]
+  }
+]
