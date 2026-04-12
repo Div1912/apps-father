@@ -494,6 +494,14 @@ export function createWebServer() {
       }
 
       if (msgType === "question") {
+        const balance = await billingService.getUserBalance(user.id);
+        if (balance < 0.5) {
+          const errMsg = chatService.addMessage(projectId, { role: "system", type: "balance_error", content: `Insufficient balance ($${balance.toFixed(2)}). Minimum $0.50 required.`, metadata: { balance } });
+          broadcastToProject(projectId, { type: "message", message: errMsg });
+          res.json({ messageId: userMsg.id, status: "error", error: "insufficient_balance" });
+          return;
+        }
+
         const streamMsgId = crypto.randomBytes(8).toString("hex");
         res.json({ messageId: userMsg.id, streamMsgId, status: "processing" });
 
@@ -506,18 +514,36 @@ export function createWebServer() {
             const lastUpdate = lastResultMsg?.content || undefined;
             const proj = await projectService.getProject(projectId);
 
+            const askHistory = allHistory
+              .filter(m => (m.type === "text" && m.role === "assistant") || (m.type === "text" && m.role === "user") || (m.role === "user" && m.type === "update_request" && false))
+              .filter(m => {
+                const isUserAsk = m.role === "user" && m.type === "text";
+                const isAssistantReply = m.role === "assistant" && m.type === "text";
+                return isUserAsk || isAssistantReply;
+              })
+              .slice(-10)
+              .map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
+
             const answer = await agentService.answerQuestionStream(
               projectId, text.trim(),
               (_chunk, fullText) => {
                 broadcastToProject(projectId, { type: "stream_chunk", projectId, messageId: streamMsgId, text: fullText });
               },
-              lastUpdate, proj?.description || undefined,
+              lastUpdate, proj?.description || undefined, askHistory,
+            );
+
+            const usage = await billingService.recordUsage(
+              user.id, projectId, "claude-sonnet-4-6",
+              { input_tokens: answer.inputTokens, output_tokens: answer.outputTokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+              "ask",
             );
 
             const ansMsg = chatService.addMessage(projectId, {
               role: "assistant",
               type: "text",
-              content: answer,
+              content: answer.text,
+              costUsd: usage.costUsd,
+              balance: usage.newBalance,
             });
             broadcastToProject(projectId, { type: "stream_end", projectId, messageId: streamMsgId, message: ansMsg });
           } catch (err: any) {

@@ -6,12 +6,14 @@ const CONFIG_PATH = path.join(process.cwd(), "data", "runtime-config.json");
 export interface RuntimeConfig {
   minTopup: number;
   markupMultiplier: number;
+  askMultiplier: number;
   maxAgentIterations: number;
 }
 
 const DEFAULTS: RuntimeConfig = {
   minTopup: 10,
   markupMultiplier: 5,
+  askMultiplier: 10,
   maxAgentIterations: 60,
 };
 
@@ -49,6 +51,7 @@ class RuntimeConfigService {
   }
 
   getMarkupMultiplier(): number { return this.config.markupMultiplier; }
+  getAskMultiplier(): number { return this.config.askMultiplier; }
   getMinTopup(): number { return this.config.minTopup; }
   getMaxAgentIterations(): number { return this.config.maxAgentIterations; }
 }

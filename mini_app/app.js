@@ -16,6 +16,15 @@ let chatMode = 'update'; // 'update' | 'question'
 let chatProjectId = null;
 let pendingFiles = [];
 let isProcessing = false;
+const processingProjectIds = new Set();
+
+function setProcessing(active) {
+  isProcessing = active;
+  if (chatProjectId) {
+    if (active) processingProjectIds.add(chatProjectId);
+    else processingProjectIds.delete(chatProjectId);
+  }
+}
 
 function haptic(style = 'light') {
   tg?.HapticFeedback?.impactOccurred(style);
@@ -60,7 +69,10 @@ function setInputDisabled(disabled) {
   if (attachBtn) attachBtn.disabled = disabled;
   if (suggestBtn) suggestBtn.disabled = disabled;
   const area = document.getElementById('chat-input-area');
-  if (area) area.classList.toggle('chat-input-disabled', disabled);
+  if (area) {
+    area.style.display = disabled ? 'none' : '';
+    area.classList.toggle('chat-input-disabled', disabled);
+  }
 }
 
 const AVATAR_GRADIENTS = [
@@ -647,6 +659,11 @@ function openChat(projectId) {
   pendingFiles = [];
   updateAttachPreview();
 
+  const projProcessing = processingProjectIds.has(projectId);
+  isProcessing = projProcessing;
+  setInputDisabled(projProcessing);
+  setHeaderWorking(projProcessing);
+
   const skelEl = document.getElementById('chat-skeleton');
   skelEl.classList.remove('hidden');
 
@@ -780,9 +797,28 @@ function handleWSMessage(data) {
       const cls = msg.type === 'error' ? 'chat-bubble--error' : 'chat-bubble--assistant';
       el.className = `chat-bubble ${cls}`;
       let html = `<div class="chat-bubble-content">${msg.type === 'error' ? esc(msg.content) : formatContent(msg.content)}</div>`;
+      if (typeof msg.costUsd === 'number' && msg.costUsd > 0) {
+        html += `<div class="chat-progress-cost">Cost: $${msg.costUsd.toFixed(4)}${typeof msg.balance === 'number' ? ` · Balance: $${msg.balance.toFixed(2)}` : ''}</div>`;
+      }
       html += `<div class="chat-bubble-time">${timeStr(msg.timestamp)}</div>`;
       el.innerHTML = html;
       el.id = `msg-${msg.id}`;
+      requestAnimationFrame(() => {
+        const seContent = el.querySelector('.chat-bubble-content');
+        if (!seContent) return;
+        if (seContent.scrollHeight > 280) {
+          el.classList.add('collapsed-msg');
+          const seBtn = document.createElement('button');
+          seBtn.className = 'msg-expand-btn';
+          seBtn.textContent = t('chat_show_more') || 'Show more';
+          seBtn.addEventListener('click', () => {
+            haptic('light');
+            const c = el.classList.toggle('collapsed-msg');
+            seBtn.textContent = c ? (t('chat_show_more') || 'Show more') : (t('chat_show_less') || 'Show less');
+          });
+          seContent.parentNode.insertBefore(seBtn, seContent.nextSibling);
+        }
+      });
       scrollToBottom();
     }
     return;
@@ -832,7 +868,7 @@ function handleWSMessage(data) {
 
   if (data.type === 'status') {
     if (data.status === 'done') {
-      isProcessing = false;
+      setProcessing(false);
       setInputDisabled(false);
       setTyping(false);
       setHeaderWorking(false);
@@ -892,6 +928,15 @@ async function loadChatHistory(projectId) {
     if (data.messages.length === 0 && !isPlanningMode) {
       showEmptyChat();
     }
+
+    const hasActiveProgress = data.messages.some(m => m.type === 'progress' && (m.percent || 0) < 100);
+    if (hasActiveProgress) {
+      processingProjectIds.add(projectId);
+      isProcessing = true;
+      setInputDisabled(true);
+      setHeaderWorking(true);
+    }
+
     skelEl.classList.add('hidden');
     scrollToBottom(true);
   } catch (err) {
@@ -926,7 +971,7 @@ function appendMessage(msg, animate = true) {
       <div class="balance-error-desc">$${Number(bal).toFixed(2)}</div>
       <button class="balance-error-btn" onclick="openTopup()">${t('chat_topup_btn')}</button>`;
     if (isProcessing) {
-      isProcessing = false;
+      setProcessing(false);
       setInputDisabled(false);
       setTyping(false);
       setHeaderWorking(false);
@@ -935,7 +980,7 @@ function appendMessage(msg, animate = true) {
     el.className = 'chat-bubble chat-bubble--error';
     el.innerHTML = `<div class="chat-bubble-content">${esc(msg.content)}</div>`;
     if (isProcessing) {
-      isProcessing = false;
+      setProcessing(false);
       setInputDisabled(false);
       setTyping(false);
       setHeaderWorking(false);
@@ -1036,16 +1081,38 @@ function appendMessage(msg, animate = true) {
     renderProgressBubble(msg);
     return;
   } else {
-    // assistant text or system
     const cls = msg.role === 'system' ? 'chat-bubble--system' : 'chat-bubble--assistant';
     el.className = `chat-bubble ${cls}`;
     let html = `<div class="chat-bubble-content">${formatContent(msg.content)}</div>`;
+    if (typeof msg.costUsd === 'number' && msg.costUsd > 0) {
+      html += `<div class="chat-progress-cost">Cost: $${msg.costUsd.toFixed(4)}${typeof msg.balance === 'number' ? ` · Balance: $${msg.balance.toFixed(2)}` : ''}</div>`;
+    }
     html += `<div class="chat-bubble-time">${timeStr(msg.timestamp)}</div>`;
     el.innerHTML = html;
   }
 
   if (!animate) el.style.animation = 'none';
   inner.appendChild(el);
+
+  if (msg.type !== 'result' && msg.type !== 'question' && msg.type !== 'balance_error' && msg.type !== 'error' && msg.type !== 'progress') {
+    requestAnimationFrame(() => {
+      const collapsible = el.querySelector('.chat-bubble-content') || el.querySelector('.chat-plan-content');
+      if (!collapsible) return;
+      const MAX_H = 280;
+      if (collapsible.scrollHeight > MAX_H) {
+        el.classList.add('collapsed-msg');
+        const btn = document.createElement('button');
+        btn.className = 'msg-expand-btn';
+        btn.textContent = t('chat_show_more') || 'Show more';
+        btn.addEventListener('click', () => {
+          haptic('light');
+          const isCollapsed = el.classList.toggle('collapsed-msg');
+          btn.textContent = isCollapsed ? (t('chat_show_more') || 'Show more') : (t('chat_show_less') || 'Show less');
+        });
+        collapsible.parentNode.insertBefore(btn, collapsible.nextSibling);
+      }
+    });
+  }
 }
 
 function renderProgressBubble(msg) {
@@ -1077,7 +1144,8 @@ function renderProgressBubble(msg) {
   }
 
   el.innerHTML = html;
-  isProcessing = true;
+  setProcessing(true);
+  setInputDisabled(true);
   setTyping(false);
   setHeaderWorking(true, pct);
   if (isNew) scrollToBottom();
@@ -1111,7 +1179,7 @@ function renderChecklist(items) {
   let html = '<ul class="chat-checklist">';
   for (const item of items) {
     const done = item.done ? ' done' : '';
-    html += `<li class="${done}"><span class="check-icon"></span>${esc(item.text)}</li>`;
+    html += `<li class="${done}"><span class="check-icon"></span><span>${esc(item.text)}</span></li>`;
   }
   html += '</ul>';
   return html;
@@ -1217,7 +1285,7 @@ async function sendMessage() {
 
   if (type === 'update') {
     setTyping(true);
-    isProcessing = true;
+    setProcessing(true);
     setInputDisabled(true);
   } else {
     setTyping(true);
@@ -1321,7 +1389,7 @@ async function approvePlan() {
     b.style.pointerEvents = 'none';
   });
 
-  isProcessing = true;
+  setProcessing(true);
   setInputDisabled(true);
 
   const buildMsgId = 'build-' + Date.now();
@@ -1350,7 +1418,7 @@ async function approvePlan() {
       }
       const el = document.getElementById(`msg-${buildMsgId}`);
       if (el) el.remove();
-      isProcessing = false;
+      setProcessing(false);
       setInputDisabled(false);
       document.querySelectorAll('.chat-plan-btn').forEach(b => {
         b.disabled = false;
@@ -1369,7 +1437,7 @@ async function approvePlan() {
     showToast('Error: ' + err.message, 'error');
     const el = document.getElementById(`msg-${buildMsgId}`);
     if (el) el.remove();
-    isProcessing = false;
+    setProcessing(false);
     setInputDisabled(false);
     document.querySelectorAll('.chat-plan-btn').forEach(b => {
       b.disabled = false;
@@ -1602,7 +1670,7 @@ async function openDetail(id) {
   document.getElementById('detail-dev-rows').innerHTML = devRows;
 
   let moneyRows = menuRowAction(t('detail_features'), 'af-icon-features', 'open-features');
-  if (hasFeature(p, 'ton_payment')) moneyRows += menuRow('Wallet', 'af-icon-wallet');
+  // if (hasFeature(p, 'ton_payment')) moneyRows += menuRow('Wallet', 'af-icon-wallet');
   document.getElementById('detail-money-rows').innerHTML = moneyRows;
   document.getElementById('section-monetization').style.display = '';
 
@@ -1610,7 +1678,7 @@ async function openDetail(id) {
   settingsRows += menuRowAction(t('detail_edit_info'), 'af-icon-edit-info', 'open-edit-info');
   settingsRows += menuRowAction(t('detail_quality'), 'af-icon-quality', 'open-quality');
   if (hasFeature(p, 'get_code')) settingsRows += menuRow('Edit Code', 'af-icon-code', `${baseUrl}/editor/${p.id}/`);
-  if (hasFeature(p, 'admin_panel')) settingsRows += menuRow('Admin Panel', 'af-icon-admin', `${baseUrl}/admin/${p.id}/`);
+  // if (hasFeature(p, 'admin_panel')) settingsRows += menuRow('Admin Panel', 'af-icon-admin', `${baseUrl}/admin/${p.id}/`);
   document.getElementById('detail-settings-rows').innerHTML = settingsRows;
 
   document.getElementById('detail-settings-rows').querySelector('[data-action="open-edit-info"]')
@@ -2731,8 +2799,12 @@ async function openAdmConfig() {
     el.innerHTML = `
       <div style="width:100%;">
         <div class="adm-config-row">
-          <div><div class="adm-config-label">Markup Multiplier</div><div class="adm-config-desc">Applied on top of base rates</div></div>
+          <div><div class="adm-config-label">Markup Multiplier</div><div class="adm-config-desc">Applied on top of base rates (updates)</div></div>
           <input type="number" id="adm-cfg-markup" value="${cfg.markupMultiplier}" step="0.5">
+        </div>
+        <div class="adm-config-row">
+          <div><div class="adm-config-label">Ask Multiplier</div><div class="adm-config-desc">Applied on top of base rates (ask mode)</div></div>
+          <input type="number" id="adm-cfg-ask" value="${cfg.askMultiplier || 10}" step="0.5">
         </div>
         <div class="adm-config-row">
           <div><div class="adm-config-label">Min Top-up</div><div class="adm-config-desc">Minimum USD amount</div></div>
@@ -2749,6 +2821,7 @@ async function openAdmConfig() {
     document.getElementById('adm-cfg-save').addEventListener('click', async () => {
       const data = {
         markupMultiplier: parseFloat(document.getElementById('adm-cfg-markup').value),
+        askMultiplier: parseFloat(document.getElementById('adm-cfg-ask').value),
         minTopup: parseFloat(document.getElementById('adm-cfg-topup').value),
         maxAgentIterations: parseInt(document.getElementById('adm-cfg-iter').value),
       };
@@ -3046,6 +3119,28 @@ function initChatInput() {
   });
 
   document.getElementById('btn-attach').addEventListener('click', () => fileInput.click());
+
+  input.addEventListener('paste', (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const imageFiles = [];
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) {
+          const ext = file.type.split('/')[1] || 'png';
+          const named = new File([file], `pasted-image-${Date.now()}.${ext}`, { type: file.type });
+          imageFiles.push(named);
+        }
+      }
+    }
+    if (imageFiles.length > 0) {
+      e.preventDefault();
+      pendingFiles.push(...imageFiles);
+      updateAttachPreview();
+      uploadFiles(imageFiles);
+    }
+  });
 
   fileInput.addEventListener('change', () => {
     const files = Array.from(fileInput.files || []);

@@ -47,14 +47,15 @@ export class BillingService {
     return balance > 0;
   }
 
-  calculateCost(model: string, usage: TokenUsage): number {
+  calculateCost(model: string, usage: TokenUsage, operation?: string): number {
     const p = MODEL_PRICING[model] || MODEL_PRICING["claude-sonnet-4-6"];
     const inputCost = (usage.input_tokens ?? 0) * p.input;
     const outputCost = (usage.output_tokens ?? 0) * p.output;
     const cacheWrite = (usage.cache_creation_input_tokens ?? 0) * p.cache_write;
     const cacheRead = (usage.cache_read_input_tokens ?? 0) * p.cache_read;
     const total = inputCost + outputCost + cacheWrite + cacheRead;
-    return total * runtimeConfig.getMarkupMultiplier();
+    const multiplier = operation === "ask" ? runtimeConfig.getAskMultiplier() : runtimeConfig.getMarkupMultiplier();
+    return total * multiplier;
   }
 
   async recordUsage(
@@ -64,7 +65,7 @@ export class BillingService {
     usage: TokenUsage,
     operation: string
   ): Promise<UsageResult> {
-    const costUsd = this.calculateCost(model, usage);
+    const costUsd = this.calculateCost(model, usage, operation);
 
     const result = await prisma.$transaction(async (tx) => {
       await tx.usageLog.create({

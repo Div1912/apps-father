@@ -64,7 +64,9 @@ router.all("/:projectId/{*routePath}", async (req: Request, res: Response) => {
   let db: ReturnType<typeof createProjectDb> | null = null;
 
   try {
-    delete require.cache[require.resolve(routesFile)];
+    for (const key of Object.keys(require.cache)) {
+      if (key.startsWith(backendDir) && !key.includes("node_modules")) delete require.cache[key];
+    }
 
     const projectRouter = Router();
     const routeModule = require(routesFile);

@@ -3158,6 +3158,29 @@ color-mix(in srgb, #000000 10%, #00000000);
 
 .chat-bubble-content p { margin: 0 0 8px; }
 .chat-bubble-content p:last-child { margin-bottom: 0; }
+
+.collapsed-msg .chat-bubble-content,
+.collapsed-msg .chat-plan-content {
+  max-height: 280px;
+  overflow: hidden;
+  position: relative;
+  -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 60%, transparent 100%);
+}
+.msg-expand-btn {
+  display: block;
+  width: 100%;
+  padding: 8px 0;
+  border: none;
+  background: none;
+  color: #4a9eff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+  margin-top: -4px;
+}
+.msg-expand-btn:active { opacity: 0.6; }
 .chat-bubble-content code {
   background: rgba(255,255,255,0.08);
   padding: 2px 6px;
@@ -3309,8 +3332,8 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
   justify-content: center;
 }
 .chat-checklist li.done .check-icon {
-  background: #34c759;
-  border-color: #34c759;
+  background: #347cc7;
+  border-color: #3454c7;
 }
 .chat-checklist li.done .check-icon::after {
   content: '✓';
@@ -3319,8 +3342,10 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
   font-weight: 700;
 }
 .chat-checklist li.done {
-  opacity: 0.7;
-  text-decoration: line-through;
+  text-decoration: none;
+}
+.chat-checklist li.done span:not(.check-icon) {
+  opacity: 0.4;
 }
 
 /* Question options */
@@ -3792,19 +3817,22 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
   align-items: center;
   gap: 10px;
   padding: max(14px, calc(var(--tg-content-safe-area-inset-top, 0px) + var(--tg-safe-area-inset-top, 0px) + 6px)) 16px 10px;
-  background: #111;
+  background: #000000;
   border-bottom: 1px solid rgba(255,255,255,0.1);
   flex-shrink: 0;
 }
 .test-preview-back {
-  background: none;
-  border: none;
-  color: #5eb5f7;
-  font-size: 15px;
-  font-weight: 600;
   cursor: pointer;
-  padding: 4px 0;
   font-family: inherit;
+
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 12px;
+  border-radius: 6px;
+  letter-spacing: 0.5px;
+  background: #0087ff36;
+  color: #0087ff;
+  border: 1px solid #0087ff;
 }
 .test-preview-title {
   flex: 1;

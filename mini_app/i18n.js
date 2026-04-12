@@ -147,6 +147,8 @@ const I18N = {
     chat_release_confirm: "Are you sure you want to release this update?",
     chat_insufficient: "Insufficient Balance",
     chat_topup_btn: "Top Up Balance",
+    chat_show_more: "Show more",
+    chat_show_less: "Show less",
 
     // Statuses
     status_released: "Released",
@@ -303,6 +305,8 @@ const I18N = {
     chat_release_confirm: "Вы уверены, что хотите опубликовать это обновление?",
     chat_insufficient: "Недостаточно средств",
     chat_topup_btn: "Пополнить баланс",
+    chat_show_more: "Показать больше",
+    chat_show_less: "Скрыть",
 
     status_released: "Опубликовано",
     status_deployed: "Готово",
@@ -457,6 +461,8 @@ const I18N = {
     chat_release_confirm: "Ви впевнені, що хочете опублікувати це оновлення?",
     chat_insufficient: "Недостатньо коштів",
     chat_topup_btn: "Поповнити баланс",
+    chat_show_more: "Показати більше",
+    chat_show_less: "Сховати",
 
     status_released: "Опубліковано",
     status_deployed: "Готово",

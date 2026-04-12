@@ -106,11 +106,21 @@ Typography:
 - Labels/captions: 10-12px, uppercase, letter-spacing 0.5px, rgba(255,255,255,0.5)
 - Numbers/stats: font-weight 700, slightly larger than body
 
-Layout:
-- html,body { margin:0; background:#000; color:#fff; overflow-x:hidden; overscroll-behavior:none; }
+Layout & Scrolling (CRITICAL — follow exactly):
+- html,body { margin:0; padding:0; background:#000; color:#fff; overflow-x:hidden; overscroll-behavior:none; height:100%; }
+- NEVER set overflow:hidden on html or body — this kills page scroll
+- Hide scrollbars visually: ::-webkit-scrollbar { display:none; } body { scrollbar-width:none; }
+- App container: .app { display:flex; flex-direction:column; height:100vh; height:100dvh; }
+- IMPORTANT: use height:100vh on .app, NEVER min-height:100vh — min-height does not constrain flex children so overflow-y:auto on children won't work
+- Scrollable content area: flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch;
+- NEVER use position:fixed; inset:0 for the main app container — it blocks native scroll
+- Fixed elements (bottom nav, headers) must be separate from scrollable content, use flex-shrink:0
 - Safe areas: padding-top: calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px)); padding-bottom: calc(var(--tg-safe-area-inset-bottom, 0px) + var(--tg-content-safe-area-inset-bottom, 0px))
-- Hide scrollbars: ::-webkit-scrollbar { display:none; } body { scrollbar-width:none; }
-- Full viewport height: min-height: 100vh
+- Correct scroll pattern example:
+  .app { display:flex; flex-direction:column; height:100vh; height:100dvh; }
+  .app-header { flex-shrink:0; }
+  .main-content { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+  .bottom-nav { flex-shrink:0; }
 
 Cards:
 - background: #1E1E1E; border-radius: 16px-20px; padding: 16px; border: none or 1px solid rgba(255,255,255,0.06)
@@ -161,6 +171,10 @@ ANTI-PATTERNS (never do these):
 - No transitions/animations on interactive elements
 - Using px values or env() for safe areas (use var(--tg-safe-area-inset-top) + var(--tg-content-safe-area-inset-top) instead)
 - Light theme colors — always dark mode
+- NEVER overflow:hidden on html/body — this completely breaks page scrolling
+- NEVER position:fixed;inset:0 on the main app wrapper — use flex layout with height:100vh instead
+- NEVER min-height:100vh on the app wrapper when children need overflow-y:auto — use height:100vh
+- NEVER block touch scrolling with touch-action:none or preventDefault on touchmove for the main content
 
 RULES FOR BACKEND (routes.js):
 1. Export: module.exports = function(router, db, projectId) { ... }
@@ -190,6 +204,25 @@ TELEGRAM STARS PAYMENTS:
 3. Frontend opens: Telegram.WebApp.openInvoice(url, function(status) { if(status==='paid') refreshUser(); })
 4. Bot auto-handles pre_checkout_query and successful_payment — no webhook endpoint needed
 5. Use currency "XTR", empty provider_token ""
+
+REFERRAL SYSTEM (when user asks for referrals/invite system):
+1. Referral link format: const refLink = 'https://t.me/' + botUsername + '?start=' + userId;
+2. Share via Telegram: 
+   const shareText = encodeURIComponent('Your share text here derived from app description');
+   const shareUrl = 'https://t.me/share/url?url=' + encodeURIComponent(refLink) + '&text=' + shareText;
+   Telegram.WebApp.openTelegramLink(shareUrl);
+3. Backend must handle the start parameter in the bot webhook to track referrals:
+   - The bot webhook receives updates with /start {referrerId} — the start param is the referrer's userId
+   - In the webhook handler (routes.js doesn't handle bot webhooks — this is handled by the platform automatically)
+   - Instead, handle referral tracking via API: when a NEW user opens the app for the first time, frontend sends their startParam to the backend
+   - Frontend: const startParam = Telegram.WebApp.initDataUnsafe?.start_param; if (startParam) apiCall('/api/{projectId}/register', { method:'POST', body: JSON.stringify({ referrerId: startParam }) })
+   - Backend route POST /register: check if user is new, if yes and referrerId exists, credit the referrer with the bonus
+4. Store referral data per-user: db.set('user:' + oderId, { ...userData, referredBy: referrerId, referrals: [] })
+5. Update referrer's data: push new userId to referrer's referrals array, add bonus to referrer's balance
+6. Let the user configure the bonus amount — store it in db as a config or use a default
+7. Show referral stats: total referrals count, earned bonuses
+8. Copy link button: navigator.clipboard.writeText(refLink) with a "Copied!" toast feedback
+9. NEVER use bot API webhooks directly in routes.js — use the frontend start_param approach described above
 
 IMPORTANT - ROUTES HOT-RELOAD:
 Backend routes.js is reloaded on EVERY API request. You do NOT need to restart anything after editing routes.js. Changes take effect immediately on the next http_request test.
@@ -600,7 +633,7 @@ export class AgentService {
   async summarizeShort(fullSummary: string, updateNum: number): Promise<string> {
     try {
       const response = await this.client.messages.create({
-        model: "claude-sonnet-4-6",
+        model: "claude-haiku-3.5-20241022",
         max_tokens: 400,
         messages: [{ role: "user", content: `Summarize this technical changelog for a non-technical app owner. Output EXACTLY this format (plain text, no markdown symbols):
 
@@ -633,7 +666,8 @@ ${fullSummary.substring(0, 3000)}` }],
     onChunk: (text: string, fullText: string) => void,
     lastUpdate?: string,
     appDescription?: string,
-  ): Promise<string> {
+    conversationHistory?: { role: "user" | "assistant"; content: string }[],
+  ): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
     const project: any = await projectService.getProject(projectId);
     const context = this.loadLatestContext(projectId)
       || project?.projectSummary
@@ -642,7 +676,7 @@ ${fullSummary.substring(0, 3000)}` }],
     const dbSummary = this.getDbSummary(projectId);
     const description = appDescription || project?.description || "";
 
-    const prompt = `You are a friendly assistant helping an app owner (non-technical person) understand their Telegram Mini App.
+    const systemPrompt = `You are a friendly assistant helping an app owner (non-technical person) understand their Telegram Mini App.
 Answer in simple, everyday language. NO programming terms, NO code, NO file names, NO technical jargon.
 Talk as if explaining to a friend who doesn't know anything about coding.
 Use markdown formatting: **bold**, lists (- item), headings (## Title) to keep it readable.
@@ -656,13 +690,21 @@ PROJECT CONTEXT:
 ${context.substring(0, 6000)}
 
 ${lastUpdate ? `LAST UPDATE SUMMARY:\n${lastUpdate.substring(0, 2000)}\n` : ""}
-${dbSummary ? `DB KEYS SUMMARY:\n${dbSummary}\n` : ""}
-USER QUESTION: ${question}`;
+${dbSummary ? `DB KEYS SUMMARY:\n${dbSummary}\n` : ""}`;
+
+    const messages: { role: "user" | "assistant"; content: string }[] = [];
+    if (conversationHistory && conversationHistory.length > 0) {
+      for (const msg of conversationHistory) {
+        messages.push({ role: msg.role, content: msg.content });
+      }
+    }
+    messages.push({ role: "user", content: question });
 
     const stream = this.client.messages.stream({
       model: "claude-sonnet-4-6",
       max_tokens: 2048,
-      messages: [{ role: "user", content: prompt }],
+      system: systemPrompt,
+      messages,
     });
 
     let fullText = "";
@@ -672,7 +714,12 @@ USER QUESTION: ${question}`;
     });
 
     const finalMessage = await stream.finalMessage();
-    return finalMessage.content[0]?.type === "text" ? finalMessage.content[0].text : fullText || "Unable to answer.";
+    const text = finalMessage.content[0]?.type === "text" ? finalMessage.content[0].text : fullText || "Unable to answer.";
+    return {
+      text,
+      inputTokens: finalMessage.usage?.input_tokens || 0,
+      outputTokens: finalMessage.usage?.output_tokens || 0,
+    };
   }
 
   async getSuggestions(projectId: string): Promise<{ title: string; description: string }[]> {
@@ -1672,7 +1719,7 @@ Use grep and read_file to verify current state before making changes. Use edit_f
 
     try {
       const response = await this.client.messages.create({
-        model: "claude-sonnet-4-6",
+        model: "claude-haiku-4-5-20251001",
         max_tokens: 4500,
         messages: [{
           role: "user",
