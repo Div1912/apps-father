@@ -1677,6 +1677,7 @@ async function openDetail(id) {
   let settingsRows = '';
   settingsRows += menuRowAction(t('detail_edit_info'), 'af-icon-edit-info', 'open-edit-info');
   settingsRows += menuRowAction(t('detail_quality'), 'af-icon-quality', 'open-quality');
+  settingsRows += menuRowAction(t('detail_regen_context'), 'af-icon-refresh', 'open-regen-context');
   if (hasFeature(p, 'get_code')) settingsRows += menuRow('Edit Code', 'af-icon-code', `${baseUrl}/editor/${p.id}/`);
   // if (hasFeature(p, 'admin_panel')) settingsRows += menuRow('Admin Panel', 'af-icon-admin', `${baseUrl}/admin/${p.id}/`);
   document.getElementById('detail-settings-rows').innerHTML = settingsRows;
@@ -1685,6 +1686,8 @@ async function openDetail(id) {
     ?.addEventListener('click', () => openEditInfo());
   document.getElementById('detail-settings-rows').querySelector('[data-action="open-quality"]')
     ?.addEventListener('click', () => openQuality(p.id));
+  document.getElementById('detail-settings-rows').querySelector('[data-action="open-regen-context"]')
+    ?.addEventListener('click', () => regenerateContext(p.id));
 
   document.getElementById('detail-money-rows').querySelector('[data-action="open-features"]')
     ?.addEventListener('click', () => openFeatures(p.id));
@@ -2451,6 +2454,49 @@ function openQuality(projectId) {
   });
 
   showView('quality');
+}
+
+// ═══ REGENERATE CONTEXT ═══
+
+async function regenerateContext(projectId) {
+  const btn = document.getElementById('detail-settings-rows')
+    ?.querySelector('[data-action="open-regen-context"]');
+  if (!btn) return;
+
+  const origHtml = btn.innerHTML;
+  btn.classList.add('regen-loading');
+  btn.innerHTML = `<span class="tm-icon af-icon-refresh regen-spin"></span><span>${t('detail_regen_loading')}</span>`;
+  btn.style.pointerEvents = 'none';
+  haptic('light');
+
+  try {
+    const res = await fetch(`${API_BASE}/regenerate-context/${projectId}`, {
+      method: 'POST',
+      headers: apiHeaders(),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed');
+
+    haptic('light');
+    btn.innerHTML = `<span class="tm-icon af-icon-refresh"></span><span>${t('detail_regen_done')}</span>`;
+    btn.classList.remove('regen-loading');
+    btn.classList.add('regen-success');
+    setTimeout(() => {
+      btn.innerHTML = origHtml;
+      btn.classList.remove('regen-success');
+      btn.style.pointerEvents = '';
+    }, 2500);
+  } catch (e) {
+    haptic('light');
+    btn.innerHTML = `<span class="tm-icon af-icon-refresh"></span><span>${t('detail_regen_error')}</span>`;
+    btn.classList.remove('regen-loading');
+    btn.classList.add('regen-error');
+    setTimeout(() => {
+      btn.innerHTML = origHtml;
+      btn.classList.remove('regen-error');
+      btn.style.pointerEvents = '';
+    }, 2500);
+  }
 }
 
 // ═══ ADMIN PANEL ═══

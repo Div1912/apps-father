@@ -946,6 +946,29 @@ export function createWebServer() {
     }
   });
 
+  // ── Regenerate Context API ──
+
+  app.post("/telegram-mini-app/api/regenerate-context/:projectId", async (req, res) => {
+    try {
+      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const projectId = req.params.projectId as string;
+      const project = await projectService.getProject(projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
+
+      const context = await agentService.regenerateContext(projectId);
+      res.json({
+        success: true,
+        message: "Context regenerated from source code",
+        preview: context.substring(0, 500) + "...",
+      });
+    } catch (err: any) {
+      console.error("[MiniApp API] Regenerate context error:", err);
+      res.status(500).json({ error: err.message || "Failed to regenerate context" });
+    }
+  });
+
   // ── Transfer Ownership API ──
 
   app.post("/telegram-mini-app/api/transfer/:projectId", async (req, res) => {
