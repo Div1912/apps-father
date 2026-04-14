@@ -75,6 +75,25 @@ function setInputDisabled(disabled) {
   }
 }
 
+function setInputFinalizing(active) {
+  const area = document.getElementById('chat-input-area');
+  const chatMessages = document.getElementById('chat-messages');
+  let overlay = document.getElementById('input-finalizing');
+  if (active) {
+    if (area) area.style.display = 'none';
+    if (!overlay && chatMessages) {
+      overlay = document.createElement('div');
+      overlay.id = 'input-finalizing';
+      overlay.className = 'input-finalizing';
+      overlay.innerHTML = `<span class="preparing-spinner"></span><span>${t('chat_finalizing') || 'Finalizing previous update, please wait...'}</span>`;
+      chatMessages.parentNode.insertBefore(overlay, chatMessages);
+    }
+  } else {
+    if (overlay) overlay.remove();
+    if (area) area.style.display = '';
+  }
+}
+
 const AVATAR_GRADIENTS = [
   ['#82b1ff', '#665fff'],
   ['#ffcd6a', '#ffa85c'],
@@ -733,9 +752,13 @@ async function loadTgsAnimation() {
   }
 }
 
+let wsGeneration = 0;
+
 function connectChatWS(projectId) {
+  const gen = ++wsGeneration;
+
   if (chatWs) {
-    try { chatWs.close(); } catch {}
+    try { chatWs.onclose = null; chatWs.close(); } catch {}
     chatWs = null;
   }
 
@@ -744,10 +767,12 @@ function connectChatWS(projectId) {
   chatWs = new WebSocket(wsUrl);
 
   chatWs.onopen = () => {
+    if (gen !== wsGeneration) return;
     chatWs.send(JSON.stringify({ type: 'auth', initData: tg?.initData || '' }));
   };
 
   chatWs.onmessage = (event) => {
+    if (gen !== wsGeneration) return;
     try {
       const data = JSON.parse(event.data);
       handleWSMessage(data);
@@ -755,8 +780,10 @@ function connectChatWS(projectId) {
   };
 
   chatWs.onclose = () => {
+    if (gen !== wsGeneration) return;
+    chatWs = null;
     setTimeout(() => {
-      if (currentView === 'chat' && chatProjectId === projectId) {
+      if (gen === wsGeneration && currentView === 'chat' && chatProjectId === projectId) {
         connectChatWS(projectId);
       }
     }, 3000);
@@ -826,6 +853,7 @@ function handleWSMessage(data) {
 
   if (data.type === 'message') {
     const msg = data.message;
+    if (msg.type === 'answer') return;
     if (msg.type === 'progress') {
       renderProgressBubble(msg);
     } else {
@@ -856,6 +884,51 @@ function handleWSMessage(data) {
     return;
   }
 
+  if (data.type === 'update_result') {
+    const el = document.getElementById(`msg-${data.messageId}`);
+    if (el) {
+      let html = `<div class="chat-result-header">${t('chat_update_completed') || 'Update Completed'}</div>`;
+      html += `<div class="chat-bubble-content">${formatContent(data.summary || '')}</div>`;
+      if (data.changelogUrl) {
+        html += `<div class="changelog-card" onclick="tg.openLink('${data.changelogUrl}', {try_instant_view: true})">
+          <div class="changelog-card-text">
+            <div class="changelog-card-title">${t('version_change_log')}</div>
+            <div class="changelog-card-desc">Telegraph</div>
+          </div>
+          <div class="changelog-card-arrow">›</div>
+        </div>`;
+      }
+      const existing = el.querySelector('.result-actions');
+      if (existing) html += existing.outerHTML;
+      const costEl = el.querySelector('.chat-progress-cost');
+      if (costEl) html += costEl.outerHTML;
+      el.innerHTML = html;
+    }
+    return;
+  }
+
+  if (data.type === 'remove_messages') {
+    if (data.messageIds && Array.isArray(data.messageIds)) {
+      for (const id of data.messageIds) {
+        const el = document.getElementById(`msg-${id}`);
+        if (el) {
+          el.style.transition = 'opacity 0.3s, transform 0.3s';
+          el.style.opacity = '0';
+          el.style.transform = 'scale(0.95)';
+          setTimeout(() => el.remove(), 300);
+        }
+      }
+    }
+    return;
+  }
+
+  if (data.type === 'finalizing_done') {
+    setInputFinalizing(false);
+    setProcessing(false);
+    setInputDisabled(false);
+    return;
+  }
+
   if (data.type === 'status_change') {
     if (currentProject) {
       currentProject.status = data.status;
@@ -868,8 +941,6 @@ function handleWSMessage(data) {
 
   if (data.type === 'status') {
     if (data.status === 'done') {
-      setProcessing(false);
-      setInputDisabled(false);
       setTyping(false);
       setHeaderWorking(false);
       if (isPlanningMode) enterPlanningMode(false);
@@ -913,6 +984,8 @@ async function loadChatHistory(projectId) {
     inner.innerHTML = '';
     let hasPlanOrResult = false;
     for (const msg of data.messages) {
+      if (msg.type === 'question' || msg.type === 'answer') continue;
+      if (msg.content === 'preparing_next_update') continue;
       if (msg.type === 'progress' && msg.percent === 100) {
         msg.type = 'result';
       }
@@ -935,6 +1008,11 @@ async function loadChatHistory(projectId) {
       isProcessing = true;
       setInputDisabled(true);
       setHeaderWorking(true);
+    }
+
+    if (data.finalizing) {
+      setInputFinalizing(true);
+      setInputDisabled(true);
     }
 
     skelEl.classList.add('hidden');
@@ -976,6 +1054,9 @@ function appendMessage(msg, animate = true) {
       setTyping(false);
       setHeaderWorking(false);
     }
+  } else if (msg.content === 'preparing_next_update' || msg.metadata?.preparing) {
+    setInputFinalizing(true);
+    return;
   } else if (msg.type === 'error') {
     el.className = 'chat-bubble chat-bubble--error';
     el.innerHTML = `<div class="chat-bubble-content">${esc(msg.content)}</div>`;
@@ -1318,9 +1399,11 @@ async function sendMessage() {
 async function sendAnswer(answer) {
   if (!chatProjectId) return;
 
-  document.querySelectorAll('.chat-option-btn').forEach(btn => {
-    if (btn.dataset.answer === answer) btn.classList.add('selected');
-    btn.disabled = true;
+  document.querySelectorAll('.chat-bubble--question').forEach(el => {
+    el.style.transition = 'opacity 0.3s, transform 0.3s';
+    el.style.opacity = '0';
+    el.style.transform = 'scale(0.95)';
+    setTimeout(() => el.remove(), 300);
   });
 
   try {
@@ -1329,10 +1412,6 @@ async function sendAnswer(answer) {
       headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ answer }),
     });
-
-    if (chatWs && chatWs.readyState === WebSocket.OPEN) {
-      chatWs.send(JSON.stringify({ type: 'answer', projectId: chatProjectId, answer }));
-    }
   } catch (err) {
     console.error('Failed to send answer:', err);
   }
@@ -1544,6 +1623,40 @@ function closeTestPreview() {
   if (overlay) overlay.remove();
 }
 
+/** Full-screen log viewer inside WebApp (iframe + #initData for API auth). */
+function openAgentLogViewer(projectId, versionNum) {
+  const raw = tg?.initData || '';
+  if (!raw) {
+    showToast('Cannot open log: missing Telegram session.', 'error');
+    return;
+  }
+  let overlay = document.getElementById('agent-log-overlay');
+  if (overlay) overlay.remove();
+
+  const base = `${location.origin}/telegram-mini-app/log-viewer.html?projectId=${encodeURIComponent(projectId)}&version=${encodeURIComponent(String(versionNum))}`;
+  const iframeSrc = `${base}#initData=${encodeURIComponent(raw)}`;
+
+  overlay = document.createElement('div');
+  overlay.id = 'agent-log-overlay';
+  overlay.className = 'test-preview-overlay';
+  overlay.innerHTML = `
+    <div class="test-preview-header">
+      <button class="test-preview-back" type="button" id="agent-log-back">← Back</button>
+      <span class="test-preview-title">${esc(t('version_view_log') || 'Agent log')} #${esc(String(versionNum))}</span>
+      <span class="test-preview-badge" style="background:#4facfe">LOG</span>
+    </div>
+    <iframe class="test-preview-iframe" title="Agent log" src="${iframeSrc}"></iframe>
+  `;
+  document.body.appendChild(overlay);
+  document.getElementById('agent-log-back')?.addEventListener('click', closeAgentLogViewer);
+  haptic('light');
+}
+
+function closeAgentLogViewer() {
+  const overlay = document.getElementById('agent-log-overlay');
+  if (overlay) overlay.remove();
+}
+
 function setHeaderWorking(working, pct) {
   const statusEl = document.getElementById('chat-app-status');
   if (!statusEl) return;
@@ -1634,7 +1747,7 @@ async function openDetail(id) {
   const version = p.currentVersion || 0;
   const cost = p.totalCostUsd ? `$${Number(p.totalCostUsd).toFixed(2)}` : '$0.00';
   document.getElementById('detail-info').innerHTML =
-    `Version: <b>${version}</b> · Total cost: <b>${cost}</b> · Quality: <b>Tier ${p.qualityTier || 1}</b>`;
+    `Version: <b>${version}</b> · Total cost: <b>${cost}</b> · Quality: <b>Tier ${p.qualityTier || 1}</b><br>Project ID: <b>${p.id}</b>`;
 
   const isLive = ['deployed', 'released'].includes(p.status);
   const baseUrl = location.origin;
@@ -2270,6 +2383,7 @@ function openVersionDetail(versionNum) {
   }
 
   if (v.hasLog) {
+    actionsHtml += `<a class="tm-row tm-row-link" id="btn-view-log"><span class="tm-icon af-icon-log"></span><span>${t('version_view_log')}</span></a>`;
     actionsHtml += `<a class="tm-row tm-row-link" id="btn-download-log"><span class="tm-icon af-icon-download"></span><span>${t('version_download_log')}</span></a>`;
   }
 
@@ -2317,6 +2431,11 @@ function openVersionDetail(versionNum) {
 
   document.getElementById('btn-changelog-link')?.addEventListener('click', () => {
     tg?.openLink(v.changelogUrl, { try_instant_view: true });
+  });
+
+  document.getElementById('btn-view-log')?.addEventListener('click', () => {
+    if (!currentProject) return;
+    openAgentLogViewer(currentProject.id, v.version);
   });
 
   document.getElementById('btn-download-log')?.addEventListener('click', async () => {
@@ -3246,6 +3365,14 @@ function init() {
 
   if (tg?.BackButton) {
     tg.BackButton.onClick(() => {
+      if (document.getElementById('agent-log-overlay')) {
+        closeAgentLogViewer();
+        return;
+      }
+      if (document.getElementById('test-preview-overlay')) {
+        closeTestPreview();
+        return;
+      }
       if (currentView === 'version-detail') {
         openVersions(currentProject.id);
       } else if (currentView === 'versions') {
@@ -3282,7 +3409,8 @@ function init() {
       } else if (currentView === 'detail') {
         showView('chat');
       } else if (currentView === 'chat') {
-        if (chatWs) { try { chatWs.close(); } catch {} chatWs = null; }
+        wsGeneration++;
+        if (chatWs) { try { chatWs.onclose = null; chatWs.close(); } catch {} chatWs = null; }
         chatProjectId = null;
         currentProject = null;
         currentToken = null;

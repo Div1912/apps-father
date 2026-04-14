@@ -13,6 +13,7 @@ import { getProjectFeatures } from "./features.service";
 import { AgentLogger } from "./agent-logger";
 import { commitService } from "./commit.service";
 import { MODEL_PRICING } from "./billing.service";
+import { ConventionExtractor } from "./convention-extractor";
 
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
 const SKILLS_DIR = path.join(process.cwd(), "skills");
@@ -270,6 +271,51 @@ BEST PRACTICES:
 - When modifying 3+ sections of a file, use write_file to rewrite the entire file instead of multiple edit_file calls. This is faster and avoids "old_string not found" errors.
 - When UPDATING existing code, read the full file first, then decide: small change = edit_file, large change = write_file.
 
+EFFICIENCY RULES (save tokens and iterations):
+
+1. PARALLEL READS: When you need to read multiple files or sections, 
+   read them ALL in ONE turn. Never read one file per iteration.
+   BAD:  iter1: read_file(index.html) → iter2: read_file(app.js) → iter3: read_file(styles.css)
+   GOOD: iter1: read_file(index.html) + read_file(app.js, offset=4405, limit=10) + read_file(app.js, offset=470, limit=15)
+
+2. PARALLEL EDITS: When you have multiple independent edits ready, 
+   do them ALL in ONE turn. Don't spread 1 edit per iteration.
+   BAD:  iter1: edit_file(html) → iter2: edit_file(app.js dom) → iter3: edit_file(app.js switchTab)
+   GOOD: iter1: edit_file(html) + edit_file(app.js dom) + edit_file(app.js switchTab)
+
+3. NEVER call set_progress alone. Always combine it with a real tool 
+   (read_file, edit_file, grep, shell, deploy_to_dev). 
+   If you have nothing else to do, skip set_progress entirely.
+
+4. TRUST PASSPORT LINE NUMBERS. The project context has accurate line 
+   numbers. Do NOT grep to find code that the passport already locates.
+   If passport says "loadLeaderboard (L3931)" — read_file at offset 3931, 
+   don't grep for it first.
+
+5. TRUST edit_file RESULTS. When edit_file returns "OK: Replaced 1 
+   occurrence", the edit succeeded. Do NOT grep or read_file to verify 
+   the edit was applied. Only re-check if edit_file returned an error.
+
+6. USE shell FOR MULTI-PATTERN GREP. The grep tool does not support 
+   pipe (|) for alternatives. Use shell("grep -n 'pattern1\|pattern2' file") 
+   instead. Never retry a failed grep tool call — switch to shell immediately.
+
+7. COMBINE check_todo WITH REAL WORK. Call check_todo in parallel with 
+   the edit or action that completes it, not in a separate turn.
+   BAD:  iter1: edit_file(...) → iter2: check_todo(1)
+   GOOD: iter1: edit_file(...) + check_todo(1)
+
+8. SKIP REDUNDANT VERIFICATION. After making changes:
+   - Syntax check: YES (one shell call)
+   - Deploy + test endpoint: YES (if you changed backend routes)
+   - grep to confirm deleted code is gone: NO (trust edit_file)
+   - grep to confirm remaining code exists: NO (you just read it)
+   - Read file to "see how it looks": NO (trust your edit)
+
+9. DON'T TEST UNCHANGED ENDPOINTS. If your changes are frontend-only 
+   (HTML/CSS/JS) and backend routes were not modified, skip http_request 
+   testing. Syntax check + deploy is sufficient.
+
 DEBUGGING RULES:
 - If http_request returns the same wrong result 3 times after different fixes, STOP and use server_logs to check for errors
 - If you cannot fix a bug after 5 attempts, call done() with a summary explaining the issue — do NOT keep retrying the same approach
@@ -288,12 +334,39 @@ WORKFLOW FOR NEW APP:
 9. Call done() ONLY after verifying all endpoints work
 
 WORKFLOW FOR UPDATE:
-1. grep + read_file (parallel) to find relevant code
-2. Make changes with edit_file (small) or write_file (large)
-3. If changing backend routes, grep frontend for affected apiCall URLs
-4. Test changed endpoints with http_request
-5. Call done()
+1. READ THE PROJECT CONTEXT in your prompt FIRST. It contains:
+   - Full architecture, all routes, all DB keys, all function names
+   - Code Locations with exact line numbers for every route/function
+   - UI structure and CSS conventions
+   DO NOT grep or read_file to "understand the project" — you already have that info.
+2. Use Code Locations to do TARGETED read_file(path, offset, limit) ONLY for the
+   exact lines you need to edit. Example: context says "POST /register: line 2015"
+   → read_file("backend/routes.js", offset=2015, limit=50) — NOT grep("register").
+3. Plan ALL changes before writing any code. Decide which files and which lines.
+4. Make changes with edit_file (small) or write_file (large).
+5. If changing backend routes, grep frontend for affected apiCall URLs.
+6. Run syntax check: shell("node -e \"new Function(require('fs').readFileSync('backend/routes.js','utf8'))\"") BEFORE deploy.
+7. Call done().
 IMPORTANT: Do NOT call telegram_api(setMyDescription) during updates — only set bot description on first build.
+
+AFTER WRITING CODE — DO NOT RE-READ:
+- After a successful edit_file or write_file, the confirmation ("OK: Replaced 1 occurrence" / "OK: Written N lines") proves the change was applied. Do NOT re-read the same file to "verify" your edit.
+- Only re-read a file if you need the EXACT current content for a SUBSEQUENT edit_file on that same file (because old_string must match current content).
+- If you're done editing a file, move on to the next file or task. Never read a file just to confirm it looks right.
+
+TOKEN BUDGET RULE:
+You have a limited token budget. Every unnecessary grep, read_file, or shell command
+costs ~3000+ tokens per round trip. A typical update should take 15-35 iterations.
+If you're at iteration 40+ without writing code, something is wrong — start writing.
+
+TESTING WITH http_request:
+- Auth-protected endpoints (those using getUserId/initData) will ALWAYS return 401
+  when tested from http_request because you don't have valid initData.
+  DO NOT test these — it wastes iterations. The 401 proves nothing.
+- ONLY test: unauthenticated endpoints, static file serving, or endpoints you
+  can call with valid test data.
+- ALWAYS run syntax check on routes.js and app.js BEFORE deploy_to_dev.
+- deploy_to_dev is mainly for the USER to visually verify — not for your http_request tests.
 
 ASKING THE USER (ask_user tool):
 - Use ask_user ONLY when you need information the user MUST provide: API keys, credentials, external account IDs, or a choice between fundamentally different approaches where guessing wrong wastes significant effort.
@@ -303,10 +376,12 @@ ASKING THE USER (ask_user tool):
 - If the user clicks Skip or doesn't answer, proceed with the best default.
 
 PROGRESS REPORTING:
-- You will receive a TASK CHECKLIST in the prompt. After completing each task, call check_todo(id) with the task number (1-based). This updates a live checklist the user sees.
+- FIRST call create_todo() with your task breakdown (2-8 short actionable items). This creates a live checklist the user sees.
+- After completing each task, call check_todo(id) with the task number (1-based).
 - Call check_todo in parallel with other tool calls — it costs nothing.
 - Call done() ONLY after ALL checklist tasks are checked off.
 - You may also call set_progress(percent, message) for fine-grained status updates between checklist items.
+- MANDATORY final tasks are always appended to your checklist: deploy & test, then finish with done().
 
 PARALLEL TOOL CALLS — USE AGGRESSIVELY:
 - Read multiple files at once: read_file(routes.js) + read_file(app.js) + read_file(styles.css) in ONE turn
@@ -315,6 +390,15 @@ PARALLEL TOOL CALLS — USE AGGRESSIVELY:
 - Test multiple endpoints: http_request(GET /user) + http_request(GET /leaderboard) in ONE turn
 - Configure bot: telegram_api(setMyDescription) + telegram_api(setMyCommands) + telegram_api(setChatMenuButton) in ONE turn
 - NEVER make 1 tool call when you could make 2-5 independent calls in the same turn
+- check_todo calls are FREE — always batch them with other tool calls, never alone
+
+MANDATORY PARALLELISM EXAMPLES:
+WRONG (5 iterations):
+  Turn 1: grep("register") → Turn 2: grep("start_param") → Turn 3: grep("deposit")
+  → Turn 4: read_file(routes.js:2015) → Turn 5: read_file(app.js:1238)
+RIGHT (1-2 iterations):
+  Turn 1: grep("register") + grep("start_param") + grep("deposit") +
+           read_file(routes.js, offset=2015, limit=50) + read_file(app.js, offset=1238, limit=20)
 
 ${FRONTEND_SKILL ? "FRONTEND PATTERNS REFERENCE:\n" + FRONTEND_SKILL : ""}
 
@@ -490,6 +574,17 @@ const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "create_todo",
+    description: "Create your task checklist. Call this FIRST before starting any work. Break down the request into concrete, actionable items. The user sees this as a live checklist.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        items: { type: "array" as const, items: { type: "string" as const }, description: "Array of short, actionable task descriptions (2-8 items)" },
+      },
+      required: ["items"],
+    },
+  },
+  {
     name: "check_todo",
     description: "Mark a checklist item as done. Call this after completing each task from your checklist. The user sees a live checklist that updates when you call this.",
     input_schema: {
@@ -510,14 +605,34 @@ const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
-    name: "done",
-    description: "Call this when you've finished all changes. Provide a detailed summary of what was done.",
+    name: "short_summary",
+    description: "Write a short user-facing summary of this update. Call this AFTER deploy & test, BEFORE done(). Format: 'Update title (3-5 words)\\n\\n1-2 sentences in simple non-technical language.' No jargon.",
     input_schema: {
       type: "object" as const,
       properties: {
-        summary: { type: "string" as const, description: "Detailed summary of all changes made" },
+        text: { type: "string" as const, description: "Short user-facing summary (no technical jargon)" },
       },
-      required: ["summary"],
+      required: ["text"],
+    },
+  },
+  {
+    name: "summary",
+    description: "Write a detailed technical summary/changelog. Call this AFTER short_summary, BEFORE done(). Include architecture decisions, new files, changes made, and anything the next update should know.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        text: { type: "string" as const, description: "Detailed technical summary of all changes" },
+      },
+      required: ["text"],
+    },
+  },
+  {
+    name: "done",
+    description: "Signal that the update is complete. You MUST call short_summary() and summary() before calling this.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
     },
   },
 ];
@@ -539,6 +654,7 @@ export interface AgentProgress {
 
 export interface AgentResult {
   summary: string;
+  shortSummary: string;
   model: string;
   inputTokens: number;
   outputTokens: number;
@@ -550,10 +666,10 @@ export interface AgentResult {
 }
 
 export const QUALITY_TIERS: Record<number, { model: string; thinking: number; maxIterations: number }> = {
-  1: { model: "claude-sonnet-4-6", thinking: 8000, maxIterations: 60 },
-  2: { model: "claude-sonnet-4-6", thinking: 16000, maxIterations: 100 },
-  3: { model: "claude-opus-4-6", thinking: 8000, maxIterations: 60 },
-  4: { model: "claude-opus-4-6", thinking: 16000, maxIterations: 100 },
+  1: { model: "claude-sonnet-4-6", thinking: 4000, maxIterations: 60 },
+  2: { model: "claude-sonnet-4-6", thinking: 4000, maxIterations: 100 },
+  3: { model: "claude-opus-4-6", thinking: 4000, maxIterations: 60 },
+  4: { model: "claude-opus-4-6", thinking: 4000, maxIterations: 100 },
 };
 
 export class AgentService {
@@ -601,64 +717,6 @@ export class AgentService {
     return `\nPAID FEATURES STATUS:\n- Stars Payment System: ${starsStatus}\n- TON Payment System: ${tonStatus}\n`;
   }
 
-  async generateChecklist(description: string, plan?: string, lang?: string): Promise<string[]> {
-    try {
-      const langNote = lang && lang !== "en"
-        ? ` Write the task items in ${lang === "ru" ? "Russian" : "Ukrainian"}.`
-        : "";
-      const prompt = plan
-        ? `Break down this app build plan into concrete implementation tasks (short, actionable items a developer would check off). Return ONLY a JSON array of strings.${langNote}\n\nPlan:\n${plan}\n\nDescription:\n${description}`
-        : `Break down this update request into concrete implementation tasks (short, actionable items a developer would check off). If the request is simple (1-2 small changes), return just 2-3 items. Only use more items (up to 8) for complex multi-part requests. Return ONLY a JSON array of strings.${langNote}\n\nRequest:\n${description}`;
-
-      const response = await this.client.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 1024,
-        messages: [{ role: "user", content: prompt }],
-      });
-
-      const text = response.content[0]?.type === "text" ? response.content[0].text : "[]";
-      const arrMatch = text.match(/\[[\s\S]*\]/);
-      const raw = arrMatch ? arrMatch[0] : text;
-      let items: unknown;
-      try { items = JSON.parse(raw); } catch { items = null; }
-      if (Array.isArray(items) && items.length > 0) {
-        return items.filter((s): s is string => typeof s === "string").slice(0, 10);
-      }
-    } catch (err) {
-      console.error("[Agent] Failed to generate checklist:", err);
-    }
-    return [];
-  }
-
-  async summarizeShort(fullSummary: string, updateNum: number): Promise<string> {
-    try {
-      const response = await this.client.messages.create({
-        model: "claude-haiku-3.5-20241022",
-        max_tokens: 400,
-        messages: [{ role: "user", content: `Summarize this technical changelog for a non-technical app owner. Output EXACTLY this format (plain text, no markdown symbols):
-
-Update #${updateNum}: [Short title, 3-5 words]
-
-[1 sentence description of what was done]
-
-- [Change 1 in simple words]
-- [Change 2 in simple words]
-- [Change 3 if needed]
-
-Rules:
-- No technical jargon (no "CSS", "HTML", "API", "endpoint", "component", "class", "function")
-- Use simple user-facing language (e.g. "Changed button color" not "Updated CSS background-color property")
-- Max 5 bullet points
-- Keep it very short
-
-CHANGELOG:
-${fullSummary.substring(0, 3000)}` }],
-      });
-      return response.content[0]?.type === "text" ? response.content[0].text.trim() : `Update #${updateNum}: Changes applied`;
-    } catch {
-      return `Update #${updateNum}: Changes applied`;
-    }
-  }
 
   async answerQuestionStream(
     projectId: string,
@@ -793,7 +851,7 @@ Keep suggestions practical and specific to THIS app.`;
     plan: string,
     onProgress?: (p: AgentProgress) => Promise<void>,
     onAskUser?: (question: string, options: string[]) => Promise<string>,
-    checklist?: string[],
+    onCreateTodo?: (items: string[]) => Promise<void>,
     onCheckTodo?: (id: number) => Promise<void>,
     lang?: string,
     userBalance?: number,
@@ -817,7 +875,7 @@ ${plan}
 ${featureGating}
 Create all necessary files (frontend/index.html, frontend/styles.css, frontend/app.js, backend/routes.js) and configure the bot. Database is handled via db.get/db.set in routes.js — no schema setup needed. Make it beautiful and functional. Use deploy_to_dev() to deploy and test your code via the Dev URLs. In frontend code, use /api/${projectId}/ as the API base URL (this will be rewritten to /devapi/ in dev mode automatically).${langInstruction}`;
 
-    return this.runAgent(projectId, prompt, onProgress, onAskUser, checklist, onCheckTodo, userBalance);
+    return this.runAgent(projectId, prompt, onProgress, onAskUser, onCreateTodo, onCheckTodo, userBalance);
   }
 
   async updateApp(
@@ -826,7 +884,7 @@ Create all necessary files (frontend/index.html, frontend/styles.css, frontend/a
     onProgress?: (p: AgentProgress) => Promise<void>,
     attachments?: { localPath: string; projectPath: string; originalName: string; caption?: string }[],
     onAskUser?: (question: string, options: string[]) => Promise<string>,
-    checklist?: string[],
+    onCreateTodo?: (items: string[]) => Promise<void>,
     onCheckTodo?: (id: number) => Promise<void>,
     lang?: string,
     userBalance?: number,
@@ -834,14 +892,29 @@ Create all necessary files (frontend/index.html, frontend/styles.css, frontend/a
     const project: any = await projectService.getProject(projectId);
     const contextParts: string[] = [];
 
-    // Load structured context.md from latest commit
+    // Determine current commit number for context decisions
+    let currentCommitNum = 0;
+    try {
+      const commitsDir = path.join(PROJECTS_DIR, projectId, "commits");
+      if (fs.existsSync(commitsDir)) {
+        const nums = fs.readdirSync(commitsDir).map(Number).filter(n => !isNaN(n));
+        if (nums.length > 0) currentCommitNum = Math.max(...nums);
+      }
+    } catch {}
+
+    // Load structured context from latest commit
     const latestContext = this.loadLatestContext(projectId);
     if (latestContext) {
-      contextParts.push(`PROJECT CONTEXT:\n${latestContext}`);
+      const maxContextChars = 64000; // ~4000 tokens
+      const truncated = latestContext.length > maxContextChars
+        ? latestContext.substring(0, maxContextChars) + "\n...[context truncated]"
+        : latestContext;
+      contextParts.push(`PROJECT CONTEXT:\n${truncated}`);
     } else if (project?.projectSummary) {
       contextParts.push(`PROJECT CONTEXT (from previous builds):\n${project.projectSummary}`);
     }
-    if (project?.plan) {
+    // Only include original plan for the first few updates — it becomes stale
+    if (project?.plan && currentCommitNum <= 3) {
       contextParts.push(`ORIGINAL PLAN:\n${project.plan}`);
     }
 
@@ -872,7 +945,7 @@ ${context}Update request: ${updateDescription}
 ${attachmentInfo}${featureGating}
 Use grep and read_file to verify current state before making changes. Use edit_file for targeted modifications. Use deploy_to_dev() to deploy and test your changes via the Dev URLs.${langInstruction}`;
 
-    return this.runAgent(projectId, prompt, onProgress, onAskUser, checklist, onCheckTodo, userBalance, attachments);
+    return this.runAgent(projectId, prompt, onProgress, onAskUser, onCreateTodo, onCheckTodo, userBalance, attachments);
   }
 
   private async runAgent(
@@ -880,7 +953,7 @@ Use grep and read_file to verify current state before making changes. Use edit_f
     userPrompt: string,
     onProgress?: (p: AgentProgress) => Promise<void>,
     onAskUser?: (question: string, options: string[]) => Promise<string>,
-    checklist?: string[],
+    onCreateTodo?: (items: string[]) => Promise<void>,
     onCheckTodo?: (id: number) => Promise<void>,
     userBalance?: number,
     attachments?: { localPath: string; projectPath: string; originalName: string; caption?: string }[],
@@ -921,18 +994,13 @@ Use grep and read_file to verify current state before making changes. Use edit_f
 
     let finalPrompt = userPrompt;
     const checklistDone = new Set<number>();
+    let checklist: string[] = [];
     const mandatoryTasks = [
-      "Deploy & test: call deploy_to_dev(), verify key endpoints with http_request. Do NOT mark done until you have tested.",
-      "Summarizing: call done() with a detailed summary of all changes made. Include architecture decisions, new files, and anything the next update should know.",
+      "Deploy & test: call deploy_to_dev(), verify key endpoints with http_request.",
+      "Summarize: call short_summary() then summary() then done().",
     ];
-    const fullChecklist = checklist ? [...checklist, ...mandatoryTasks] : [...mandatoryTasks];
-    const checklistText = fullChecklist.map((item, i) => `${i + 1}. ${item}`).join("\n");
-    if (checklist && checklist.length > 0) {
-      finalPrompt += `\n\nYOUR TASK CHECKLIST (complete each item, then call check_todo(id) to mark it done):\n${checklistText}\n\nYou MUST call check_todo(id) after completing each task. Call done() only after ALL tasks are checked off.`;
-    } else {
-      finalPrompt += `\n\nMANDATORY FINAL STEPS (call check_todo(id) for each before calling done()):\n${checklistText}`;
-    }
-    checklist = fullChecklist;
+    finalPrompt += `\n\nFIRST STEP: Call create_todo() with your task breakdown before starting any work. Your last 2 tasks will always be auto-appended: deploy & test, then summarize & finish.
+FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) → summary(detailed technical changelog) → done(). Never set progress to 100% before calling short_summary and summary.`;
 
     logger.header(tierConfig.model, finalPrompt);
 
@@ -966,6 +1034,7 @@ Use grep and read_file to verify current state before making changes. Use edit_f
     ];
 
     let summary = "";
+    let shortSummary = "";
     let iterations = 0;
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
@@ -989,10 +1058,12 @@ Use grep and read_file to verify current state before making changes. Use edit_f
       } as any);
 
       const usage = response.usage as any;
-      totalInputTokens += usage?.input_tokens || 0;
-      totalOutputTokens += usage?.output_tokens || 0;
+      const iterIn = usage?.input_tokens || 0;
+      const iterOut = usage?.output_tokens || 0;
       const cached = usage?.cache_read_input_tokens || 0;
       const cacheCreated = usage?.cache_creation_input_tokens || 0;
+      totalInputTokens += iterIn;
+      totalOutputTokens += iterOut;
       totalCacheReadTokens += cached;
       totalCacheWriteTokens += cacheCreated;
       if (cached > 0 || cacheCreated > 0) {
@@ -1011,7 +1082,7 @@ Use grep and read_file to verify current state before making changes. Use edit_f
       messages.push({ role: "assistant", content: assistantContent });
 
       logger.iteration(iterations, tierConfig.model);
-      logger.tokens(totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens);
+      logger.tokens(totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens, iterIn, iterOut, cached, cacheCreated, liveCostUsd);
 
       const thinkingBlocks = assistantContent.filter(b => (b as any).type === "thinking");
       const textBlocks = assistantContent.filter(b => b.type === "text");
@@ -1392,29 +1463,57 @@ Use grep and read_file to verify current state before making changes. Use edit_f
               break;
             }
 
+            case "create_todo": {
+              const items = (args.items || []).filter((s: any) => typeof s === "string").slice(0, 10);
+              const userItemCount = items.length;
+              checklist = [...items, ...mandatoryTasks];
+              checklistDone.clear();
+              if (onCreateTodo) {
+                try { await onCreateTodo(items); } catch {}
+              }
+              result = `OK: Checklist created with ${checklist.length} tasks (including mandatory deploy & finish steps). Use check_todo(id) to mark each done.`;
+              console.log(`[Agent] 📋 create_todo: ${checklist.length} tasks (${userItemCount} user + ${mandatoryTasks.length} mandatory)`);
+              break;
+            }
+
             case "check_todo": {
               const todoId = Math.round(args.id);
-              if (checklist && todoId >= 1 && todoId <= checklist.length) {
+              if (checklist.length > 0 && todoId >= 1 && todoId <= checklist.length) {
                 checklistDone.add(todoId);
-                if (onCheckTodo) {
+                const userItemCount = checklist.length - mandatoryTasks.length;
+                if (onCheckTodo && todoId <= userItemCount) {
                   try { await onCheckTodo(todoId); } catch {}
                 }
                 result = `OK: Task ${todoId} marked as done (${checklistDone.size}/${checklist.length} completed)`;
                 console.log(`[Agent] ✅ check_todo(${todoId}): "${checklist[todoId - 1]}" — ${checklistDone.size}/${checklist.length} done`);
               } else {
-                result = `Error: Invalid task ID ${todoId}`;
+                result = `Error: Invalid task ID ${todoId}. ${checklist.length === 0 ? "Call create_todo first." : ""}`;
               }
               break;
             }
 
+            case "short_summary": {
+              shortSummary = args.text || "";
+              result = "OK: Short summary saved.";
+              console.log(`[Agent] 📝 short_summary: ${shortSummary.substring(0, 100)}`);
+              break;
+            }
+
+            case "summary": {
+              summary = args.text || "Changes applied";
+              result = "OK: Summary saved. Now call done().";
+              console.log(`[Agent] 📝 summary: ${summary.substring(0, 200)}`);
+              break;
+            }
+
             case "done": {
-              summary = args.summary || "Changes applied";
+              if (!summary) summary = "Changes applied";
+              if (!shortSummary) shortSummary = summary.split("\n")[0].substring(0, 200);
               currentPercent = 100;
-              if (checklist && checklist.length > 0 && checklistDone.size < checklist.length) {
+              if (checklist.length > 0 && checklistDone.size < checklist.length) {
                 const missing = checklist.filter((_, i) => !checklistDone.has(i + 1));
                 console.log(`[Agent] ⚠️ done() called with ${checklist.length - checklistDone.size} unchecked tasks: ${missing.join(", ")}`);
               }
-              await progress({ action: "Summarizing...", detail: "", percent: 100 });
               console.log(`[Agent] ✅ Done after ${iterations} iterations | Total tokens: in=${totalInputTokens} out=${totalOutputTokens}`);
 
               if (botToken) {
@@ -1428,7 +1527,6 @@ Use grep and read_file to verify current state before making changes. Use edit_f
                     }),
                   });
                 } catch {}
-
               }
 
               try {
@@ -1436,23 +1534,14 @@ Use grep and read_file to verify current state before making changes. Use edit_f
                 await projectService.storeGeneratedCode(projectId, code);
               } catch {}
 
-              // Generate structured context.md via Claude
-              try {
-                const project = await projectService.getProject(projectId);
-                await this.compactContext(projectId, projectDir, summary, commitNum, project?.description || undefined, project?.plan || undefined);
-              } catch (err) {
-                console.error("[Agent] Failed to generate context:", err);
-              }
-
               bustCache(projectDir);
-              // Final sync commit folder to development/
               try { commitService.syncToDev(projectId, projectDir); } catch {}
               toolResults.push({ type: "tool_result", tool_use_id: id, content: "OK" });
               messages.push({ role: "user", content: toolResults });
               logger.done(summary, iterations, totalInputTokens, totalOutputTokens);
               const logFilePath = logger.getLogPath();
               logger.close();
-              return { summary, model: tierConfig.model, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath, commitNum, commitDir };
+              return { summary, shortSummary, model: tierConfig.model, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath, commitNum, commitDir };
             }
 
             default:
@@ -1470,18 +1559,25 @@ Use grep and read_file to verify current state before making changes. Use edit_f
 
       messages.push({ role: "user", content: toolResults });
 
-      // Prune large tool inputs from older assistant messages to reduce token usage
       // this.pruneConversation(messages);
+
+      // Metrics: log message sizes and detect stuck exploration
+      const msgSize = JSON.stringify(messages).length;
+      const estimatedTokens = Math.round(msgSize / 4);
+      console.log(`[Agent] 📊 Iter ${iterations} | Messages: ${messages.length} | ~${estimatedTokens} tokens | Cost: $${liveCostUsd.toFixed(4)}`);
+
+      const hasWrite = toolBlocks.some(b =>
+        b.type === "tool_use" && ["write_file", "edit_file"].includes(b.name)
+      );
+      if (!hasWrite && iterations > 5) {
+        console.warn(`[Agent] ⚠️ Iteration ${iterations} had no writes — agent may be stuck in exploration`);
+      }
     }
 
-    // Fallback: store code and context even if done() wasn't called
+    // Fallback: store code even if done() wasn't called
     try {
       const code = this.getProjectCode(projectDir);
       await projectService.storeGeneratedCode(projectId, code);
-    } catch {}
-    try {
-      const project = await projectService.getProject(projectId);
-      await this.compactContext(projectId, projectDir, summary || "Agent stopped", commitNum, project?.description || undefined, project?.plan || undefined);
     } catch {}
 
     bustCache(projectDir);
@@ -1494,6 +1590,7 @@ Use grep and read_file to verify current state before making changes. Use edit_f
 
     return {
       summary: summary || "App updated (agent reached iteration limit)",
+      shortSummary: shortSummary || summary?.split("\n")[0]?.substring(0, 200) || "Update completed",
       model: tierConfig.model,
       inputTokens: totalInputTokens,
       outputTokens: totalOutputTokens,
@@ -1548,8 +1645,7 @@ Use grep and read_file to verify current state before making changes. Use edit_f
   }
 
   private pruneConversation(messages: Anthropic.MessageParam[]): void {
-    // Keep last 8 messages intact (4 iterations) for accurate edit_file context
-    const keepRecent = 8;
+    const keepRecent = 6; // 3 iterations (user+assistant pairs)
     const pruneUntil = messages.length - keepRecent;
     if (pruneUntil <= 1) return;
 
@@ -1557,15 +1653,21 @@ Use grep and read_file to verify current state before making changes. Use edit_f
       const msg = messages[i];
 
       if (msg.role === "assistant" && Array.isArray(msg.content)) {
-        for (const block of msg.content as any[]) {
+        // Remove thinking blocks from old messages (in-place to avoid reassignment)
+        const arr = msg.content as any[];
+        for (let j = arr.length - 1; j >= 0; j--) {
+          if (arr[j].type === "thinking") arr.splice(j, 1);
+        }
+
+        for (const block of arr) {
           if (block.type !== "tool_use") continue;
 
-          if (block.name === "write_file" && block.input?.content && block.input.content.length > 200) {
-            const summary = this.extractCodeSummary(block.input.content, block.input.path);
-            block.input = { path: block.input.path, content: summary };
+          if (block.name === "write_file" && block.input?.content) {
+            const lines = block.input.content.split("\n").length;
+            block.input = { path: block.input.path, content: `[written ${lines} lines to ${block.input.path}]` };
           }
 
-          if (block.name === "edit_file" && block.input?.old_string && block.input.old_string.length > 200) {
+          if (block.name === "edit_file" && block.input?.old_string) {
             block.input = {
               path: block.input.path,
               old_string: `[${block.input.old_string.length} chars replaced]`,
@@ -1578,11 +1680,26 @@ Use grep and read_file to verify current state before making changes. Use edit_f
       if (msg.role === "user" && Array.isArray(msg.content)) {
         for (const block of msg.content as any[]) {
           if (block.type !== "tool_result") continue;
-          if (typeof block.content === "string" && block.content.length > 2000) {
-            block.content = block.content.substring(0, 800) + `\n...[truncated from ${block.content.length} chars]`;
+          if (typeof block.content === "string" && block.content.length > 300) {
+            if (block.content.startsWith("OK:")) continue;
+            block.content = block.content.substring(0, 150) + `\n...[cleared: ${block.content.length} chars]`;
           }
         }
       }
+    }
+
+    // Emergency pruning if context is still too large
+    const estimatedTokens = JSON.stringify(messages).length / 4;
+    if (estimatedTokens > 150000 && messages.length > 8) {
+      console.warn(`[Agent] ⚠️ Emergency prune: ~${Math.round(estimatedTokens)} tokens`);
+      const first = messages[0]; // user prompt
+      // Keep last 3 pairs (6 messages) to maintain alternation
+      let keepFrom = messages.length - 6;
+      // Ensure we start with an assistant message (to follow the first user message)
+      if (messages[keepFrom]?.role === "user") keepFrom++;
+      const recent = messages.slice(keepFrom);
+      messages.length = 0;
+      messages.push(first, ...recent);
     }
   }
 
@@ -1685,6 +1802,197 @@ Use grep and read_file to verify current state before making changes. Use edit_f
     return { fileTree, dbKeys, npmPackages };
   }
 
+  private extractCodeLocations(commitDir: string): string {
+    const locations: string[] = [];
+    const scanFile = (relPath: string) => {
+      const filePath = path.join(commitDir, relPath);
+      if (!fs.existsSync(filePath)) return;
+      let lines: string[];
+      try { lines = fs.readFileSync(filePath, "utf-8").split("\n"); } catch { return; }
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+
+        const routeMatch = line.match(/router\.(get|post|put|delete|patch)\s*\(\s*['"`]([^'"`]+)['"`]/);
+        if (routeMatch) {
+          locations.push(`- ${relPath}:${i + 1} — ${routeMatch[1].toUpperCase()} ${routeMatch[2]}`);
+          continue;
+        }
+        const funcMatch = line.match(/^(?:  )?(?:async\s+)?function\s+(\w+)\s*\(/);
+        if (funcMatch) {
+          locations.push(`- ${relPath}:${i + 1} — ${funcMatch[1]}()`);
+          continue;
+        }
+        const constFuncMatch = line.match(/^(?:  )?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:\(|function)/);
+        if (constFuncMatch) {
+          locations.push(`- ${relPath}:${i + 1} — ${constFuncMatch[1]}()`);
+          continue;
+        }
+        const iifeMatch = line.match(/^(?:window\.(\w+)\s*=|const\s+(\w+)\s*=\s*\(\(\)\s*=>)/);
+        if (iifeMatch) {
+          const name = iifeMatch[1] || iifeMatch[2];
+          locations.push(`- ${relPath}:${i + 1} — ${name} (IIFE/module)`);
+          continue;
+        }
+        if (line.match(/module\.exports\.ws\s*=/)) {
+          locations.push(`- ${relPath}:${i + 1} — module.exports.ws (WebSocket handler)`);
+          continue;
+        }
+        if (line.match(/module\.exports\s*[.=]/)) {
+          locations.push(`- ${relPath}:${i + 1} — module.exports`);
+          continue;
+        }
+        const constMatch = line.match(/^(?:  )?const\s+((?:[A-Z_]{2,}|BONUS_TIERS|DJM_PER_TON|ADMIN_USERNAMES))\s*=/);
+        if (constMatch) {
+          locations.push(`- ${relPath}:${i + 1} — ${constMatch[1]} (constant)`);
+        }
+      }
+    };
+
+    scanFile("backend/routes.js");
+    scanFile("frontend/app.js");
+
+    // Scan additional backend files
+    const backendDir = path.join(commitDir, "backend");
+    if (fs.existsSync(backendDir)) {
+      for (const f of fs.readdirSync(backendDir)) {
+        if (f !== "routes.js" && f.endsWith(".js")) {
+          scanFile(`backend/${f}`);
+        }
+      }
+    }
+
+    return locations.length > 0 ? locations.join("\n") : "No code locations extracted";
+  }
+
+  private readCodeForContext(commitDir: string): string {
+    const BINARY_EXTS = new Set([".db", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp3", ".wav", ".mp4", ".ico", ".svg"]);
+    const parts: string[] = [];
+    const readDir = (dir: string, prefix: string) => {
+      if (!fs.existsSync(dir)) return;
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        const ext = path.extname(entry.name).toLowerCase();
+        if (BINARY_EXTS.has(ext)) continue;
+        try {
+          const content = fs.readFileSync(path.join(dir, entry.name), "utf-8");
+          const maxChars = 500000;
+          const truncated = content.length > maxChars
+            ? content.substring(0, maxChars) + `\n...[truncated from ${content.length} chars]`
+            : content;
+          parts.push(`--- ${prefix}/${entry.name} (${content.split("\n").length} lines) ---\n${truncated}`);
+        } catch {}
+      }
+    };
+    readDir(path.join(commitDir, "frontend"), "frontend");
+    readDir(path.join(commitDir, "backend"), "backend");
+    return parts.join("\n\n");
+  }
+
+  private async generatePassport(opts: {
+    projectId: string;
+    commitDir: string;
+    commitNum: number;
+    description?: string;
+    doneSummary?: string;
+    prevPassport?: string;
+  }): Promise<string> {
+    const { projectId, commitDir, commitNum, description, doneSummary, prevPassport } = opts;
+    const { fileTree, dbKeys, npmPackages } = this.gatherProjectInfo(commitDir);
+    const extractor = new ConventionExtractor();
+    const { structure, conventions } = extractor.extract(commitDir);
+
+    const inputParts: string[] = [];
+    if (description) inputParts.push(`APP DESCRIPTION: ${description}`);
+    if (structure) inputParts.push(`CODE STRUCTURE MAP:\n${structure}`);
+    if (conventions) inputParts.push(`CODE CONVENTION SAMPLES:\n${conventions}`);
+    if (fileTree) inputParts.push(`FILE TREE:\n${fileTree}`);
+    if (dbKeys) inputParts.push(`DB KEYS: ${dbKeys}`);
+    if (npmPackages) inputParts.push(`NPM PACKAGES: ${npmPackages}`);
+    if (prevPassport) inputParts.push(`PREVIOUS PASSPORT (for reference — preserve style and key decisions, but update everything from actual code):\n${prevPassport.substring(0, 8000)}`);
+    if (doneSummary) inputParts.push(`LATEST CHANGES (commit #${commitNum}):\n${doneSummary.substring(0, 3000)}`);
+
+    const response = await this.client.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 16000,
+      messages: [{
+        role: "user",
+        content: `${doneSummary ? "Generate an updated" : "Analyze this codebase and generate a"} project passport for a Telegram Mini App.
+This document will be used by an AI developer agent in future updates to understand the project
+instantly WITHOUT reading all files. It must be accurate and complete — the agent will trust this
+document and use Code Locations to jump directly to the right lines.
+${prevPassport ? "\nUse the previous passport for style/format reference and to preserve Key Decisions that are still relevant." : ""}
+
+${inputParts.join("\n\n")}
+
+Output a structured markdown document (under 4000 words) with EXACTLY these sections:
+
+## App: <name>
+Purpose: <one-line description>
+
+## Architecture
+Pages/screens, navigation flow, API routes (method + path + what it does), WebSocket events if any,
+DB keys and what they store. Be specific — list every route, every DB key, every screen ID.
+
+## Code Locations
+Use the auto-extracted locations above as a base. Keep all of them.
+Add any important helpers, constants, or hook points that were missed.
+Format: \`- file:line — description\`
+This section is CRITICAL for the agent's efficiency.
+
+## Code Conventions
+- **Frontend structure:** key function names and what they do, global state variables (what's in \`state\` object), how tabs/modals are toggled, DOM update patterns.
+- **CSS patterns:** naming convention, CSS variables used for theming, key class names for major components.
+- **Backend patterns:** route handler structure, middleware, error handling style, how db.get/db.set are used.
+- **Critical wiring:** how frontend calls API (fetch wrapper? base URL pattern?), how WebSocket events are dispatched and handled, event listeners setup.
+
+## UI
+Theme, layout approach, key components with their CSS class names, special effects/animations.
+
+## Key Decisions
+Important implementation choices and WHY they were made. Include gotchas, known issues,
+and things that look wrong but are intentional.
+
+## Current State
+What the app can do right now. What features are complete, what's partially done.`,
+      }],
+    });
+
+    const passportText = response.content[0]?.type === "text" ? response.content[0].text : "";
+    if (!passportText) throw new Error("Failed to generate passport");
+
+    const usage = response.usage as any;
+    const inTok = usage?.input_tokens || 0;
+    const outTok = usage?.output_tokens || 0;
+    const p = MODEL_PRICING["claude-haiku-4-5-20251001"];
+    const costUsd = inTok * p.input + outTok * p.output;
+
+    fs.writeFileSync(path.join(commitDir, "passport.md"), passportText, "utf-8");
+
+    // Build history: append to previous or create fresh
+    let history = "";
+    if (commitNum > 0) {
+      const prevHistoryPath = path.join(commitDir, "..", String(commitNum - 1), "history.md");
+      if (fs.existsSync(prevHistoryPath)) {
+        history = fs.readFileSync(prevHistoryPath, "utf-8");
+      }
+    }
+    const historyLine = doneSummary
+      ? doneSummary.split("\n")[0].substring(0, 200)
+      : "Context regenerated from source code";
+    history += `\n- #${commitNum}: ${historyLine}`;
+    history = history.trim();
+    fs.writeFileSync(path.join(commitDir, "history.md"), history, "utf-8");
+
+    const combined = passportText + "\n\n## Update History\n" + history;
+    fs.writeFileSync(path.join(commitDir, "context.md"), combined, "utf-8");
+    await projectService.updateProjectSummary(projectId, combined);
+
+    const label = doneSummary ? "Generated" : "Regenerated";
+    console.log(`[Context] ✅ ${label} passport for ${projectId.substring(0, 8)} commit #${commitNum} | in=${inTok} out=${outTok} | $${costUsd.toFixed(4)}`);
+    return combined;
+  }
+
   async compactContext(
     projectId: string,
     commitDir: string,
@@ -1693,79 +2001,27 @@ Use grep and read_file to verify current state before making changes. Use edit_f
     description?: string,
     plan?: string,
   ): Promise<string> {
-    const { fileTree, dbKeys, npmPackages } = this.gatherProjectInfo(commitDir);
-
-    let previousContext = "";
+    let prevPassport = "";
     if (commitNum > 0) {
-      const prevContextPath = path.join(commitDir, "..", String(commitNum - 1), "context.md");
-      if (fs.existsSync(prevContextPath)) {
-        previousContext = fs.readFileSync(prevContextPath, "utf-8");
+      const prevPath = path.join(commitDir, "..", String(commitNum - 1), "passport.md");
+      if (fs.existsSync(prevPath)) {
+        prevPassport = fs.readFileSync(prevPath, "utf-8");
+      } else {
+        const prevCtxPath = path.join(commitDir, "..", String(commitNum - 1), "context.md");
+        if (fs.existsSync(prevCtxPath)) {
+          prevPassport = fs.readFileSync(prevCtxPath, "utf-8");
+        }
       }
     }
-
-    const isFirstBuild = !previousContext;
-
-    const inputParts: string[] = [];
-    if (isFirstBuild) {
-      if (description) inputParts.push(`APP DESCRIPTION:\n${description}`);
-      if (plan) inputParts.push(`BUILD PLAN:\n${plan}`);
-    } else {
-      inputParts.push(`PREVIOUS CONTEXT:\n${previousContext}`);
-    }
-    inputParts.push(`CHANGES (commit #${commitNum}):\n${doneSummary}`);
-    if (fileTree) inputParts.push(`FILE TREE:\n${fileTree}`);
-    if (dbKeys) inputParts.push(`DB KEYS: ${dbKeys}`);
-    if (npmPackages) inputParts.push(`NPM PACKAGES: ${npmPackages}`);
 
     try {
-      const response = await this.client.messages.create({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 4500,
-        messages: [{
-          role: "user",
-          content: `${isFirstBuild ? "Generate" : "Update"} a concise project context document for a Telegram Mini App. This document will be used by an AI developer in future updates to understand the project instantly without reading all files.
-
-${inputParts.join("\n\n")}
-
-Output a structured markdown document (under 2000 words) with these sections:
-## App: <name>
-Purpose: <one-line description>
-
-## Architecture
-Pages/screens, navigation flow, API routes (method + path + what it does), WebSocket events if any, DB keys and what they store.
-
-## Code Conventions
-- **Frontend structure:** key function names and what they do (e.g. renderLeaderboard(), startRound()), global state variables, how tabs/modals are toggled, DOM update patterns.
-- **CSS patterns:** naming convention (BEM, flat, etc.), CSS variables used for theming (e.g. --accent, --bg-dark), key class names for major components.
-- **Backend patterns:** route handler structure, middleware, error handling style, how db.get/db.set are used.
-- **Critical wiring:** how frontend calls API (fetch wrapper? base URL pattern?), how WebSocket events are dispatched and handled, event listeners setup.
-
-## UI
-Theme, layout approach, key components with their CSS class names, special effects/animations.
-
-## Key Decisions
-Important implementation choices and why.
-
-## Update History
-One line per commit: - #N: <what changed>`,
-        }],
-      });
-
-      const text = response.content[0]?.type === "text" ? response.content[0].text : "";
-      if (text) {
-        const contextPath = path.join(commitDir, "context.md");
-        fs.writeFileSync(contextPath, text, "utf-8");
-        await projectService.updateProjectSummary(projectId, text);
-        console.log(`[Context] Generated context.md for project ${projectId.substring(0, 8)} commit #${commitNum}`);
-        return text;
-      }
+      return await this.generatePassport({ projectId, commitDir, commitNum, description, doneSummary, prevPassport });
     } catch (err) {
-      console.error(`[Context] Failed to generate context for ${projectId.substring(0, 8)}:`, err);
+      console.error(`[Context] Failed to generate passport for ${projectId.substring(0, 8)}:`, err);
     }
 
     const fallback = this.buildFallbackSummary(commitDir, doneSummary);
-    const contextPath = path.join(commitDir, "context.md");
-    fs.writeFileSync(contextPath, fallback, "utf-8");
+    fs.writeFileSync(path.join(commitDir, "context.md"), fallback, "utf-8");
     await projectService.updateProjectSummary(projectId, fallback);
     return fallback;
   }
@@ -1789,76 +2045,8 @@ One line per commit: - #N: <what changed>`,
       if (!fs.existsSync(latestDir)) throw new Error("No code found to analyze");
     }
 
-    const { fileTree, dbKeys, npmPackages } = this.gatherProjectInfo(latestDir);
-
-    const codeFiles: string[] = [];
-    const readCode = (dir: string, prefix: string) => {
-      if (!fs.existsSync(dir)) return;
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (entry.isFile() && !AgentService.SKIP_EXTS.has(path.extname(entry.name).toLowerCase())) {
-          try {
-            const content = fs.readFileSync(path.join(dir, entry.name), "utf-8");
-            if (content.length < 15000) {
-              codeFiles.push(`--- ${prefix}/${entry.name} ---\n${content}`);
-            }
-          } catch {}
-        }
-      }
-    };
-    readCode(path.join(latestDir, "frontend"), "frontend");
-    readCode(path.join(latestDir, "backend"), "backend");
-
     const project = await projectService.getProject(projectId);
-
-    const inputParts: string[] = [];
-    if (project?.description) inputParts.push(`APP DESCRIPTION: ${project.description}`);
-    if (codeFiles.length > 0) inputParts.push(`SOURCE CODE:\n${codeFiles.join("\n\n")}`);
-    if (fileTree) inputParts.push(`FILE TREE:\n${fileTree}`);
-    if (dbKeys) inputParts.push(`DB KEYS: ${dbKeys}`);
-    if (npmPackages) inputParts.push(`NPM PACKAGES: ${npmPackages}`);
-
-    const response = await this.client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 4500,
-      messages: [{
-        role: "user",
-        content: `Analyze this Telegram Mini App codebase and generate a concise project context document. This will be used by an AI developer in future updates to understand the project instantly.
-
-${inputParts.join("\n\n")}
-
-Output a structured markdown document (under 2000 words) with these sections:
-## App: <name>
-Purpose: <one-line description>
-
-## Architecture
-Pages/screens, navigation flow, API routes (method + path + what it does), WebSocket events if any, DB keys and what they store.
-
-## Code Conventions
-- **Frontend structure:** key function names and what they do, global state variables, how tabs/modals are toggled, DOM update patterns.
-- **CSS patterns:** naming convention, CSS variables used for theming, key class names for major components.
-- **Backend patterns:** route handler structure, middleware, error handling, how db.get/db.set are used.
-- **Critical wiring:** how frontend calls API (fetch wrapper? base URL pattern?), how WebSocket events are dispatched and handled.
-
-## UI
-Theme, layout approach, key components with their CSS class names, special effects/animations.
-
-## Key Decisions
-Important implementation choices and why.
-
-## Update History
-Best guess from the code of what the app contains.`,
-      }],
-    });
-
-    const text = response.content[0]?.type === "text" ? response.content[0].text : "";
-    if (!text) throw new Error("Failed to generate context");
-
-    if (latestDir.includes("commits")) {
-      fs.writeFileSync(path.join(latestDir, "context.md"), text, "utf-8");
-    }
-    await projectService.updateProjectSummary(projectId, text);
-    console.log(`[Context] Regenerated context for project ${projectId.substring(0, 8)}`);
-    return text;
+    return this.generatePassport({ projectId, commitDir: latestDir, commitNum: latestNum, description: project?.description || undefined });
   }
 
   private buildFallbackSummary(projectDir: string, doneSummary: string): string {
@@ -1878,7 +2066,23 @@ Best guess from the code of what the app contains.`,
       const nums = fs.readdirSync(commitsDir).map(Number).filter(n => !isNaN(n));
       if (nums.length === 0) return null;
       const latest = Math.max(...nums);
-      const contextPath = path.join(commitsDir, String(latest), "context.md");
+      const latestDir = path.join(commitsDir, String(latest));
+
+      // Prefer passport.md + history.md (new format)
+      const passportPath = path.join(latestDir, "passport.md");
+      if (fs.existsSync(passportPath)) {
+        let result = fs.readFileSync(passportPath, "utf-8");
+        const historyPath = path.join(latestDir, "history.md");
+        if (fs.existsSync(historyPath)) {
+          const history = fs.readFileSync(historyPath, "utf-8");
+          const recentHistory = history.split("\n").slice(-10).join("\n");
+          result += "\n\n## Recent Updates\n" + recentHistory;
+        }
+        return result;
+      }
+
+      // Fallback to context.md (old format)
+      const contextPath = path.join(latestDir, "context.md");
       if (fs.existsSync(contextPath)) {
         return fs.readFileSync(contextPath, "utf-8");
       }

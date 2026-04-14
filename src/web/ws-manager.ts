@@ -19,9 +19,11 @@ interface ProjectWsState {
   clients: Set<WebSocket>;
   connectionHandler: ((socket: WebSocket, req: IncomingMessage) => void) | null;
   db: ReturnType<typeof createProjectDb> | null;
+  timers: Set<ReturnType<typeof setInterval>>;
 }
 
 const projectStates = new Map<string, ProjectWsState>();
+const projectInitPromises = new Map<string, Promise<ProjectWsState | null>>();
 
 function createProjectDb(projectDir: string, botToken: string, botUsername: string, projectId: string) {
   const dataDir = path.join(projectDir, "data");
@@ -100,6 +102,7 @@ async function initProjectWs(projectId: string, isDev: boolean): Promise<Project
     clients: new Set(),
     connectionHandler: null,
     db,
+    timers: new Set(),
   };
 
   const wss: ProjectWss = {
@@ -128,19 +131,52 @@ async function initProjectWs(projectId: string, isDev: boolean): Promise<Project
     },
   };
 
-  routeModule.ws(wss, db, projectId);
+  const origSetInterval = global.setInterval;
+  const origSetTimeout = global.setTimeout;
+  const trackedTimers = state.timers;
+
+  (global as any).setInterval = function (...args: any[]) {
+    const id = origSetInterval.apply(global, args as any);
+    trackedTimers.add(id);
+    return id;
+  };
+  (global as any).setTimeout = function (...args: any[]) {
+    const id = origSetTimeout.apply(global, args as any);
+    trackedTimers.add(id);
+    return id;
+  };
+
+  try {
+    routeModule.ws(wss, db, projectId);
+  } finally {
+    global.setInterval = origSetInterval;
+    global.setTimeout = origSetTimeout;
+  }
+
+  console.log(`[WS] Project ${projectId.substring(0, 8)} ws() initialized, tracking ${trackedTimers.size} timer(s)`);
   return state;
 }
 
 function cleanupProject(projectId: string) {
   const state = projectStates.get(projectId);
   if (!state) return;
+
+  for (const timer of state.timers) {
+    clearInterval(timer);
+    clearTimeout(timer);
+  }
+  if (state.timers.size > 0) {
+    console.log(`[WS] Cleared ${state.timers.size} timer(s) for project ${projectId.substring(0, 12)}`);
+  }
+  state.timers.clear();
+
   if (state.db) {
     try { state.db.close(); } catch {}
     state.db = null;
   }
   state.connectionHandler = null;
   projectStates.delete(projectId);
+  projectInitPromises.delete(projectId);
 }
 
 export function setupWebSocket(server: import("http").Server, miniAppWss?: import("ws").WebSocketServer) {
@@ -173,15 +209,26 @@ export function setupWebSocket(server: import("http").Server, miniAppWss?: impor
       let state = projectStates.get(stateKey);
 
       if (!state) {
-        const newState = await initProjectWs(projectId, isDev);
+        // Deduplicate concurrent init calls — only one initProjectWs per stateKey at a time
+        let initPromise = projectInitPromises.get(stateKey);
+        if (!initPromise) {
+          initPromise = initProjectWs(projectId, isDev).finally(() => {
+            projectInitPromises.delete(stateKey);
+          });
+          projectInitPromises.set(stateKey, initPromise);
+        }
+        const newState = await initPromise;
         if (!newState) {
           console.error(`[WS] No ws handler in routes.js for project ${projectId.substring(0, 8)}`);
           socket.destroy();
           return;
         }
-        state = newState;
-        projectStates.set(stateKey, state);
-        console.log(`[WS] Initialized ${isDev ? "dev" : "release"} WS for project ${projectId.substring(0, 8)}`);
+        // Another concurrent connection may have already stored the state
+        state = projectStates.get(stateKey) || newState;
+        if (!projectStates.has(stateKey)) {
+          projectStates.set(stateKey, state);
+          console.log(`[WS] Initialized ${isDev ? "dev" : "release"} WS for project ${projectId.substring(0, 8)}`);
+        }
       }
 
       const finalState = state;

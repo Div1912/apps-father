@@ -42,7 +42,7 @@ scp -r skills/* root@204.168.219.20:/opt/apps-father/skills/
 Write-Host "Skills OK" -ForegroundColor Green
 
 Write-Host "=== Restarting ===" -ForegroundColor Cyan
-ssh root@204.168.219.20 "pm2 restart apps-father --kill-timeout 300000"
+ssh root@204.168.219.20 "cd /opt/apps-father && pm2 restart apps-father --update-env --kill-timeout 300000"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Restart failed!" -ForegroundColor Red
     exit 1

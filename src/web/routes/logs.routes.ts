@@ -5,8 +5,8 @@ import { config } from "../../config";
 
 const router = Router();
 
-const OUT_LOG = "/root/.pm2/logs/apps-father-out-0.log";
-const ERR_LOG = "/root/.pm2/logs/apps-father-error-0.log";
+const OUT_LOG = "/root/.pm2/logs/apps-father-out.log";
+const ERR_LOG = "/root/.pm2/logs/apps-father-error.log";
 
 // Simple token auth — use WEBHOOK_SECRET as the token
 function isAuthorized(req: Request): boolean {
@@ -218,6 +218,8 @@ evtSource.onerror = () => {
 evtSource.onopen = () => {
   document.getElementById('status-badge').textContent = '● LIVE';
   document.getElementById('status-badge').className = 'badge live';
+  const empty = container.querySelector('.empty');
+  if (empty) empty.textContent = 'Connected. Waiting for logs...';
 };
 
 // Stop auto-scroll on manual scroll
@@ -253,12 +255,17 @@ router.get("/stream", (req: Request, res: Response) => {
     }
   };
 
-  // Send last 100 lines of history on connect
+  // Send last 100 lines of history on connect — read only the tail to avoid loading huge files
   const sendHistory = (filePath: string, source: "out" | "err") => {
     if (!fs.existsSync(filePath)) return;
     try {
-      const content = fs.readFileSync(filePath, "utf8");
-      const lines = content.split("\n").filter((l) => l.trim()).slice(-100);
+      const stat = fs.statSync(filePath);
+      const chunkSize = Math.min(stat.size, 128 * 1024); // read at most 128 KB from end
+      const buf = Buffer.alloc(chunkSize);
+      const fd = fs.openSync(filePath, "r");
+      fs.readSync(fd, buf, 0, chunkSize, stat.size - chunkSize);
+      fs.closeSync(fd);
+      const lines = buf.toString("utf8").split("\n").filter((l) => l.trim()).slice(-100);
       for (const line of lines) {
         res.write(`data: ${JSON.stringify({ text: line, source, history: true })}\n\n`);
       }
@@ -267,6 +274,9 @@ router.get("/stream", (req: Request, res: Response) => {
 
   sendHistory(OUT_LOG, "out");
   sendHistory(ERR_LOG, "err");
+
+  // Send initial ping so client knows the stream is live (even if no history)
+  res.write(`: ping\n\n`);
 
   // Track file positions for polling
   const positions: Record<string, number> = {};
@@ -296,9 +306,12 @@ router.get("/stream", (req: Request, res: Response) => {
     } catch {}
   };
 
+  let tickCount = 0;
   const interval = setInterval(() => {
     poll(OUT_LOG, "out");
     poll(ERR_LOG, "err");
+    // Send SSE comment ping every ~30s to keep connection alive through proxies
+    if (++tickCount % 37 === 0) res.write(`: ping\n\n`);
   }, 800);
 
   req.on("close", () => {
@@ -318,9 +331,16 @@ router.get("/history", (req: Request, res: Response) => {
 
   const readTail = (filePath: string, source: string) => {
     if (!fs.existsSync(filePath)) return;
-    const content = fs.readFileSync(filePath, "utf8");
-    const fileLines = content.split("\n").filter((l) => l.trim());
-    fileLines.slice(-lines).forEach((l) => result.push({ text: l, source }));
+    try {
+      const stat = fs.statSync(filePath);
+      const chunkSize = Math.min(stat.size, 256 * 1024); // read at most 256 KB from end
+      const buf = Buffer.alloc(chunkSize);
+      const fd = fs.openSync(filePath, "r");
+      fs.readSync(fd, buf, 0, chunkSize, stat.size - chunkSize);
+      fs.closeSync(fd);
+      const fileLines = buf.toString("utf8").split("\n").filter((l) => l.trim());
+      fileLines.slice(-lines).forEach((l) => result.push({ text: l, source }));
+    } catch {}
   };
 
   readTail(OUT_LOG, "out");

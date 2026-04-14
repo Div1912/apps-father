@@ -1,8 +1,7 @@
-import { InputFile } from "grammy";
+import { InputFile, InlineKeyboard } from "grammy";
 import path from "path";
 import { BotContext } from "../../types";
 import { projectService } from "../../services/project.service";
-import { createAppKeyboard } from "../keyboards";
 import { EMOJI, ce } from "../emoji";
 import { prisma } from "../../db";
 import { Decimal } from "@prisma/client/runtime/library";
@@ -87,26 +86,26 @@ export async function startCommand(ctx: BotContext) {
 
   const chatId = ctx.chat!.id;
 
-  try {
-    const hideMsg = await ctx.reply("⠀", { reply_markup: { remove_keyboard: true } });
-    setTimeout(() => ctx.api.deleteMessage(chatId, hideMsg.message_id).catch(() => {}), 1500);
-  } catch {}
+  const hideMsg = await ctx.reply("⏳", { reply_markup: { remove_keyboard: true } });
+  await ctx.api.deleteMessage(chatId, hideMsg.message_id);
+
+  const keyboard = new InlineKeyboard()
+    .webApp(t(lang, "btn_create_app"), miniAppUrl);
+
+  const btnRow = (keyboard as any).inline_keyboard;
+  if (btnRow?.[0]?.[0]) btnRow[0][0].style = "primary";
 
   try {
     await ctx.replyWithPhoto(new InputFile(imagePath), {
       caption: getWelcomeCaption(lang),
       parse_mode: "HTML",
-      reply_markup: {
-        inline_keyboard: [[createAppKeyboard(lang, miniAppUrl)]],
-      },
+      reply_markup: keyboard,
     });
   } catch (err) {
     console.error("[Start] Failed to send photo, sending text:", err);
     await ctx.reply(getWelcomeCaption(lang), {
       parse_mode: "HTML",
-      reply_markup: {
-        inline_keyboard: [[createAppKeyboard(lang, miniAppUrl)]],
-      },
+      reply_markup: keyboard,
     });
   }
 

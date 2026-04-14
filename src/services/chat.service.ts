@@ -70,6 +70,24 @@ export const chatService = {
     return messages[idx];
   },
 
+  removeMessage(projectId: string, msgId: string): boolean {
+    const messages = readHistory(projectId);
+    const idx = messages.findIndex(m => m.id === msgId);
+    if (idx === -1) return false;
+    messages.splice(idx, 1);
+    writeHistory(projectId, messages);
+    return true;
+  },
+
+  removeMessages(projectId: string, msgIds: string[]): number {
+    const messages = readHistory(projectId);
+    const idSet = new Set(msgIds);
+    const filtered = messages.filter(m => !idSet.has(m.id));
+    const removed = messages.length - filtered.length;
+    if (removed > 0) writeHistory(projectId, filtered);
+    return removed;
+  },
+
   clearHistory(projectId: string): void {
     const fp = historyPath(projectId);
     if (fs.existsSync(fp)) fs.unlinkSync(fp);

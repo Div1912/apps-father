@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import path from "path";
 import fs from "fs";
 import { hasFeature } from "../../services/features.service";
+import { prisma } from "../../db";
 
 const router = Router();
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
@@ -52,6 +53,74 @@ router.get("/:projectId/{*filePath}", async (req: Request, res: Response) => {
   res.sendFile(fullPath);
 });
 
+function buildErrorMonitorScript(ownerTelegramId: number, projectId: string): string {
+  return `<script>
+(function(){
+  var OID=${ownerTelegramId},PID="${projectId}",shown=false;
+  function uid(){try{var t=window.Telegram&&window.Telegram.WebApp;return t&&t.initDataUnsafe&&t.initDataUnsafe.user?t.initDataUnsafe.user.id:null}catch(e){return null}}
+  function showErr(msg,stack){
+    if(shown)return;
+    if(uid()!==OID)return;
+    shown=true;
+    var o=document.createElement('div');
+    o.id='_af_err';
+    o.style.cssText='position:fixed;inset:0;z-index:2147483647;background:rgba(10,10,12,0.97);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,sans-serif';
+    var shortMsg=(msg||'Unknown error').toString().slice(0,200);
+    var shortStack=(stack||'').toString().split('\\n').slice(0,6).join('\\n');
+    o.innerHTML='<div style="max-width:480px;width:100%">'
+      +'<div style="font-size:36px;text-align:center;margin-bottom:12px">🐛</div>'
+      +'<div style="font-size:18px;font-weight:700;color:#f87171;text-align:center;margin-bottom:8px">Error in your app</div>'
+      +'<div style="font-size:13px;color:#fca5a5;margin-bottom:16px;text-align:center">Only you see this — your users are not affected</div>'
+      +'<div style="background:#1c1c1e;border:1px solid #3f3f46;border-radius:10px;padding:14px;margin-bottom:16px;font-size:12px;color:#e4e4e7;font-family:monospace;white-space:pre-wrap;word-break:break-all;max-height:180px;overflow-y:auto">'+shortMsg+(shortStack?'\\n\\n'+shortStack:'')+'</div>'
+      +'<button id="_af_send" style="width:100%;padding:14px;background:#2563eb;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;margin-bottom:10px">Send to fix</button>'
+      +'<div style="text-align:center"><button id="_af_dis" style="background:none;border:none;color:#71717a;font-size:13px;cursor:pointer;text-decoration:underline">Dismiss</button></div>'
+      +'</div>';
+    document.body.appendChild(o);
+    document.getElementById('_af_dis').onclick=function(){o.remove();shown=false};
+    document.getElementById('_af_send').onclick=function(){
+      var btn=document.getElementById('_af_send');
+      btn.disabled=true;btn.textContent='Sending...';
+      fetch('/telegram-mini-app/api/error-report/'+PID,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({message:msg,stack:stack,url:location.href})
+      }).then(function(){
+        btn.textContent='✓ Sent! The agent will fix it';
+        btn.style.background='#16a34a';
+        setTimeout(function(){try{window.Telegram.WebApp.close()}catch(e){}o.remove();shown=false},2000);
+      }).catch(function(){
+        btn.textContent='Failed — try again';
+        btn.style.background='#dc2626';
+        btn.disabled=false;
+      });
+    };
+  }
+  window.onerror=function(m,s,l,c,e){showErr(String(m),e&&e.stack?e.stack:m+' at '+s+':'+l);return false};
+  window.addEventListener('unhandledrejection',function(e){
+    var r=e.reason,m=r&&r.message?r.message:String(r),s=r&&r.stack?r.stack:m;
+    showErr(m,s);
+  });
+})();
+</script>`;
+}
+
+async function getOwnerTelegramId(projectId: string): Promise<number | null> {
+  try {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { userId: true },
+    });
+    if (!project) return null;
+    const user = await prisma.user.findUnique({
+      where: { id: project.userId },
+      select: { telegramId: true },
+    });
+    return user ? Number(user.telegramId) : null;
+  } catch {
+    return null;
+  }
+}
+
 async function injectSplash(projectId: string, htmlPath: string): Promise<string> {
   let html = fs.readFileSync(htmlPath, "utf-8");
 
@@ -60,10 +129,15 @@ async function injectSplash(projectId: string, htmlPath: string): Promise<string
     if (splashDisabled) return html;
   } catch {}
 
+  const ownerTelegramId = await getOwnerTelegramId(projectId);
+  const errorMonitor = ownerTelegramId ? buildErrorMonitorScript(ownerTelegramId, projectId) : "";
+
+  const inject = SPLASH_HTML + "\n" + errorMonitor;
+
   if (html.includes("</body>")) {
-    html = html.replace("</body>", SPLASH_HTML + "\n</body>");
+    html = html.replace("</body>", inject + "\n</body>");
   } else {
-    html += SPLASH_HTML;
+    html += inject;
   }
   return html;
 }

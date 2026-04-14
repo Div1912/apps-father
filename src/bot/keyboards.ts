@@ -7,6 +7,7 @@ export function createAppKeyboard(lang: Lang = "en", miniAppUrl: string) {
   return {
     text: `${t(lang, "btn_create_app")}`,
     web_app: { url: miniAppUrl },
+    style: "primary",
   };
 }
 

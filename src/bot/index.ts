@@ -1,15 +1,9 @@
-import { Bot, session, InlineKeyboard } from "grammy";
+import { Bot, session } from "grammy";
 import { config } from "../config";
 import { BotContext, SessionData } from "../types";
 import { startCommand } from "./commands/start";
-import { newProjectCommand } from "./commands/newproject";
-import { projectsCommand } from "./commands/projects";
-import { helpCommand } from "./commands/help";
-import { registerManagedBotHandlers } from "./handlers/managed-bot";
-import { registerCallbackHandlers } from "./handlers/callback";
-import { registerConversationHandlers } from "./handlers/conversation";
-import { registerPhotoHandlers } from "./handlers/photo";
 import { billingService } from "../services/billing.service";
+import { registerManagedBotHandlers } from "./handlers/managed-bot";
 
 export function createBot(): Bot<BotContext> {
   const bot = new Bot<BotContext>(config.botToken);
@@ -27,19 +21,11 @@ export function createBot(): Bot<BotContext> {
   );
 
   bot.command("start", startCommand);
-  bot.command("newproject", newProjectCommand);
-  bot.command("projects", projectsCommand);
-  bot.command("help", helpCommand);
-  bot.command("miniapp", async (ctx) => {
-    const kb = new InlineKeyboard().webApp("Open Mini App", `${config.baseUrl}/telegram-mini-app`);
-    await ctx.reply("Manage your apps from the Mini App ✨", { reply_markup: kb });
-  });
 
   registerManagedBotHandlers(bot);
-  registerCallbackHandlers(bot);
-  registerPhotoHandlers(bot);
 
-  // Stars payments — auto-approve pre_checkout and process successful_payment
+  bot.on("message", (ctx) => startCommand(ctx));
+
   bot.on("pre_checkout_query" as any, async (ctx: any) => {
     try {
       await ctx.answerPreCheckoutQuery(true);
@@ -61,11 +47,6 @@ export function createBot(): Bot<BotContext> {
       console.error("[Bot] successful_payment error:", err);
     }
   });
-
-  bot.hears(/^(Main Menu|Главное меню|Головне меню)$/i, startCommand);
-
-  // Conversation handlers must be registered last (catch-all for text)
-  registerConversationHandlers(bot);
 
   bot.catch((err: any) => {
     const msg = err?.message || err?.error?.description || "";

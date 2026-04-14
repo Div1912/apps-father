@@ -101,6 +101,7 @@ const I18N = {
     version_changelog: "Changelog",
     version_release: "Release this version",
     version_revert: "Revert to this version",
+    version_view_log: "View Agent Log",
     version_download_log: "Download Log",
     version_change_log: "Change Log",
 
@@ -175,6 +176,8 @@ const I18N = {
     toast_feature_unlocked: "Feature unlocked!",
     toast_balance_updated: "Balance updated",
     chat_update_completed: "Update Completed",
+    chat_preparing: "Preparing for next update...",
+    chat_finalizing: "Finalizing previous update, please wait...",
     chat_question_title: "Agent needs your input",
   },
 
@@ -269,6 +272,7 @@ const I18N = {
     version_changelog: "Изменения",
     version_release: "Опубликовать эту версию",
     version_revert: "Откатить до этой версии",
+    version_view_log: "Просмотр лога агента",
     version_download_log: "Скачать лог",
     version_change_log: "Журнал изменений",
 
@@ -335,6 +339,8 @@ const I18N = {
     toast_feature_unlocked: "Функция разблокирована!",
     toast_balance_updated: "Баланс обновлён",
     chat_update_completed: "Обновление завершено",
+    chat_preparing: "Подготовка к следующему обновлению...",
+    chat_finalizing: "Завершаем предыдущее обновление, подождите...",
     chat_question_title: "Агенту нужен ваш ответ",
   },
 
@@ -429,6 +435,7 @@ const I18N = {
     version_changelog: "Зміни",
     version_release: "Опублікувати цю версію",
     version_revert: "Відкотити до цієї версії",
+    version_view_log: "Переглянути лог агента",
     version_download_log: "Завантажити лог",
     version_change_log: "Журнал змін",
 
@@ -495,6 +502,8 @@ const I18N = {
     toast_feature_unlocked: "Функцію розблоковано!",
     toast_balance_updated: "Баланс оновлено",
     chat_update_completed: "Оновлення завершено",
+    chat_preparing: "Підготовка до наступного оновлення...",
+    chat_finalizing: "Завершуємо попереднє оновлення, зачекайте...",
     chat_question_title: "Агенту потрібна ваша відповідь",
   }
 };

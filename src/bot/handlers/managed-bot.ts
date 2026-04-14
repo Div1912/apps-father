@@ -30,24 +30,6 @@ export function registerManagedBotHandlers(bot: Bot<BotContext>) {
 
   bot.on("message:managed_bot_created" as any, async (ctx: any) => {
     console.log("[ManagedBot] Received managed_bot_created service message");
-    if (!ctx.session) return;
-    const managedBot = ctx.message?.managed_bot_created;
-    if (!managedBot?.bot) return;
-
-    let project = null;
-    for (let i = 0; i < 10; i++) {
-      project = await projectService.getProjectByBotUserId(managedBot.bot.id);
-      if (project) break;
-      await new Promise((r) => setTimeout(r, 500));
-    }
-
-    if (project) {
-      ctx.session.activeProjectId = project.id;
-      ctx.session.awaitingInput = "description";
-      console.log(`[ManagedBot] Session set for project ${project.id}`);
-    } else {
-      console.warn(`[ManagedBot] Project not found after retries for bot ${managedBot.bot.id}`);
-    }
   });
 }
 

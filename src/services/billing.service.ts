@@ -18,6 +18,12 @@ export const MODEL_PRICING: Record<string, { input: number; output: number; cach
     cache_write: 6.25 / 1_000_000,
     cache_read: 0.50 / 1_000_000,
   },
+  "claude-haiku-4-5-20251001": {
+    input: 1.00 / 1_000_000,
+    output: 5.00 / 1_000_000,
+    cache_write: 1.25 / 1_000_000,
+    cache_read: 0.10 / 1_000_000,
+  },
 };
 
 export interface TokenUsage {

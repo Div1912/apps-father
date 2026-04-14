@@ -18,6 +18,7 @@ import { setupWebSocket } from "./ws-manager";
 import { setupMiniAppWebSocket } from "./miniapp-ws";
 import { broadcastToProject, registerAnswerResolver, resolveAnswer } from "./miniapp-ws";
 import { projectService } from "../services/project.service";
+import { parseAgentLog } from "../services/agent-logger";
 import { decryptToken } from "../services/crypto.service";
 import { billingService } from "../services/billing.service";
 import { chatService, ChatMessage } from "../services/chat.service";
@@ -279,7 +280,9 @@ export function createWebServer() {
       const before = req.query.before ? parseInt(req.query.before as string) : undefined;
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
       const messages = chatService.getHistory(req.params.projectId, before, limit);
-      res.json({ messages });
+      const hasActiveProgress = messages.some((m: any) => m.type === "progress" && (m.percent ?? 0) < 100);
+      const finalizing = processingProjects.has(req.params.projectId) && !hasActiveProgress;
+      res.json({ messages, finalizing });
     } catch (err) {
       console.error("[Chat API] History error:", err);
       res.status(500).json({ error: "Internal server error" });
@@ -329,19 +332,12 @@ export function createWebServer() {
         (async () => {
           processingProjects.add(projectId);
           let progressMsgId: string | null = null;
-          let checklistItems: string[] = [];
           let items: { id: number; text: string; done: boolean }[] = [];
-
-          try {
-            checklistItems = await agentService.generateChecklist(text.trim());
-          } catch {}
-          items = checklistItems.map((t, i) => ({ id: i + 1, text: t, done: false }));
 
           const progressMsg = chatService.addMessage(projectId, {
             role: "assistant",
             type: "progress",
             content: "Starting...",
-            checklist: items.length > 0 ? items : undefined,
             percent: 0,
           });
           progressMsgId = progressMsg.id;
@@ -351,9 +347,11 @@ export function createWebServer() {
             await projectService.updateProjectStatus(projectId, "building");
             const currentBalance = await billingService.getUserBalance(user.id);
 
+            let progressDone = false;
             const onProgress = async (p: AgentProgress) => {
-              if (!progressMsgId) return;
-              const updated = chatService.updateMessage(projectId, progressMsgId, {
+              if (!progressMsgId || progressDone) return;
+              if ((p.percent ?? 0) >= 100) { progressDone = true; return; }
+              chatService.updateMessage(projectId, progressMsgId, {
                 content: `${p.action} ${p.detail}`,
                 percent: p.percent,
                 costUsd: p.costUsd,
@@ -387,27 +385,34 @@ export function createWebServer() {
 
                 registerAnswerResolver(projectId, (answer: string) => {
                   clearTimeout(timeout);
-                  const ansMsg = chatService.addMessage(projectId, { role: "user", type: "answer", content: answer });
-                  broadcastToProject(projectId, { type: "message", message: ansMsg });
+                  chatService.removeMessage(projectId, qMsg.id);
+                  broadcastToProject(projectId, { type: "remove_messages", projectId, messageIds: [qMsg.id] });
                   resolve(answer);
                 });
               });
             };
 
-            const onCheckTodo = items.length > 0 ? async (id: number) => {
+            const onCreateTodo = async (todoItems: string[]) => {
+              items = todoItems.map((t, i) => ({ id: i + 1, text: t, done: false }));
+              if (progressMsgId) {
+                chatService.updateMessage(projectId, progressMsgId, { checklist: items });
+                broadcastToProject(projectId, {
+                  type: "progress", projectId, messageId: progressMsgId, checklist: items,
+                });
+              }
+            };
+
+            const onCheckTodo = async (id: number) => {
               if (id >= 1 && id <= items.length) {
                 items[id - 1].done = true;
                 if (progressMsgId) {
                   chatService.updateMessage(projectId, progressMsgId, { checklist: items });
                   broadcastToProject(projectId, {
-                    type: "progress",
-                    projectId,
-                    messageId: progressMsgId,
-                    checklist: items,
+                    type: "progress", projectId, messageId: progressMsgId, checklist: items,
                   });
                 }
               }
-            } : undefined;
+            };
 
             const attachments = userMsg.attachments?.map((a: any) => ({
               localPath: a.path,
@@ -417,8 +422,7 @@ export function createWebServer() {
 
             const result = await agentService.updateApp(
               projectId, text.trim(), onProgress, attachments,
-              onAskUser, items.length > 0 ? checklistItems : undefined,
-              onCheckTodo, undefined, currentBalance,
+              onAskUser, onCreateTodo, onCheckTodo, undefined, currentBalance,
             );
 
             const usage = await billingService.recordUsage(
@@ -433,32 +437,19 @@ export function createWebServer() {
               await commitService.createCommit(projectId, `Update: ${text.trim().substring(0, 80)}`, result.commitNum!, result.commitDir!, result.logPath);
             } catch {}
 
-            if (progressMsgId) {
-              broadcastToProject(projectId, {
-                type: "progress", projectId, messageId: progressMsgId,
-                percent: 100, message: "Summarizing changes...",
-                checklist: items, costUsd: usage.costUsd, balance: usage.newBalance,
-              });
-              chatService.updateMessage(projectId, progressMsgId, {
-                percent: 100, content: "Summarizing changes...",
-                checklist: items, costUsd: usage.costUsd, balance: usage.newBalance,
-              });
-            }
-
             const history = chatService.getHistory(projectId, undefined, 1000);
             const updateNum = history.filter(m => m.type === "result").length + 1;
             const project = await projectService.getProject(projectId);
             const appName = project?.name || "App";
 
-            const [shortSummary, changelogUrl] = await Promise.all([
-              agentService.summarizeShort(result.summary, updateNum),
-              publishReport(`${appName} — Update #${updateNum}`, result.summary, `Cost: $${usage.costUsd.toFixed(4)}`).catch(() => null),
-            ]);
+            // Publish telegraph (fast) before showing result
+            const changelogUrl = await publishReport(`${appName} — Update #${updateNum}`, result.summary, `Cost: $${usage.costUsd.toFixed(4)}`).catch(() => null);
 
+            // Show result immediately with short summary + changelog
             if (progressMsgId) {
               chatService.updateMessage(projectId, progressMsgId, {
                 type: "result",
-                content: shortSummary,
+                content: result.shortSummary,
                 percent: 100,
                 costUsd: usage.costUsd,
                 balance: usage.newBalance,
@@ -470,11 +461,25 @@ export function createWebServer() {
             broadcastToProject(projectId, {
               type: "status", projectId, status: "done",
               messageId: progressMsgId,
-              summary: shortSummary,
+              summary: result.shortSummary,
               changelogUrl,
               costUsd: usage.costUsd,
               balance: usage.newBalance,
             });
+
+            // Run passport in background — keep processingProjects lock
+            broadcastToProject(projectId, { type: "message", message: { role: "system", content: "preparing_next_update", metadata: { preparing: true } } });
+            (async () => {
+              try {
+                await agentService.compactContext(projectId, result.commitDir!, result.summary, result.commitNum!, project?.description || undefined, project?.plan || undefined);
+              } catch (err) {
+                console.error("[Chat API] Background passport error:", err);
+              } finally {
+                broadcastToProject(projectId, { type: "finalizing_done", projectId });
+                processingProjects.delete(projectId);
+              }
+            })();
+            return;
 
           } catch (err: any) {
             console.error("[Chat API] Agent error:", err);
@@ -485,7 +490,6 @@ export function createWebServer() {
               content: `Update failed: ${err.message || "Unknown error"}`,
             });
             broadcastToProject(projectId, { type: "message", message: errMsg });
-          } finally {
             processingProjects.delete(projectId);
           }
         })();
@@ -563,6 +567,141 @@ export function createWebServer() {
       res.json({ messageId: userMsg.id, status: "ok" });
     } catch (err) {
       console.error("[Chat API] Send error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // ── Error report from injected monitor script (no auth — owner-only enforced client-side) ──
+  const errorReportRateLimit = new Map<string, number>();
+
+  app.post("/telegram-mini-app/api/error-report/:projectId", async (req, res) => {
+    try {
+      const projectId = req.params.projectId;
+
+      // Rate limit: 1 report per project per 60s
+      const now = Date.now();
+      const lastReport = errorReportRateLimit.get(projectId) || 0;
+      if (now - lastReport < 60_000) {
+        res.json({ status: "rate_limited" });
+        return;
+      }
+      errorReportRateLimit.set(projectId, now);
+
+      const { message, stack, url } = req.body || {};
+      if (!message) { res.status(400).json({ error: "No message" }); return; }
+
+      const project = await projectService.getProject(projectId);
+      if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+
+      const shortStack = (stack || "").toString().split("\n").slice(0, 8).join("\n");
+      const errorText = `🐛 Error detected in the app:\n\`\`\`\n${message}${shortStack ? "\n" + shortStack : ""}\n\`\`\`\nPlease fix this error.`;
+
+      // Add as user message so agent treats it as an update request
+      const userMsg = chatService.addMessage(projectId, {
+        role: "user",
+        type: "update_request",
+        content: errorText,
+      });
+      broadcastToProject(projectId, { type: "message", message: userMsg });
+
+      res.json({ status: "ok" });
+
+      // Trigger agent to fix it (runs in background)
+      if (processingProjects.has(projectId)) return;
+
+      const owner = await prisma.user.findUnique({ where: { id: project.userId } });
+      if (!owner) return;
+
+      const balance = await billingService.getUserBalance(owner.id);
+      if (balance < 5) {
+        const errMsg = chatService.addMessage(projectId, {
+          role: "system", type: "balance_error",
+          content: `Cannot auto-fix: insufficient balance ($${balance.toFixed(2)}). Top up and send "Fix the error" to fix manually.`,
+          metadata: { balance },
+        });
+        broadcastToProject(projectId, { type: "message", message: errMsg });
+        return;
+      }
+
+      (async () => {
+        processingProjects.add(projectId);
+        let progressMsgId: string | null = null;
+        let items: { id: number; text: string; done: boolean }[] = [];
+
+        const progressMsg = chatService.addMessage(projectId, { role: "assistant", type: "progress", content: "Fixing error...", percent: 0 });
+        progressMsgId = progressMsg.id;
+        broadcastToProject(projectId, { type: "message", message: progressMsg });
+
+        try {
+          await projectService.updateProjectStatus(projectId, "building");
+          const currentBalance = await billingService.getUserBalance(owner.id);
+
+          let progressDone = false;
+          const onProgress = async (p: AgentProgress) => {
+            if (!progressMsgId || progressDone) return;
+            if ((p.percent ?? 0) >= 100) { progressDone = true; return; }
+            chatService.updateMessage(projectId, progressMsgId, { content: `${p.action} ${p.detail}`, percent: p.percent, costUsd: p.costUsd, balance: p.balance });
+            broadcastToProject(projectId, { type: "progress", projectId, messageId: progressMsgId, percent: p.percent, message: `${p.action} ${p.detail}`, checklist: items, costUsd: p.costUsd, balance: p.balance });
+          };
+
+          const onCreateTodo = async (todoItems: string[]) => {
+            items = todoItems.map((t, i) => ({ id: i + 1, text: t, done: false }));
+            if (progressMsgId) {
+              chatService.updateMessage(projectId, progressMsgId, { checklist: items });
+              broadcastToProject(projectId, { type: "progress", projectId, messageId: progressMsgId, checklist: items });
+            }
+          };
+
+          const onCheckTodo = async (id: number) => {
+            if (id >= 1 && id <= items.length) {
+              items[id - 1].done = true;
+              if (progressMsgId) {
+                chatService.updateMessage(projectId, progressMsgId, { checklist: items });
+                broadcastToProject(projectId, { type: "progress", projectId, messageId: progressMsgId, checklist: items });
+              }
+            }
+          };
+
+          const result = await agentService.updateApp(projectId, errorText, onProgress, [], undefined, onCreateTodo, onCheckTodo, undefined, currentBalance);
+
+          const usage = await billingService.recordUsage(
+            owner.id, projectId, result.model,
+            { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: result.cacheWriteTokens, cache_read_input_tokens: result.cacheReadTokens },
+            "update",
+          );
+
+          await projectService.updateProjectStatus(projectId, "deployed");
+          try { await commitService.createCommit(projectId, `Fix: ${(message || "").toString().slice(0, 60)}`, result.commitNum!, result.commitDir!, result.logPath); } catch {}
+
+          const history = chatService.getHistory(projectId, undefined, 1000);
+          const updateNum = history.filter(m => m.type === "result").length + 1;
+          const appName = project?.name || "App";
+          const changelogUrl = await publishReport(`${appName} — Fix #${updateNum}`, result.summary, `Cost: $${usage.costUsd.toFixed(4)}`).catch(() => null);
+
+          if (progressMsgId) {
+            chatService.updateMessage(projectId, progressMsgId, { type: "result", content: result.shortSummary, percent: 100, costUsd: usage.costUsd, balance: usage.newBalance, checklist: items, metadata: { changelogUrl } });
+          }
+          broadcastToProject(projectId, { type: "status", projectId, status: "done", messageId: progressMsgId, summary: result.shortSummary, changelogUrl, costUsd: usage.costUsd, balance: usage.newBalance });
+
+          broadcastToProject(projectId, { type: "message", message: { role: "system", content: "preparing_next_update", metadata: { preparing: true } } });
+          (async () => {
+            try { await agentService.compactContext(projectId, result.commitDir!, result.summary, result.commitNum!, project?.description || undefined, project?.plan || undefined); } catch {}
+            finally {
+              broadcastToProject(projectId, { type: "finalizing_done", projectId });
+              processingProjects.delete(projectId);
+            }
+          })();
+
+        } catch (err: any) {
+          console.error("[ErrorReport] Agent fix error:", err);
+          await projectService.updateProjectStatus(projectId, "error");
+          const errMsg = chatService.addMessage(projectId, { role: "assistant", type: "error", content: `Auto-fix failed: ${err.message || "Unknown error"}` });
+          broadcastToProject(projectId, { type: "message", message: errMsg });
+          processingProjects.delete(projectId);
+        }
+      })();
+    } catch (err) {
+      console.error("[ErrorReport] Error:", err);
       res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -649,17 +788,11 @@ export function createWebServer() {
       (async () => {
         processingProjects.add(projectId);
         let progressMsgId: string | null = null;
-        let checklistItems: string[] = [];
         let items: { id: number; text: string; done: boolean }[] = [];
-
-        try {
-          checklistItems = await agentService.generateChecklist(project.description || "", project.plan!);
-        } catch {}
-        items = checklistItems.map((t, i) => ({ id: i + 1, text: t, done: false }));
 
         const progressMsg = chatService.addMessage(projectId, {
           role: "assistant", type: "progress", content: "Starting...",
-          checklist: items.length > 0 ? items : undefined, percent: 0,
+          percent: 0,
         });
         progressMsgId = progressMsg.id;
         broadcastToProject(projectId, { type: "message", message: progressMsg });
@@ -667,9 +800,11 @@ export function createWebServer() {
         try {
           await projectService.updateProjectStatus(projectId, "building");
 
+          let progressDone = false;
           const onProgress = async (p: AgentProgress) => {
-            if (!progressMsgId) return;
-            const updated = chatService.updateMessage(projectId, progressMsgId, {
+            if (!progressMsgId || progressDone) return;
+            if ((p.percent ?? 0) >= 100) { progressDone = true; return; }
+            chatService.updateMessage(projectId, progressMsgId, {
               content: `${p.action} ${p.detail}`, percent: p.percent, costUsd: p.costUsd, balance: p.balance,
             });
             broadcastToProject(projectId, {
@@ -688,14 +823,22 @@ export function createWebServer() {
               const timeout = setTimeout(() => resolve(""), 5 * 60 * 1000);
               registerAnswerResolver(projectId, (answer: string) => {
                 clearTimeout(timeout);
-                const ansMsg = chatService.addMessage(projectId, { role: "user", type: "answer", content: answer });
-                broadcastToProject(projectId, { type: "message", message: ansMsg });
+                chatService.removeMessage(projectId, qMsg.id);
+                broadcastToProject(projectId, { type: "remove_messages", projectId, messageIds: [qMsg.id] });
                 resolve(answer);
               });
             });
           };
 
-          const onCheckTodo = items.length > 0 ? async (id: number) => {
+          const onCreateTodo = async (todoItems: string[]) => {
+            items = todoItems.map((t, i) => ({ id: i + 1, text: t, done: false }));
+            if (progressMsgId) {
+              chatService.updateMessage(projectId, progressMsgId, { checklist: items });
+              broadcastToProject(projectId, { type: "progress", projectId, messageId: progressMsgId, checklist: items });
+            }
+          };
+
+          const onCheckTodo = async (id: number) => {
             if (id >= 1 && id <= items.length) {
               items[id - 1].done = true;
               if (progressMsgId) {
@@ -703,13 +846,12 @@ export function createWebServer() {
                 broadcastToProject(projectId, { type: "progress", projectId, messageId: progressMsgId, checklist: items });
               }
             }
-          } : undefined;
+          };
 
           const result = await agentService.buildApp(
             projectId, project.description || "", project.plan!,
             onProgress, onAskUser,
-            items.length > 0 ? checklistItems : undefined,
-            onCheckTodo, undefined, balance,
+            onCreateTodo, onCheckTodo, undefined, balance,
           );
 
           const usage = await billingService.recordUsage(
@@ -725,44 +867,42 @@ export function createWebServer() {
             await commitService.releaseCurrentDev(projectId);
           } catch {}
 
-          if (progressMsgId) {
-            broadcastToProject(projectId, {
-              type: "progress", projectId, messageId: progressMsgId,
-              percent: 100, message: "Summarizing changes...",
-              checklist: items, costUsd: usage.costUsd, balance: usage.newBalance,
-            });
-            chatService.updateMessage(projectId, progressMsgId, {
-              percent: 100, content: "Summarizing changes...",
-              checklist: items, costUsd: usage.costUsd, balance: usage.newBalance,
-            });
-          }
-
           const appName = project.name || "App";
-          const [shortSummary, changelogUrl] = await Promise.all([
-            agentService.summarizeShort(result.summary, 1),
-            publishReport(`${appName} — Created`, result.summary, `Cost: $${usage.costUsd.toFixed(4)}`).catch(() => null),
-          ]);
+          const changelogUrl = await publishReport(`${appName} — Created`, result.summary, `Cost: $${usage.costUsd.toFixed(4)}`).catch(() => null);
 
           if (progressMsgId) {
             chatService.updateMessage(projectId, progressMsgId, {
-              type: "result", content: shortSummary || result.summary,
+              type: "result", content: result.shortSummary,
               percent: 100, costUsd: usage.costUsd, balance: usage.newBalance,
-              metadata: { changelogUrl, summary: result.summary },
+              metadata: { changelogUrl },
             });
             broadcastToProject(projectId, {
               type: "status", projectId, messageId: progressMsgId,
-              status: "done", summary: shortSummary || result.summary,
-              changelogUrl, costUsd: usage.costUsd, balance: usage.newBalance,
+              status: "done", summary: result.shortSummary,
+              changelogUrl,
+              costUsd: usage.costUsd, balance: usage.newBalance,
             });
           }
 
           broadcastToProject(projectId, { type: "status_change", projectId, status: "deployed" });
+
+          // Run passport in background
+          broadcastToProject(projectId, { type: "message", message: { role: "system", content: "preparing_next_update", metadata: { preparing: true } } });
+          (async () => {
+            try {
+              await agentService.compactContext(projectId, result.commitDir!, result.summary, result.commitNum!, project.description || undefined, project.plan || undefined);
+            } catch (err) {
+              console.error("[Chat API] Background passport error:", err);
+            } finally {
+              broadcastToProject(projectId, { type: "finalizing_done", projectId });
+              processingProjects.delete(projectId);
+            }
+          })();
         } catch (err: any) {
           console.error("[Chat API] Build error:", err);
           await projectService.updateProjectStatus(projectId, "error");
           const errMsg = chatService.addMessage(projectId, { role: "system", type: "error", content: `Build failed: ${err.message || "Unknown error"}` });
           broadcastToProject(projectId, { type: "message", message: errMsg });
-        } finally {
           processingProjects.delete(projectId);
         }
       })();
@@ -920,6 +1060,28 @@ export function createWebServer() {
       fs.createReadStream(logPath).pipe(res);
     } catch (err) {
       console.error("[MiniApp API] Log download error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // Parsed log data as JSON for the viewer
+  app.get("/telegram-mini-app/api/versions/:projectId/log-data/:version", async (req, res) => {
+    try {
+      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const projectId = req.params.projectId as string;
+      const project = await projectService.getProject(projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
+
+      const ver = parseInt(req.params.version as string, 10);
+      const logPath = commitService.getLogPath(projectId, ver);
+      if (!logPath) { res.status(404).json({ error: "Log not found" }); return; }
+
+      const entries = parseAgentLog(logPath);
+      res.json({ entries, version: ver, projectId });
+    } catch (err) {
+      console.error("[MiniApp API] Log data error:", err);
       res.status(500).json({ error: "Internal server error" });
     }
   });
