@@ -68,7 +68,7 @@ export function notifyProcessDone(
   sendTelegram(String(telegramId), text, {
     reply_markup: {
       inline_keyboard: [[{
-        text: `✅ ${t(lang, "notify_view_details")}`,
+        text: `${t(lang, "notify_view_details")}`,
         web_app: { url: miniAppUrl },
         style: "success",
       }]],
