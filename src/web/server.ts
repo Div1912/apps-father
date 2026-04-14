@@ -22,8 +22,8 @@ import { parseAgentLog } from "../services/agent-logger";
 import { decryptToken } from "../services/crypto.service";
 import { billingService } from "../services/billing.service";
 import { chatService, ChatMessage } from "../services/chat.service";
-import { agentService, AgentProgress } from "../services/agent.service";
-import { processingProjects } from "../bot/processing";
+import { agentService, AgentProgress, AgentAbortedError } from "../services/agent.service";
+import { processingProjects, abortedProjects } from "../bot/processing";
 import { commitService } from "../services/commit.service";
 import { publishReport } from "../services/telegraph.service";
 import { claudeService } from "../services/claude.service";
@@ -619,7 +619,7 @@ export function createWebServer() {
               balance: usage.newBalance,
             });
 
-            notifyProcessDone(auth.telegramId!, appName, result.shortSummary, "update");
+            notifyProcessDone(auth.telegramId!, appName, result.shortSummary, "update", lang);
 
             // Run passport in background — keep processingProjects lock
             broadcastToProject(projectId, { type: "message", message: { role: "system", content: "preparing_next_update", metadata: { preparing: true } } });
@@ -636,6 +636,17 @@ export function createWebServer() {
             return;
 
           } catch (err: any) {
+            if (err instanceof AgentAbortedError) {
+              console.log(`[Chat API] Agent aborted for ${projectId}, billing partial usage`);
+              await billingService.recordUsage(
+                user.id, projectId, err.model,
+                { input_tokens: err.inputTokens, output_tokens: err.outputTokens, cache_creation_input_tokens: err.cacheWriteTokens, cache_read_input_tokens: err.cacheReadTokens },
+                "update",
+              );
+              await projectService.updateProjectStatus(projectId, "deployed");
+              processingProjects.delete(projectId);
+              return;
+            }
             console.error("[Chat API] Agent error:", err);
             await projectService.updateProjectStatus(projectId, "error");
             const errMsg = chatService.addMessage(projectId, {
@@ -838,7 +849,7 @@ export function createWebServer() {
           }
           broadcastToProject(projectId, { type: "status", projectId, status: "done", messageId: progressMsgId, summary: result.shortSummary, changelogUrl, costUsd: usage.costUsd, balance: usage.newBalance });
 
-          notifyProcessDone(Number(owner.telegramId), appName, result.shortSummary, "fix");
+          notifyProcessDone(Number(owner.telegramId), appName, result.shortSummary, "fix", ownerLang);
 
           broadcastToProject(projectId, { type: "message", message: { role: "system", content: "preparing_next_update", metadata: { preparing: true } } });
           (async () => {
@@ -850,6 +861,17 @@ export function createWebServer() {
           })();
 
         } catch (err: any) {
+          if (err instanceof AgentAbortedError) {
+            console.log(`[ErrorReport] Agent aborted for ${projectId}, billing partial usage`);
+            await billingService.recordUsage(
+              owner.id, projectId, err.model,
+              { input_tokens: err.inputTokens, output_tokens: err.outputTokens, cache_creation_input_tokens: err.cacheWriteTokens, cache_read_input_tokens: err.cacheReadTokens },
+              "update",
+            );
+            await projectService.updateProjectStatus(projectId, "deployed");
+            processingProjects.delete(projectId);
+            return;
+          }
           console.error("[ErrorReport] Agent fix error:", err);
           await projectService.updateProjectStatus(projectId, "error");
           const errMsg = chatService.addMessage(projectId, { role: "assistant", type: "error", content: `${t(ownerLang, "sys_autofix_failed")}: ${err.message || "Unknown error"}` });
@@ -1046,7 +1068,7 @@ export function createWebServer() {
 
           broadcastToProject(projectId, { type: "status_change", projectId, status: "deployed" });
 
-          notifyProcessDone(auth.telegramId!, appName, result.shortSummary, "build");
+          notifyProcessDone(auth.telegramId!, appName, result.shortSummary, "build", buildLang);
 
           // Run passport in background
           broadcastToProject(projectId, { type: "message", message: { role: "system", content: "preparing_next_update", metadata: { preparing: true } } });
@@ -1061,6 +1083,17 @@ export function createWebServer() {
             }
           })();
         } catch (err: any) {
+          if (err instanceof AgentAbortedError) {
+            console.log(`[Chat API] Build aborted for ${projectId}, billing partial usage`);
+            await billingService.recordUsage(
+              user.id, projectId, err.model,
+              { input_tokens: err.inputTokens, output_tokens: err.outputTokens, cache_creation_input_tokens: err.cacheWriteTokens, cache_read_input_tokens: err.cacheReadTokens },
+              "build",
+            );
+            await projectService.updateProjectStatus(projectId, project.generatedCode ? "deployed" : "created");
+            processingProjects.delete(projectId);
+            return;
+          }
           console.error("[Chat API] Build error:", err);
           await projectService.updateProjectStatus(projectId, "error");
           const errMsg = chatService.addMessage(projectId, { role: "system", type: "error", content: `${t(buildLang, "sys_build_failed")}: ${err.message || "Unknown error"}` });
@@ -1133,6 +1166,42 @@ export function createWebServer() {
     }
   });
 
+  app.post("/telegram-mini-app/api/chat/:projectId/abort", async (req, res) => {
+    try {
+      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const projectId = req.params.projectId;
+      const project = await projectService.getProject(projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
+
+      if (!processingProjects.has(projectId)) {
+        res.json({ ok: false, error: "Not processing" });
+        return;
+      }
+
+      abortedProjects.add(projectId);
+      console.log(`[Chat API] Abort requested for project ${projectId} by user ${auth.telegramId}`);
+
+      // Remove progress messages from chat and broadcast removal
+      const history = chatService.getHistory(projectId, undefined, 1000);
+      const progressIds = history.filter(m => m.type === "progress" && (m.percent ?? 0) < 100).map(m => m.id);
+      for (const id of progressIds) {
+        chatService.removeMessage(projectId, id);
+      }
+      if (progressIds.length > 0) {
+        broadcastToProject(projectId, { type: "remove_messages", projectId, messageIds: progressIds });
+      }
+
+      broadcastToProject(projectId, { type: "finalizing_done", projectId });
+
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("[Chat API] Abort error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // ── Versions API ──
 
   app.get("/telegram-mini-app/api/versions/:projectId", async (req, res) => {
@@ -1145,10 +1214,11 @@ export function createWebServer() {
 
       const commits = await commitService.getCommits(req.params.projectId as string);
       const allMessages = chatService.getHistory(req.params.projectId as string, undefined, 10000);
-      const resultMessages = allMessages.filter(m => m.type === "result" && m.metadata?.changelogUrl);
+      const resultMessages = allMessages.filter(m => m.type === "result");
+      const resultMessagesReversed = [...resultMessages].reverse();
 
       const versions = commits.map((c, idx) => {
-        const resultMsg = resultMessages[idx];
+        const resultMsg = resultMessagesReversed[idx];
         return {
           version: parseInt(c.version, 10),
           changelog: c.changelog || "",

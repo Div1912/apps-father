@@ -342,6 +342,12 @@ const translations: Record<Lang, Record<string, string>> = {
     sys_build_failed: "Build failed",
     autofix_insufficient_balance: "Cannot auto-fix: insufficient balance (${balance}). Top up and send \"Fix the error\" to fix manually.",
 
+    // Notifications
+    notify_build_done: "App Created",
+    notify_update_done: "Update Complete",
+    notify_fix_done: "Error Fixed",
+    notify_view_details: "View Details",
+
     // Agent language instruction
     agent_lang_instruction: "",
   },
@@ -652,6 +658,11 @@ const translations: Record<Lang, Record<string, string>> = {
     sys_build_failed: "Сборка не удалась",
     autofix_insufficient_balance: "Невозможно исправить автоматически: недостаточно средств (${balance}). Пополните баланс и отправьте «Исправь ошибку».",
 
+    notify_build_done: "Приложение создано",
+    notify_update_done: "Обновление завершено",
+    notify_fix_done: "Ошибка исправлена",
+    notify_view_details: "Подробнее",
+
     agent_lang_instruction: "\n\nIMPORTANT: All user-facing text in the app (UI labels, buttons, messages, placeholders, titles) must be written in Russian (Русский). The code, comments, and variable names should stay in English.",
   },
   ua: {
@@ -960,6 +971,11 @@ const translations: Record<Lang, Record<string, string>> = {
     sys_autofix_failed: "Автовиправлення не вдалося",
     sys_build_failed: "Збірка не вдалася",
     autofix_insufficient_balance: "Неможливо виправити автоматично: недостатньо коштів (${balance}). Поповніть баланс і надішліть «Виправ помилку».",
+
+    notify_build_done: "Додаток створено",
+    notify_update_done: "Оновлення завершено",
+    notify_fix_done: "Помилку виправлено",
+    notify_view_details: "Детальніше",
 
     agent_lang_instruction: "\n\nIMPORTANT: All user-facing text in the app (UI labels, buttons, messages, placeholders, titles) must be written in Ukrainian (Українська). The code, comments, and variable names should stay in English.",
   },

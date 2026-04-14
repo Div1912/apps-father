@@ -183,7 +183,7 @@ export class ProjectService {
   }
 
   async buySlot(userId: number): Promise<{ newSlots: number; newBalance: number }> {
-    const SLOT_PRICE = 25;
+    const SLOT_PRICE = 5;
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { balance: true, appSlots: true } });
     if (!user || Number(user.balance) < SLOT_PRICE) throw new Error("Insufficient balance");
     const updated = await prisma.user.update({

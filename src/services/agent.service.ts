@@ -13,6 +13,7 @@ import { getProjectFeatures } from "./features.service";
 import { AgentLogger } from "./agent-logger";
 import { commitService } from "./commit.service";
 import { MODEL_PRICING } from "./billing.service";
+import { abortedProjects } from "../bot/processing";
 import { ConventionExtractor } from "./convention-extractor";
 
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
@@ -652,6 +653,22 @@ export interface AgentProgress {
   balance?: number;
 }
 
+export class AgentAbortedError extends Error {
+  inputTokens: number;
+  outputTokens: number;
+  cacheWriteTokens: number;
+  cacheReadTokens: number;
+  model: string;
+  constructor(model: string, inputTokens: number, outputTokens: number, cacheWriteTokens: number, cacheReadTokens: number) {
+    super("ABORTED");
+    this.model = model;
+    this.inputTokens = inputTokens;
+    this.outputTokens = outputTokens;
+    this.cacheWriteTokens = cacheWriteTokens;
+    this.cacheReadTokens = cacheReadTokens;
+  }
+}
+
 export interface AgentResult {
   summary: string;
   shortSummary: string;
@@ -1054,6 +1071,12 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
 
     const maxIterations = tierConfig.maxIterations;
     while (iterations < maxIterations) {
+      if (abortedProjects.has(projectId)) {
+        abortedProjects.delete(projectId);
+        logger.done("ABORTED by user", iterations, totalInputTokens, totalOutputTokens);
+        console.log(`[Agent] ⛔ Aborted by user after ${iterations} iterations | Tokens: in=${totalInputTokens} out=${totalOutputTokens}`);
+        throw new AgentAbortedError(tierConfig.model, totalInputTokens, totalOutputTokens, totalCacheWriteTokens, totalCacheReadTokens);
+      }
       iterations++;
 
       const response = await this.callWithRetry({

@@ -3348,6 +3348,27 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
   margin-top: 6px;
 }
 
+.chat-abort-btn {
+  display: block;
+    margin: 10px auto 0;
+    padding: 6px 24px;
+    border: none;
+    border-radius: 8px;
+    background: rgb(255 67 56 / 9%);
+    color: #ff382d;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+    position: absolute;
+    bottom: -42px;
+    left: 32px;
+    right: 32px;
+}
+.chat-abort-btn:active {
+  background: rgba(255, 59, 48, 0.25);
+}
+
 /* Checklist in chat */
 .chat-checklist {
   list-style: none;
@@ -4684,7 +4705,7 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
 .app-modal {
   width: 100%;
   max-width: 480px;
-  background: var(--tg-theme-secondary-bg-color, #1c1c1e);
+  background: linear-gradient(0deg, black, #1a1a1a);
   border-radius: 16px 16px 0 0;
   padding: 0;
   animation: modalSlideUp 0.25s ease;
@@ -4698,7 +4719,7 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
   padding: 16px 20px 8px;
   position: sticky;
   top: 0;
-  background: var(--tg-theme-secondary-bg-color, #1c1c1e);
+  /* background: var(--tg-theme-secondary-bg-color, #1c1c1e); */
   z-index: 1;
 }
 .app-modal-title {

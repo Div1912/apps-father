@@ -375,7 +375,7 @@ let slotsAnimInstance = null;
 function openSlotsFull() {
   document.getElementById('slots-full-info').textContent = t('slots_full_title');
   document.getElementById('slots-full-detail').innerHTML =
-    `<b>$25</b> per additional slot<br>Current slots: <b>${slots.used}/${slots.total}</b>`;
+    `<b>$5</b> per additional slot<br>Current slots: <b>${slots.used}/${slots.total}</b>`;
   loadSlotsTgs();
   showView('slots-full');
 }
@@ -1316,6 +1316,8 @@ function renderProgressBubble(msg) {
     html += `<div class="chat-progress-cost">Cost: $${msg.costUsd.toFixed(4)}${typeof msg.balance === 'number' ? ` · Balance: $${msg.balance.toFixed(2)}` : ''}</div>`;
   }
 
+  html += `<button class="chat-abort-btn" onclick="abortProcess()">Stop Update</button>`;
+
   el.innerHTML = html;
   setProcessing(true);
   setInputDisabled(true);
@@ -1344,6 +1346,8 @@ function updateProgressBubble(data) {
     html += `<div class="chat-progress-cost">Cost: $${data.costUsd.toFixed(4)}${typeof data.balance === 'number' ? ` · Balance: $${data.balance.toFixed(2)}` : ''}</div>`;
   }
 
+  html += `<button class="chat-abort-btn" onclick="abortProcess()">Stop Update</button>`;
+
   el.innerHTML = html;
   setHeaderWorking(true, pct);
 }
@@ -1356,6 +1360,30 @@ function renderChecklist(items) {
   }
   html += '</ul>';
   return html;
+}
+
+async function abortProcess() {
+  if (!currentProject) return;
+  tg?.showConfirm('Are you sure you want to stop the current process?', async (ok) => {
+    if (!ok) return;
+    try {
+      const res = await fetch(`${API_BASE}/chat/${currentProject.id}/abort`, {
+        method: 'POST',
+        headers: apiHeaders(),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setProcessing(false);
+        setInputDisabled(false);
+        setHeaderWorking(false);
+        showToast('Process stopped', 'success');
+      } else {
+        showToast(data.error || 'Failed to stop', 'error');
+      }
+    } catch {
+      showToast('Failed to stop process', 'error');
+    }
+  });
 }
 
 function formatContent(text) {
@@ -3386,7 +3414,7 @@ function showView(view) {
       tg.MainButton.textColor = '#ffffff';
       tg.MainButton.show();
     } else if (view === 'slots-full') {
-      tg.MainButton.setText(t('slots_full_title') + ' — $25');
+      tg.MainButton.setText(t('slots_full_title') + ' — $5');
       tg.MainButton.color = tg.themeParams?.button_color || '#3390ec';
       tg.MainButton.textColor = tg.themeParams?.button_text_color || '#ffffff';
       tg.MainButton.show();

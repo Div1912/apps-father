@@ -1,4 +1,5 @@
 import { config } from "../config";
+import { t, Lang } from "../bot/i18n";
 
 const ADMIN_IDS = ["8784357184", "8796958409"];
 
@@ -53,9 +54,11 @@ export function notifyProcessDone(
   appName: string,
   summary: string,
   kind: "build" | "update" | "fix",
+  lang: Lang = "en",
 ): void {
   const emoji = kind === "build" ? "🚀" : kind === "fix" ? "🔧" : "✅";
-  const label = kind === "build" ? "App Created" : kind === "fix" ? "Error Fixed" : "Update Complete";
+  const labelKey = kind === "build" ? "notify_build_done" : kind === "fix" ? "notify_fix_done" : "notify_update_done";
+  const label = t(lang, labelKey);
   const miniAppUrl = `${config.baseUrl}/telegram-mini-app`;
 
   const text = `${emoji} <b>${label}</b>\n\n` +
@@ -65,8 +68,9 @@ export function notifyProcessDone(
   sendTelegram(String(telegramId), text, {
     reply_markup: {
       inline_keyboard: [[{
-        text: "📱 View Details",
+        text: `✅ ${t(lang, "notify_view_details")}`,
         web_app: { url: miniAppUrl },
+        style: "success",
       }]],
     },
   });
