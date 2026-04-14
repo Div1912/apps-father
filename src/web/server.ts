@@ -30,6 +30,8 @@ import { claudeService } from "../services/claude.service";
 import { prisma } from "../db";
 import { runtimeConfig } from "../services/runtime-config.service";
 import { Decimal } from "@prisma/client/runtime/library";
+import { t, Lang } from "../bot/i18n";
+import { notifyProcessDone } from "../services/notify.service";
 
 let expressApp: express.Application | null = null;
 let httpServer: http.Server | null = null;
@@ -170,6 +172,20 @@ export function createWebServer() {
     }
   });
 
+  app.post("/telegram-mini-app/api/language", async (req, res) => {
+    try {
+      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { lang } = req.body;
+      if (!lang || !["en", "ru", "ua"].includes(lang)) { res.status(400).json({ error: "Invalid lang" }); return; }
+      await prisma.user.update({ where: { telegramId: BigInt(auth.telegramId!) }, data: { language: lang } });
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("[MiniApp API] Language error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   app.post("/telegram-mini-app/api/buy-slot", async (req, res) => {
     try {
       const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
@@ -266,6 +282,141 @@ export function createWebServer() {
     }
   });
 
+  // ── Partner API ──
+
+  app.get("/telegram-mini-app/api/partner", async (req, res) => {
+    try {
+      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      if (!user.isPartner) { res.json({ isPartner: false }); return; }
+
+      const referrals = await prisma.user.findMany({
+        where: { referredBy: user.telegramId },
+        select: { id: true, username: true, firstName: true, createdAt: true },
+      });
+
+      const referralIds = referrals.map(r => r.id);
+      let totalEarned = 0;
+      const referralDetails = [];
+
+      for (const ref of referrals) {
+        const deposits = await prisma.payment.aggregate({
+          _sum: { amountUsd: true },
+          where: { userId: ref.id, status: "confirmed" },
+        });
+        const depositTotal = Number(deposits._sum.amountUsd || 0);
+        const earned = depositTotal * Number(user.partnerPercent || 0) / 100;
+        totalEarned += earned;
+        referralDetails.push({
+          id: ref.id,
+          username: ref.username,
+          firstName: ref.firstName,
+          joinedAt: ref.createdAt,
+          deposits: depositTotal,
+          earned,
+        });
+      }
+
+      res.json({
+        isPartner: true,
+        partnerPercent: Number(user.partnerPercent || 0),
+        partnerTag: user.partnerTag,
+        partnerBalance: Number(user.partnerBalance),
+        totalEarned,
+        inviteLink: user.partnerTag ? `https://t.me/apps_father_bot?start=${user.partnerTag}` : null,
+        referrals: referralDetails,
+      });
+    } catch (err) {
+      console.error("[MiniApp API] Partner error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.post("/telegram-mini-app/api/partner/transfer", async (req, res) => {
+    try {
+      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      if (!user.isPartner) { res.status(403).json({ error: "Not a partner" }); return; }
+
+      const { amount } = req.body;
+      const val = parseFloat(amount);
+      if (isNaN(val) || val <= 0) { res.status(400).json({ error: "Invalid amount" }); return; }
+      if (val > Number(user.partnerBalance)) { res.status(400).json({ error: "Insufficient partner balance" }); return; }
+
+      const updated = await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          partnerBalance: { decrement: new Decimal(val.toFixed(4)) },
+          balance: { increment: new Decimal(val.toFixed(4)) },
+        },
+      });
+
+      res.json({
+        partnerBalance: Number(updated.partnerBalance),
+        balance: Number(updated.balance),
+      });
+    } catch (err) {
+      console.error("[MiniApp API] Partner transfer error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.post("/telegram-mini-app/api/partner/withdraw", async (req, res) => {
+    try {
+      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      if (!user.isPartner) { res.status(403).json({ error: "Not a partner" }); return; }
+
+      const { amount, address } = req.body;
+      const val = parseFloat(amount);
+      if (isNaN(val) || val < 5) { res.status(400).json({ error: "Minimum withdrawal is $5.00" }); return; }
+      if (val > Number(user.partnerBalance)) { res.status(400).json({ error: "Insufficient partner balance" }); return; }
+      if (!address || !address.trim()) { res.status(400).json({ error: "TON address is required" }); return; }
+
+      const withdrawal = await prisma.withdrawal.create({
+        data: {
+          userId: user.id,
+          amountUsd: new Decimal(val.toFixed(4)),
+          tonAddress: address.trim(),
+        },
+      });
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { partnerBalance: { decrement: new Decimal(val.toFixed(4)) } },
+      });
+
+      const groupId = config.withdrawGroupId;
+      const msgText =
+        `<b>💸 Withdrawal Request #${withdrawal.id}</b>\n\n` +
+        `<b>Partner:</b> ${user.username ? "@" + user.username : user.firstName || "Unknown"} (ID: ${user.telegramId})\n` +
+        `<b>Amount:</b> ${val.toFixed(2)} USDT\n` +
+        `<b>TON Address:</b> <code>${address.trim()}</code>\n` +
+        `<b>Partner Balance After:</b> $${(Number(user.partnerBalance) - val).toFixed(2)}`;
+
+      const kbd = {
+        inline_keyboard: [[
+          { text: "✅ Approve", callback_data: `wd_approve_${withdrawal.id}` },
+          { text: "❌ Decline", callback_data: `wd_decline_${withdrawal.id}` },
+        ]],
+      };
+
+      await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: groupId, text: msgText, parse_mode: "HTML", reply_markup: kbd }),
+      }).catch((err) => console.error("[Withdraw] Failed to send group notification:", err));
+
+      res.json({ ok: true, withdrawalId: withdrawal.id, message: "Withdrawal request submitted. You will be notified when it is processed." });
+    } catch (err) {
+      console.error("[MiniApp API] Partner withdraw error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // ── Chat API ──
   const upload = multer({ dest: path.join(process.cwd(), "tmp_uploads"), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -294,6 +445,7 @@ export function createWebServer() {
       const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const lang = (user.language as Lang) || "en";
       const project = await projectService.getProject(req.params.projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
@@ -312,7 +464,7 @@ export function createWebServer() {
 
       if (msgType === "update") {
         if (processingProjects.has(projectId)) {
-          const errMsg = chatService.addMessage(projectId, { role: "system", type: "error", content: "Another process is already running for this app." });
+          const errMsg = chatService.addMessage(projectId, { role: "system", type: "error", content: t(lang, "sys_already_processing") });
           broadcastToProject(projectId, { type: "message", message: errMsg });
           res.json({ messageId: userMsg.id, status: "error", error: "already_processing" });
           return;
@@ -320,7 +472,7 @@ export function createWebServer() {
 
         const balance = await billingService.getUserBalance(user.id);
         if (balance < 5) {
-          const errMsg = chatService.addMessage(projectId, { role: "system", type: "balance_error", content: `Insufficient balance ($${balance.toFixed(2)}). Minimum $5.00 required for updates.`, metadata: { balance } });
+          const errMsg = chatService.addMessage(projectId, { role: "system", type: "balance_error", content: t(lang, "insufficient_balance_amount", { balance: `$${balance.toFixed(2)}`, min: "$5.00" }), metadata: { balance } });
           broadcastToProject(projectId, { type: "message", message: errMsg });
           res.json({ messageId: userMsg.id, status: "error", error: "insufficient_balance" });
           return;
@@ -337,7 +489,7 @@ export function createWebServer() {
           const progressMsg = chatService.addMessage(projectId, {
             role: "assistant",
             type: "progress",
-            content: "Starting...",
+            content: t(lang, "sys_starting"),
             percent: 0,
           });
           progressMsgId = progressMsg.id;
@@ -422,7 +574,7 @@ export function createWebServer() {
 
             const result = await agentService.updateApp(
               projectId, text.trim(), onProgress, attachments,
-              onAskUser, onCreateTodo, onCheckTodo, undefined, currentBalance,
+              onAskUser, onCreateTodo, onCheckTodo, lang, currentBalance,
             );
 
             const usage = await billingService.recordUsage(
@@ -467,6 +619,8 @@ export function createWebServer() {
               balance: usage.newBalance,
             });
 
+            notifyProcessDone(auth.telegramId!, appName, result.shortSummary, "update");
+
             // Run passport in background — keep processingProjects lock
             broadcastToProject(projectId, { type: "message", message: { role: "system", content: "preparing_next_update", metadata: { preparing: true } } });
             (async () => {
@@ -487,7 +641,7 @@ export function createWebServer() {
             const errMsg = chatService.addMessage(projectId, {
               role: "assistant",
               type: "error",
-              content: `Update failed: ${err.message || "Unknown error"}`,
+              content: `${t(lang, "sys_update_failed")}: ${err.message || "Unknown error"}`,
             });
             broadcastToProject(projectId, { type: "message", message: errMsg });
             processingProjects.delete(projectId);
@@ -500,7 +654,7 @@ export function createWebServer() {
       if (msgType === "question") {
         const balance = await billingService.getUserBalance(user.id);
         if (balance < 0.5) {
-          const errMsg = chatService.addMessage(projectId, { role: "system", type: "balance_error", content: `Insufficient balance ($${balance.toFixed(2)}). Minimum $0.50 required.`, metadata: { balance } });
+          const errMsg = chatService.addMessage(projectId, { role: "system", type: "balance_error", content: t(lang, "insufficient_balance_amount", { balance: `$${balance.toFixed(2)}`, min: "$0.50" }), metadata: { balance } });
           broadcastToProject(projectId, { type: "message", message: errMsg });
           res.json({ messageId: userMsg.id, status: "error", error: "insufficient_balance" });
           return;
@@ -533,7 +687,7 @@ export function createWebServer() {
               (_chunk, fullText) => {
                 broadcastToProject(projectId, { type: "stream_chunk", projectId, messageId: streamMsgId, text: fullText });
               },
-              lastUpdate, proj?.description || undefined, askHistory,
+              lastUpdate, proj?.description || undefined, askHistory, lang,
             );
 
             const usage = await billingService.recordUsage(
@@ -611,12 +765,13 @@ export function createWebServer() {
 
       const owner = await prisma.user.findUnique({ where: { id: project.userId } });
       if (!owner) return;
+      const ownerLang = (owner.language as Lang) || "en";
 
       const balance = await billingService.getUserBalance(owner.id);
       if (balance < 5) {
         const errMsg = chatService.addMessage(projectId, {
           role: "system", type: "balance_error",
-          content: `Cannot auto-fix: insufficient balance ($${balance.toFixed(2)}). Top up and send "Fix the error" to fix manually.`,
+          content: t(ownerLang, "autofix_insufficient_balance", { balance: `$${balance.toFixed(2)}` }),
           metadata: { balance },
         });
         broadcastToProject(projectId, { type: "message", message: errMsg });
@@ -628,7 +783,7 @@ export function createWebServer() {
         let progressMsgId: string | null = null;
         let items: { id: number; text: string; done: boolean }[] = [];
 
-        const progressMsg = chatService.addMessage(projectId, { role: "assistant", type: "progress", content: "Fixing error...", percent: 0 });
+        const progressMsg = chatService.addMessage(projectId, { role: "assistant", type: "progress", content: t(ownerLang, "sys_fixing_error"), percent: 0 });
         progressMsgId = progressMsg.id;
         broadcastToProject(projectId, { type: "message", message: progressMsg });
 
@@ -662,7 +817,7 @@ export function createWebServer() {
             }
           };
 
-          const result = await agentService.updateApp(projectId, errorText, onProgress, [], undefined, onCreateTodo, onCheckTodo, undefined, currentBalance);
+          const result = await agentService.updateApp(projectId, errorText, onProgress, [], undefined, onCreateTodo, onCheckTodo, ownerLang, currentBalance);
 
           const usage = await billingService.recordUsage(
             owner.id, projectId, result.model,
@@ -683,6 +838,8 @@ export function createWebServer() {
           }
           broadcastToProject(projectId, { type: "status", projectId, status: "done", messageId: progressMsgId, summary: result.shortSummary, changelogUrl, costUsd: usage.costUsd, balance: usage.newBalance });
 
+          notifyProcessDone(Number(owner.telegramId), appName, result.shortSummary, "fix");
+
           broadcastToProject(projectId, { type: "message", message: { role: "system", content: "preparing_next_update", metadata: { preparing: true } } });
           (async () => {
             try { await agentService.compactContext(projectId, result.commitDir!, result.summary, result.commitNum!, project?.description || undefined, project?.plan || undefined); } catch {}
@@ -695,7 +852,7 @@ export function createWebServer() {
         } catch (err: any) {
           console.error("[ErrorReport] Agent fix error:", err);
           await projectService.updateProjectStatus(projectId, "error");
-          const errMsg = chatService.addMessage(projectId, { role: "assistant", type: "error", content: `Auto-fix failed: ${err.message || "Unknown error"}` });
+          const errMsg = chatService.addMessage(projectId, { role: "assistant", type: "error", content: `${t(ownerLang, "sys_autofix_failed")}: ${err.message || "Unknown error"}` });
           broadcastToProject(projectId, { type: "message", message: errMsg });
           processingProjects.delete(projectId);
         }
@@ -711,10 +868,11 @@ export function createWebServer() {
       const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const suggestLang = (user.language as Lang) || "en";
       const project = await projectService.getProject(req.params.projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
-      const suggestions = await agentService.getSuggestions(req.params.projectId);
+      const suggestions = await agentService.getSuggestions(req.params.projectId, suggestLang);
       res.json({ suggestions });
     } catch (err) {
       console.error("[Chat API] Suggestions error:", err);
@@ -727,6 +885,7 @@ export function createWebServer() {
       const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const planLang = (user.language as Lang) || "en";
       const projectId = req.params.projectId;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -743,7 +902,7 @@ export function createWebServer() {
 
       const assets = await projectService.getProjectAssets(projectId);
       const assetPaths = assets.map((a: any) => a.filePath).filter(Boolean) as string[];
-      const result = await claudeService.generatePlan(description.trim(), assetPaths);
+      const result = await claudeService.generatePlan(description.trim(), assetPaths, planLang);
       await projectService.updateProjectPlan(projectId, result.plan);
 
       const usage = await billingService.recordUsage(
@@ -770,6 +929,7 @@ export function createWebServer() {
       const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const buildLang = (user.language as Lang) || "en";
       const projectId = req.params.projectId;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -779,7 +939,7 @@ export function createWebServer() {
 
       const balance = await billingService.getUserBalance(user.id);
       if (balance < 5) {
-        res.status(402).json({ error: `Insufficient balance ($${balance.toFixed(2)}). Minimum $5.00 required.` });
+        res.status(402).json({ error: t(buildLang, "insufficient_balance_amount", { balance: `$${balance.toFixed(2)}`, min: "$5.00" }) });
         return;
       }
 
@@ -791,7 +951,7 @@ export function createWebServer() {
         let items: { id: number; text: string; done: boolean }[] = [];
 
         const progressMsg = chatService.addMessage(projectId, {
-          role: "assistant", type: "progress", content: "Starting...",
+          role: "assistant", type: "progress", content: t(buildLang, "sys_starting"),
           percent: 0,
         });
         progressMsgId = progressMsg.id;
@@ -851,7 +1011,7 @@ export function createWebServer() {
           const result = await agentService.buildApp(
             projectId, project.description || "", project.plan!,
             onProgress, onAskUser,
-            onCreateTodo, onCheckTodo, undefined, balance,
+            onCreateTodo, onCheckTodo, buildLang, balance,
           );
 
           const usage = await billingService.recordUsage(
@@ -886,6 +1046,8 @@ export function createWebServer() {
 
           broadcastToProject(projectId, { type: "status_change", projectId, status: "deployed" });
 
+          notifyProcessDone(auth.telegramId!, appName, result.shortSummary, "build");
+
           // Run passport in background
           broadcastToProject(projectId, { type: "message", message: { role: "system", content: "preparing_next_update", metadata: { preparing: true } } });
           (async () => {
@@ -901,7 +1063,7 @@ export function createWebServer() {
         } catch (err: any) {
           console.error("[Chat API] Build error:", err);
           await projectService.updateProjectStatus(projectId, "error");
-          const errMsg = chatService.addMessage(projectId, { role: "system", type: "error", content: `Build failed: ${err.message || "Unknown error"}` });
+          const errMsg = chatService.addMessage(projectId, { role: "system", type: "error", content: `${t(buildLang, "sys_build_failed")}: ${err.message || "Unknown error"}` });
           broadcastToProject(projectId, { type: "message", message: errMsg });
           processingProjects.delete(projectId);
         }
@@ -917,6 +1079,7 @@ export function createWebServer() {
       const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const editPlanLang = (user.language as Lang) || "en";
       const projectId = req.params.projectId;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -932,7 +1095,7 @@ export function createWebServer() {
       chatService.addMessage(projectId, { role: "user", type: "text", content: feedback.trim() });
 
       const updatedDescription = `${project.description}\n\nAdditional feedback: ${feedback.trim()}`;
-      const result = await claudeService.generatePlan(updatedDescription);
+      const result = await claudeService.generatePlan(updatedDescription, undefined, editPlanLang);
       await projectService.updateProjectPlan(projectId, result.plan);
 
       const usage = await billingService.recordUsage(
@@ -1462,6 +1625,11 @@ export function createWebServer() {
         referredBy: user.referredBy?.toString() || null,
         totalSpent: Number(totalSpent._sum.costUsd || 0),
         createdAt: user.createdAt,
+        isPartner: user.isPartner,
+        partnerPercent: user.partnerPercent ? Number(user.partnerPercent) : null,
+        partnerTag: user.partnerTag,
+        partnerReferralBonus: user.partnerReferralBonus ? Number(user.partnerReferralBonus) : null,
+        partnerBalance: Number(user.partnerBalance),
         projects: user.projects.map(p => ({
           id: p.id, name: p.name, status: p.status, botUsername: p.botUsername,
           totalCost: Number(p.totalCostUsd), createdAt: p.createdAt, updatedAt: p.updatedAt,
@@ -1475,6 +1643,27 @@ export function createWebServer() {
           inputTokens: l.inputTokens, outputTokens: l.outputTokens,
           cost: Number(l.costUsd), createdAt: l.createdAt,
         })),
+      });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/telegram-mini-app/api/admin/users/:id/partner", async (req, res) => {
+    if (!adminGuard(req, res)) return;
+    try {
+      const userId = parseInt(req.params.id);
+      const { isPartner, partnerPercent, partnerTag, partnerReferralBonus } = req.body;
+      const data: any = {};
+      if (typeof isPartner === "boolean") data.isPartner = isPartner;
+      if (partnerPercent !== undefined) data.partnerPercent = partnerPercent === null ? null : new Decimal(parseFloat(partnerPercent).toFixed(2));
+      if (partnerTag !== undefined) data.partnerTag = partnerTag || null;
+      if (partnerReferralBonus !== undefined) data.partnerReferralBonus = partnerReferralBonus === null ? null : new Decimal(parseFloat(partnerReferralBonus).toFixed(4));
+      const updated = await prisma.user.update({ where: { id: userId }, data });
+      res.json({
+        isPartner: updated.isPartner,
+        partnerPercent: updated.partnerPercent ? Number(updated.partnerPercent) : null,
+        partnerTag: updated.partnerTag,
+        partnerReferralBonus: updated.partnerReferralBonus ? Number(updated.partnerReferralBonus) : null,
+        partnerBalance: Number(updated.partnerBalance),
       });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });

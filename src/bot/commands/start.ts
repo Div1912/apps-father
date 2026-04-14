@@ -38,9 +38,41 @@ export async function startCommand(ctx: BotContext) {
   ctx.session.conversationState = "idle";
 
   const startParam = ctx.match ? String(ctx.match) : undefined;
-  const referredBy = startParam && /^\d+$/.test(startParam) ? parseInt(startParam, 10) : undefined;
+  let referredBy = startParam && /^\d+$/.test(startParam) ? parseInt(startParam, 10) : undefined;
+
+  // Resolve partner tag to referrer telegramId
+  let partnerBonus: number | null = null;
+  if (!referredBy && startParam && !startParam.startsWith("v_")) {
+    try {
+      const partner = await prisma.user.findUnique({ where: { partnerTag: startParam } });
+      if (partner && partner.isPartner) {
+        referredBy = Number(partner.telegramId);
+        if (partner.partnerReferralBonus && Number(partner.partnerReferralBonus) > 0) {
+          partnerBonus = Number(partner.partnerReferralBonus);
+        }
+      }
+    } catch (err) {
+      console.error("[Start] Partner tag lookup error:", err);
+    }
+  }
 
   const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name, referredBy);
+
+  // Credit partner referral bonus to new user
+  if (partnerBonus && user.referredBy) {
+    try {
+      const alreadyHasBalance = Number(user.balance) > 0;
+      if (!alreadyHasBalance) {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { balance: { increment: new Decimal(partnerBonus.toFixed(4)) } },
+        });
+        console.log(`[Start] Partner referral bonus $${partnerBonus.toFixed(2)} credited to user ${user.id}`);
+      }
+    } catch (err) {
+      console.error("[Start] Partner referral bonus error:", err);
+    }
+  }
 
   ctx.session.language = (user.language as Lang) || "en";
   const lang = ctx.session.language;

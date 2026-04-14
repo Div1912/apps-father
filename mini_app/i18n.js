@@ -518,6 +518,15 @@ function setLang(lang) {
   currentLang = lang;
   localStorage.setItem('af_lang', lang);
   applyLang();
+
+  const initData = window.Telegram?.WebApp?.initData;
+  if (initData) {
+    fetch('/telegram-mini-app/api/language', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Telegram-Init-Data': initData },
+      body: JSON.stringify({ lang }),
+    }).catch(() => {});
+  }
 }
 
 function applyLang() {

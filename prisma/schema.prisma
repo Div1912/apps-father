@@ -18,10 +18,17 @@ model User {
   language   String    @default("en")
   createdAt  DateTime  @default(now()) @map("created_at")
 
+  isPartner           Boolean  @default(false) @map("is_partner")
+  partnerPercent      Decimal? @map("partner_percent") @db.Decimal(5, 2)
+  partnerTag          String?  @unique @map("partner_tag")
+  partnerReferralBonus Decimal? @map("partner_referral_bonus") @db.Decimal(12, 4)
+  partnerBalance      Decimal  @default(0) @map("partner_balance") @db.Decimal(12, 4)
+
   projects      Project[]
   conversations Conversation[]
   payments      Payment[]
   usageLogs     UsageLog[]
+  withdrawals   Withdrawal[]
 
   @@map("users")
 }
@@ -138,6 +145,21 @@ model VoucherRedemption {
 
   @@unique([voucherId, userId])
   @@map("voucher_redemptions")
+}
+
+model Withdrawal {
+  id          Int       @id @default(autoincrement())
+  userId      Int       @map("user_id")
+  amountUsd   Decimal   @map("amount_usd") @db.Decimal(12, 4)
+  tonAddress  String    @map("ton_address")
+  status      String    @default("pending")
+  txHash      String?   @map("tx_hash")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  processedAt DateTime? @map("processed_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("withdrawals")
 }
 
 model UsageLog {

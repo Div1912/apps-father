@@ -100,6 +100,16 @@ function buildErrorMonitorScript(ownerTelegramId: number, projectId: string): st
     var r=e.reason,m=r&&r.message?r.message:String(r),s=r&&r.stack?r.stack:m;
     showErr(m,s);
   });
+  var _origFetch=window.fetch;
+  window.fetch=function(){
+    var args=arguments,u=typeof args[0]==='string'?args[0]:(args[0]&&args[0].url?args[0].url:'');
+    return _origFetch.apply(this,args).then(function(r){
+      if(r.status>=500&&u.indexOf('/af-error-report')===-1&&u.indexOf('/telegram-mini-app/api')===-1){
+        showErr('HTTP '+r.status+' from '+u,'fetch '+u+' returned status '+r.status);
+      }
+      return r;
+    });
+  };
 })();
 </script>`;
 }

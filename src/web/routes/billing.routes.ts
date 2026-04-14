@@ -3,8 +3,7 @@ import crypto from "crypto";
 import { billingService } from "../../services/billing.service";
 import { config } from "../../config";
 import { prisma } from "../../db";
-import { Decimal } from "@prisma/client/runtime/library";
-import { notifyDeposit, notifyReferralBonus } from "../../services/notify.service";
+import { notifyDeposit } from "../../services/notify.service";
 
 const router = Router();
 
@@ -110,35 +109,7 @@ router.post("/cryptobot", async (req: Request, res: Response) => {
 
         notifyDeposit(Number(user.telegramId), user.username ?? undefined, Number(payment.amountUsd), newBalance);
 
-        if (user.referredBy) {
-          try {
-            const bonus = Number(payment.amountUsd) * 0.15;
-            const referrer = await prisma.user.update({
-              where: { telegramId: user.referredBy },
-              data: { balance: { increment: new Decimal(bonus.toFixed(4)) } },
-            });
-
-            const bonusText =
-              `<b><tg-emoji emoji-id="5377544696656599429">✅</tg-emoji> Referral bonus!</b>\n\n` +
-              `Your referral just topped up their account.\n` +
-              `<b><tg-emoji emoji-id="5377851954321989517">💲</tg-emoji> +$${bonus.toFixed(2)}</b> has been added to your balance.\n\n` +
-              `<blockquote>New balance: <b>$${Number(referrer.balance).toFixed(2)}</b></blockquote>`;
-
-            await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                chat_id: referrer.telegramId.toString(),
-                text: bonusText,
-                parse_mode: "HTML",
-              }),
-            });
-
-            notifyReferralBonus(Number(referrer.telegramId), referrer.username ?? undefined, bonus, Number(user.telegramId));
-          } catch (refErr) {
-            console.error("[CryptoBot] Referral bonus error:", refErr);
-          }
-        }
+        await billingService.creditReferralBonus(user, Number(payment.amountUsd));
       }
     } catch (notifyErr) {
       console.error("[CryptoBot] Notify error:", notifyErr);

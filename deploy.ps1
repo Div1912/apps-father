@@ -35,6 +35,16 @@ ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_
 ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_father -c 'ALTER TABLE users ADD COLUMN IF NOT EXISTS language TEXT;'"
 ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_father -c 'CREATE TABLE IF NOT EXISTS vouchers (id SERIAL PRIMARY KEY, code TEXT UNIQUE NOT NULL, amount_usd DECIMAL(12,4) NOT NULL, max_uses INT NOT NULL, used_count INT DEFAULT 0, active BOOLEAN DEFAULT true, created_at TIMESTAMPTZ DEFAULT NOW());'"
 ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_father -c 'CREATE TABLE IF NOT EXISTS voucher_redemptions (id SERIAL PRIMARY KEY, voucher_id INT NOT NULL REFERENCES vouchers(id), user_id INT NOT NULL REFERENCES users(id), created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(voucher_id, user_id));'"
+ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_father -c 'ALTER TABLE users ADD COLUMN IF NOT EXISTS is_partner BOOLEAN DEFAULT false;'"
+ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_father -c 'ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_percent DECIMAL(5,2);'"
+ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_father -c 'ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_tag TEXT UNIQUE;'"
+ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_father -c 'ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_referral_bonus DECIMAL(12,4);'"
+ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_father -c 'ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_balance DECIMAL(12,4) DEFAULT 0;'"
+$withdrawSql = "CREATE TABLE IF NOT EXISTS withdrawals (id SERIAL PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id), amount_usd DECIMAL(12,4) NOT NULL, ton_address TEXT NOT NULL, status TEXT DEFAULT 'pending', tx_hash TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), processed_at TIMESTAMPTZ);"
+$withdrawSql | Out-File -Encoding utf8 -FilePath tmp_wd.sql
+scp tmp_wd.sql root@204.168.219.20:/tmp/tmp_wd.sql
+ssh root@204.168.219.20 "docker cp /tmp/tmp_wd.sql apps_father_db:/tmp/tmp_wd.sql; docker exec apps_father_db psql -U apps_father -d apps_father -f /tmp/tmp_wd.sql"
+Remove-Item tmp_wd.sql -ErrorAction SilentlyContinue
 Write-Host "Migration OK" -ForegroundColor Green
 
 Write-Host "=== Syncing skills ===" -ForegroundColor Cyan

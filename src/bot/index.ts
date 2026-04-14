@@ -4,6 +4,7 @@ import { BotContext, SessionData } from "../types";
 import { startCommand } from "./commands/start";
 import { billingService } from "../services/billing.service";
 import { registerManagedBotHandlers } from "./handlers/managed-bot";
+import { registerCallbackHandlers } from "./handlers/callback";
 
 export function createBot(): Bot<BotContext> {
   const bot = new Bot<BotContext>(config.botToken);
@@ -20,11 +21,18 @@ export function createBot(): Bot<BotContext> {
     })
   );
 
-  bot.command("start", startCommand);
+  bot.command("start", (ctx) => {
+    if (ctx.chat.type !== "private") return;
+    return startCommand(ctx);
+  });
 
+  registerCallbackHandlers(bot);
   registerManagedBotHandlers(bot);
 
-  bot.on("message", (ctx) => startCommand(ctx));
+  bot.on("message", (ctx) => {
+    if (ctx.chat.type !== "private") return;
+    return startCommand(ctx);
+  });
 
   bot.on("pre_checkout_query" as any, async (ctx: any) => {
     try {

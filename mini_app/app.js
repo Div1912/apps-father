@@ -125,6 +125,15 @@ function avatarSvgDataUri(name) {
   catch { return 'data:image/svg+xml,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 100 100"><rect width="100" height="100" fill="${c1}"/></svg>`); }
 }
 
+function userAvatarHtml(name, username) {
+  if (username) {
+    const clean = username.replace(/^@/, '');
+    return `<img class="tm-row-pic tm-row-pic-user" src="https://t.me/i/userpic/320/${clean}.svg" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" style="object-fit:cover;"><div class="tm-row-pic tm-row-pic-user avatar-gradient" style="display:none;background:linear-gradient(135deg,${getGradient(name).join(',')})">${getInitials(name)}</div>`;
+  }
+  const [c1, c2] = getGradient(name);
+  return `<div class="tm-row-pic tm-row-pic-user avatar-gradient" style="background:linear-gradient(135deg,${c1},${c2})">${getInitials(name)}</div>`;
+}
+
 function statusLabel(status) {
   return t('status_' + status) || status;
 }
@@ -155,24 +164,94 @@ function timeStr(ts) {
 
 // ── Spoiler points ──
 
-function generateSpoilerPoints(container, text) {
-  container.querySelectorAll('.point').forEach(p => p.remove());
-  const rect = container.getBoundingClientRect();
-  const w = rect.width || 260;
-  const h = rect.height || 20;
-  const count = Math.min(Math.floor(w / 1.5), 180);
-  for (let i = 0; i < count; i++) {
-    const b = document.createElement('b');
-    b.className = 'point';
-    const x = Math.random() * w;
-    const y = Math.random() * h;
-    const s = 0.33 + Math.random() * 0.12;
-    const o = [0.158, 0.316, 0.475, 0.633, 0.791, 0.95][Math.floor(Math.random() * 6)];
-    b.style.transform = `translate(${x}px, ${y}px) scale(${s})`;
-    b.style.opacity = o;
-    b.style.animationDelay = `${Math.random() * 1.5}s`;
-    container.appendChild(b);
+var SimpleSpoiler = {
+  random: function(x, y) {
+    return x + Math.floor(Math.random() * (y + 1 - x));
+  },
+  generateVector: function(count) {
+    var speedMax = 8, speedMin = 4, lifetime = 600;
+    var value = SimpleSpoiler.random(0, 2 * count + 2);
+    var negative = value < count + 1;
+    var mod = negative ? value : value - count - 1;
+    var speed = speedMin + ((speedMax - speedMin) * mod) / count;
+    var max = Math.ceil(speedMax * lifetime);
+    var k = speed / lifetime;
+    var x = (SimpleSpoiler.random(0, 2 * max + 1) - max) / max;
+    var y = Math.sqrt(1 - x * x) * (negative ? -1 : 1);
+    return { dx: k * x, dy: k * y };
+  },
+  resetPoint: function(point) {
+    var v = SimpleSpoiler.generateVector(point.cnt);
+    point.x = SimpleSpoiler.random(point.md, point.mx - point.md);
+    point.y = SimpleSpoiler.random(point.md, point.my - point.md);
+    point.dx = v.dx;
+    point.dy = v.dy;
+    point.s = SimpleSpoiler.random(60, 80) * point.my / 3600;
+  },
+  updatePoint: function(point) {
+    var b = point.b, t = point.t;
+    var d = point.fps * point.lsec / 3;
+    var k = 360 / point.lsec / point.fps;
+    var x = point.x + k * t * point.dx;
+    var y = point.y + k * t * point.dy;
+    b.style.transform = 'translate(' + x + 'px, ' + y + 'px) scale(' + point.s + ')';
+    b.style.opacity = (t < d ? t / d : t < d * 2 ? 1 : (d * 3 - t) / d) * 0.95;
+  },
+  init: function(el) {
+    SimpleSpoiler.destroy(el);
+    el.style.position = 'relative';
+    var el_w = el.offsetWidth || 260;
+    var el_h = el.offsetHeight || 20;
+    var max_d = 5, fps = 30, lsec = 0.6;
+    var count = Math.min(Math.max(Math.floor(el_w * el_h / 12), 40), 300);
+    var points = [];
+    for (var i = 0; i < count; i++) {
+      var b = document.createElement('b');
+      b.className = 'point';
+      var point = { b: b, mx: el_w, my: el_h, md: max_d, cnt: count, fps: fps, lsec: lsec, t: SimpleSpoiler.random(0, fps * lsec) };
+      SimpleSpoiler.resetPoint(point);
+      SimpleSpoiler.updatePoint(point);
+      el.appendChild(b);
+      points.push(point);
+    }
+    var interval = 1000 / fps;
+    var last_render = Date.now();
+    var spoiler = { points: points, active: true };
+    function doRedraw() {
+      if (!spoiler.active) return;
+      var now = Date.now();
+      if (now - last_render >= interval) {
+        for (var j = 0; j < spoiler.points.length; j++) {
+          var pt = spoiler.points[j];
+          if (++pt.t >= fps * lsec) { pt.t = 0; SimpleSpoiler.resetPoint(pt); }
+          SimpleSpoiler.updatePoint(pt);
+        }
+        last_render = now;
+      }
+      spoiler.raf = requestAnimationFrame(doRedraw);
+    }
+    spoiler.raf = requestAnimationFrame(doRedraw);
+    el._spoiler = spoiler;
+  },
+  destroy: function(el) {
+    var spoiler = el._spoiler;
+    if (!spoiler) return;
+    spoiler.active = false;
+    if (spoiler.raf) cancelAnimationFrame(spoiler.raf);
+    for (var i = 0; i < spoiler.points.length; i++) {
+      var b = spoiler.points[i].b;
+      if (b.parentNode) b.parentNode.removeChild(b);
+    }
+    el._spoiler = null;
   }
+};
+
+function generateSpoilerPoints(container) {
+  SimpleSpoiler.init(container);
+}
+
+function destroySpoilerPoints(container) {
+  SimpleSpoiler.destroy(container);
 }
 
 // ── Rendering ──
@@ -347,9 +426,9 @@ let topupAnimInstance = null;
 let topupReturnView = null;
 let userBalance = 0;
 let tonConnectUI = null;
-let tonVerifyInterval = null;
+let tonVerifyTimeout = null;
 let tonVerifyAttempts = 0;
-const TON_MAX_VERIFY = 60;
+const TON_MAX_VERIFY = 90;
 
 function openTopup(returnTo) {
   topupReturnView = returnTo || currentView || 'list';
@@ -441,7 +520,11 @@ async function submitTopup() {
     if (topupMethod === 'stars') {
       tg?.openInvoice(data.invoiceUrl);
     } else {
-      tg?.openLink(data.invoiceUrl, { try_instant_view: true });
+      if (data.invoiceUrl.includes('t.me/')) {
+        tg?.openTelegramLink(data.invoiceUrl);
+      } else {
+        tg?.openLink(data.invoiceUrl);
+      }
     }
   } catch (err) {
     tg?.MainButton?.hideProgress();
@@ -559,7 +642,7 @@ function startTonVerifying(paymentId) {
   tg?.MainButton?.setText('Verifying payment...');
   tg?.MainButton?.showProgress();
 
-  tonVerifyInterval = setInterval(async () => {
+  async function poll() {
     tonVerifyAttempts++;
     try {
       const res = await fetch(`${API_BASE}/ton-verify`, {
@@ -587,14 +670,21 @@ function startTonVerifying(paymentId) {
       tg?.MainButton?.hideProgress();
       updateTopupButton();
       showToast('Still processing. Balance will update automatically.', 'info');
+      return;
     }
-  }, 3000);
+
+    // First 20 attempts every 3s, then every 5s for slower blockchain confirmations
+    const delay = tonVerifyAttempts <= 20 ? 3000 : 5000;
+    tonVerifyTimeout = setTimeout(poll, delay);
+  }
+
+  tonVerifyTimeout = setTimeout(poll, 3000);
 }
 
 function stopTonVerifying() {
-  if (tonVerifyInterval) {
-    clearInterval(tonVerifyInterval);
-    tonVerifyInterval = null;
+  if (tonVerifyTimeout) {
+    clearTimeout(tonVerifyTimeout);
+    tonVerifyTimeout = null;
   }
 }
 
@@ -855,6 +945,7 @@ function handleWSMessage(data) {
     const msg = data.message;
     if (msg.type === 'answer') return;
     if (msg.type === 'progress') {
+      hidePlanActions();
       renderProgressBubble(msg);
     } else {
       setTyping(false);
@@ -1008,6 +1099,7 @@ async function loadChatHistory(projectId) {
       isProcessing = true;
       setInputDisabled(true);
       setHeaderWorking(true);
+      hidePlanActions();
     }
 
     if (data.finalizing) {
@@ -1459,27 +1551,20 @@ async function sendPlanRequest(description) {
   }
 }
 
+function hidePlanActions() {
+  document.querySelectorAll('.chat-plan-actions').forEach(el => el.style.display = 'none');
+}
+function showPlanActions() {
+  document.querySelectorAll('.chat-plan-actions').forEach(el => el.style.display = '');
+}
+
 async function approvePlan() {
   if (!chatProjectId) return;
 
-  document.querySelectorAll('.chat-plan-btn').forEach(b => {
-    b.disabled = true;
-    b.style.opacity = '0.4';
-    b.style.pointerEvents = 'none';
-  });
+  hidePlanActions();
 
   setProcessing(true);
   setInputDisabled(true);
-
-  const buildMsgId = 'build-' + Date.now();
-  renderProgressBubble({
-    id: buildMsgId,
-    type: 'progress',
-    content: 'Starting...',
-    percent: 0,
-    checklist: [],
-  });
-  scrollToBottom();
 
   try {
     const res = await fetch(`${API_BASE}/chat/${chatProjectId}/approve-plan`, {
@@ -1495,15 +1580,9 @@ async function approvePlan() {
       } else {
         showToast(err.error || 'Failed to start build', 'error');
       }
-      const el = document.getElementById(`msg-${buildMsgId}`);
-      if (el) el.remove();
       setProcessing(false);
       setInputDisabled(false);
-      document.querySelectorAll('.chat-plan-btn').forEach(b => {
-        b.disabled = false;
-        b.style.opacity = '';
-        b.style.pointerEvents = '';
-      });
+      showPlanActions();
       return;
     }
 
@@ -1514,15 +1593,9 @@ async function approvePlan() {
     switchChatMode('update');
   } catch (err) {
     showToast('Error: ' + err.message, 'error');
-    const el = document.getElementById(`msg-${buildMsgId}`);
-    if (el) el.remove();
     setProcessing(false);
     setInputDisabled(false);
-    document.querySelectorAll('.chat-plan-btn').forEach(b => {
-      b.disabled = false;
-      b.style.opacity = '';
-      b.style.pointerEvents = '';
-    });
+    showPlanActions();
   }
 }
 
@@ -1752,6 +1825,16 @@ async function openDetail(id) {
   const isLive = ['deployed', 'released'].includes(p.status);
   const baseUrl = location.origin;
 
+  const webappUrl = `${baseUrl}/app/${p.id}/`;
+  const webappUrlRow = document.getElementById('webapp-url-row');
+  const webappUrlSpoiler = document.getElementById('webapp-url-spoiler');
+  document.getElementById('webapp-url-text').textContent = webappUrl;
+  webappUrlRow.style.display = isLive ? '' : 'none';
+  webappUrlSpoiler.classList.add('spoiler-active');
+  webappUrlSpoiler.classList.remove('js-spoiler-revealed');
+  destroySpoilerPoints(webappUrlSpoiler);
+  setTimeout(() => generateSpoilerPoints(webappUrlSpoiler), 50);
+
   currentToken = null;
   const tokenSection = document.getElementById('section-token');
   const spoiler = document.getElementById('token-spoiler');
@@ -1790,7 +1873,7 @@ async function openDetail(id) {
   let settingsRows = '';
   settingsRows += menuRowAction(t('detail_edit_info'), 'af-icon-edit-info', 'open-edit-info');
   settingsRows += menuRowAction(t('detail_quality'), 'af-icon-quality', 'open-quality');
-  settingsRows += menuRowAction(t('detail_regen_context'), 'af-icon-refresh', 'open-regen-context');
+  if (isAdmin) settingsRows += menuRowAction(t('detail_regen_context'), 'af-icon-refresh', 'open-regen-context');
   if (hasFeature(p, 'get_code')) settingsRows += menuRow('Edit Code', 'af-icon-code', `${baseUrl}/editor/${p.id}/`);
   // if (hasFeature(p, 'admin_panel')) settingsRows += menuRow('Admin Panel', 'af-icon-admin', `${baseUrl}/admin/${p.id}/`);
   document.getElementById('detail-settings-rows').innerHTML = settingsRows;
@@ -1878,7 +1961,7 @@ async function fetchToken(projectId) {
     document.getElementById('token-text').textContent = currentToken;
     document.getElementById('section-token').style.display = '';
     const spoiler = document.getElementById('token-spoiler');
-    generateSpoilerPoints(spoiler, currentToken);
+    generateSpoilerPoints(spoiler);
   } catch (err) {
     console.error('Failed to fetch token:', err);
   }
@@ -2244,6 +2327,187 @@ function openHelp() {
   showView('help');
 }
 
+// ── Modal System ──
+
+function openModal(title, bodyHtml) {
+  const overlay = document.getElementById('app-modal-overlay');
+  document.getElementById('app-modal-title').textContent = title;
+  document.getElementById('app-modal-body').innerHTML = bodyHtml;
+  overlay.classList.remove('hidden');
+  document.getElementById('app-modal-close').onclick = closeModal;
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeModal();
+  });
+}
+
+function closeModal() {
+  document.getElementById('app-modal-overlay').classList.add('hidden');
+}
+
+function openTransferModal(partnerBalance, onSuccess) {
+  openModal('Transfer to App Balance', `
+    <div class="app-modal-balance">
+      <div class="app-modal-balance-label">Partner Balance</div>
+      <div class="app-modal-balance-value">$${partnerBalance.toFixed(2)}</div>
+    </div>
+    <div class="app-modal-input-group">
+      <label>Amount to transfer</label>
+      <input type="number" class="app-modal-input" id="modal-transfer-amount" placeholder="0.00" step="0.01" min="0.01" max="${partnerBalance.toFixed(2)}" autofocus>
+    </div>
+    <button class="app-modal-btn app-modal-btn-primary" id="modal-transfer-btn">Transfer</button>
+    <p class="app-modal-note">Funds will be moved to your app balance for building apps.</p>
+  `);
+
+  document.getElementById('modal-transfer-btn').addEventListener('click', async () => {
+    const amount = document.getElementById('modal-transfer-amount').value;
+    if (!amount || parseFloat(amount) <= 0) { showToast('Enter a valid amount', 'error'); return; }
+    if (parseFloat(amount) > partnerBalance) { showToast('Insufficient partner balance', 'error'); return; }
+    const btn = document.getElementById('modal-transfer-btn');
+    btn.disabled = true;
+    btn.textContent = 'Transferring...';
+    try {
+      const res = await fetch(`${API_BASE}/partner/transfer`, {
+        method: 'POST',
+        headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount }),
+      });
+      const result = await res.json();
+      if (!res.ok) { showToast(result.error || 'Transfer failed', 'error'); btn.disabled = false; btn.textContent = 'Transfer'; return; }
+      closeModal();
+      showToast(`$${parseFloat(amount).toFixed(2)} transferred to app balance`, 'success');
+      if (onSuccess) onSuccess(result);
+    } catch { showToast('Transfer failed', 'error'); btn.disabled = false; btn.textContent = 'Transfer'; }
+  });
+}
+
+function openWithdrawModal(partnerBalance) {
+  openModal('Withdraw USDT', `
+    <div class="app-modal-balance">
+      <div class="app-modal-balance-label">Partner Balance</div>
+      <div class="app-modal-balance-value">$${partnerBalance.toFixed(2)}</div>
+    </div>
+    <div class="app-modal-input-group">
+      <label>Amount (USDT)</label>
+      <input type="number" class="app-modal-input" id="modal-withdraw-amount" placeholder="0.00" step="0.01" min="5" max="${partnerBalance.toFixed(2)}">
+    </div>
+    <div class="app-modal-input-group">
+      <label>TON Wallet Address</label>
+      <input type="text" class="app-modal-input" id="modal-withdraw-address" placeholder="UQ...">
+    </div>
+    <button class="app-modal-btn app-modal-btn-primary" id="modal-withdraw-btn">Request Withdrawal</button>
+    <p class="app-modal-note">USDT will be sent on the TON network.<br>Minimum withdrawal: $5.00</p>
+  `);
+
+  document.getElementById('modal-withdraw-btn').addEventListener('click', async () => {
+    const amount = document.getElementById('modal-withdraw-amount').value;
+    const address = document.getElementById('modal-withdraw-address').value.trim();
+    if (!amount || parseFloat(amount) < 5) { showToast('Minimum withdrawal is $5.00', 'error'); return; }
+    if (parseFloat(amount) > partnerBalance) { showToast('Insufficient partner balance', 'error'); return; }
+    if (!address) { showToast('Enter your wallet address', 'error'); return; }
+    const btn = document.getElementById('modal-withdraw-btn');
+    btn.disabled = true;
+    btn.textContent = 'Submitting...';
+    try {
+      const res = await fetch(`${API_BASE}/partner/withdraw`, {
+        method: 'POST',
+        headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount, address }),
+      });
+      const result = await res.json();
+      if (!res.ok) { showToast(result.error || 'Request failed', 'error'); btn.disabled = false; btn.textContent = 'Request Withdrawal'; return; }
+      closeModal();
+      showToast(result.message || 'Withdrawal request submitted', 'success');
+      openPartner();
+    } catch { showToast('Request failed', 'error'); btn.disabled = false; btn.textContent = 'Request Withdrawal'; }
+  });
+}
+
+// ── Partner Dashboard ──
+
+let isPartnerUser = false;
+
+async function checkPartner() {
+  try {
+    const res = await fetch(`${API_BASE}/partner`, { headers: apiHeaders() });
+    const data = await res.json();
+    isPartnerUser = data.isPartner === true;
+    const btn = document.getElementById('btn-partner');
+    if (btn) btn.classList.toggle('hidden', !isPartnerUser);
+  } catch {}
+}
+
+async function openPartner() {
+  showView('partner');
+  const statsEl = document.getElementById('partner-stats');
+  const listEl = document.getElementById('partner-referrals-list');
+  statsEl.innerHTML = '<div class="loading-spinner"></div>';
+  listEl.innerHTML = '';
+
+  try {
+    const res = await fetch(`${API_BASE}/partner`, { headers: apiHeaders() });
+    const d = await res.json();
+    if (!d.isPartner) { showView('list'); return; }
+
+    document.getElementById('partner-subtitle').textContent = d.partnerTag ? `@${d.partnerTag}` : 'Partner';
+
+    statsEl.innerHTML = `
+      <div class="adm-info-card"><div class="lbl">Partner Balance</div><div class="val" id="partner-bal-val">$${d.partnerBalance.toFixed(2)}</div></div>
+      <div class="adm-info-card"><div class="lbl">Total Earned</div><div class="val">$${d.totalEarned.toFixed(2)}</div></div>
+      <div class="adm-info-card"><div class="lbl">Referrals</div><div class="val">${d.referrals.length}</div></div>
+      <div class="adm-info-card"><div class="lbl">Commission</div><div class="val">${d.partnerPercent}%</div></div>
+    `;
+
+    if (d.inviteLink) {
+      document.getElementById('partner-link-text').textContent = d.inviteLink;
+      document.getElementById('btn-copy-partner-link').onclick = () => {
+        navigator.clipboard.writeText(d.inviteLink).then(() => {
+          const btn = document.getElementById('btn-copy-partner-link');
+          btn.textContent = 'Copied!';
+          setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+        });
+      };
+      document.getElementById('btn-share-partner-link').onclick = () => {
+        const shareText = encodeURIComponent('Build Telegram Mini Apps with AI!\nTry Apps Father:');
+        tg?.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(d.inviteLink)}&text=${shareText}`);
+      };
+    }
+
+    if (d.referrals.length) {
+      let rhtml = '<div class="tm-table-wrap">';
+      for (const r of d.referrals) {
+        const rName = r.username || r.firstName || 'User';
+        const avatar = userAvatarHtml(rName, r.username);
+        rhtml += `<div class="tm-row" style="cursor:default;align-items:center">` +
+          avatar +
+          `<div style="flex:1;min-width:0;overflow:hidden;"><div class="tm-row-value" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(rName)}</div>` +
+          `<div class="tm-row-description">${admFmtDate(r.joinedAt)} · $${r.deposits.toFixed(2)} deposits</div></div>` +
+          `<div class="tm-row-status"><span class="tm-status-dot" style="background:#5CC377"></span>+$${r.earned.toFixed(2)}</div>` +
+          `</div>`;
+      }
+      rhtml += '</div>';
+      listEl.innerHTML = rhtml;
+    } else {
+      listEl.innerHTML = '<p class="help-text" style="text-align:center">No referrals yet. Share your invite link!</p>';
+    }
+
+    // Transfer modal
+    document.getElementById('btn-partner-transfer').onclick = () => {
+      openTransferModal(d.partnerBalance, (result) => {
+        document.getElementById('partner-bal-val').textContent = '$' + result.partnerBalance.toFixed(2);
+        d.partnerBalance = result.partnerBalance;
+      });
+    };
+
+    // Withdraw modal
+    document.getElementById('btn-partner-withdraw').onclick = () => {
+      openWithdrawModal(d.partnerBalance);
+    };
+
+  } catch (err) {
+    statsEl.innerHTML = `<p class="help-text" style="text-align:center">Failed to load partner data</p>`;
+  }
+}
+
 function initEditPhoto() {
   document.getElementById('btn-set-photo').addEventListener('click', () => {
     document.getElementById('edit-photo-input').click();
@@ -2264,44 +2528,29 @@ function initEditPhoto() {
 
 // ── Token actions ──
 
+function revealAndCopy(spoilerEl, text) {
+  if (!text) return;
+  spoilerEl.classList.add('js-spoiler-revealed');
+  spoilerEl.classList.remove('spoiler-active');
+  destroySpoilerPoints(spoilerEl);
+  navigator.clipboard.writeText(text).then(() => {
+    showToast(t('toast_copied'), 'success');
+  });
+  setTimeout(() => {
+    spoilerEl.classList.remove('js-spoiler-revealed');
+    spoilerEl.classList.add('spoiler-active');
+    generateSpoilerPoints(spoilerEl);
+  }, 2500);
+}
+
 function initTokenActions() {
+  document.getElementById('webapp-url-row').addEventListener('click', () => {
+    const url = document.getElementById('webapp-url-text').textContent;
+    revealAndCopy(document.getElementById('webapp-url-spoiler'), url);
+  });
+
   document.getElementById('token-spoiler').addEventListener('click', () => {
-    const spoiler = document.getElementById('token-spoiler');
-    const isRevealed = spoiler.classList.contains('js-spoiler-revealed');
-    if (isRevealed) {
-      spoiler.classList.remove('js-spoiler-revealed');
-      spoiler.classList.add('spoiler-active');
-      generateSpoilerPoints(spoiler, currentToken);
-    } else {
-      spoiler.classList.add('js-spoiler-revealed');
-      spoiler.classList.remove('spoiler-active');
-      spoiler.querySelectorAll('.point').forEach(p => p.remove());
-    }
-  });
-
-  document.getElementById('btn-copy-token').addEventListener('click', () => {
-    if (!currentToken) return;
-    navigator.clipboard.writeText(currentToken).then(() => {
-      const btn = document.getElementById('btn-copy-token');
-      btn.textContent = t('toast_copied');
-      setTimeout(() => btn.textContent = t('detail_copy'), 1500);
-    });
-  });
-
-  document.getElementById('btn-revoke-token').addEventListener('click', () => {
-    tg?.showConfirm('Are you sure you want to revoke this token? Your bot will stop working until you set a new one.', async (ok) => {
-      if (!ok || !currentToken) return;
-      try {
-        const r = await tgApi('logOut');
-        if (r.ok) {
-          showToast('Token revoked. Generate a new one via @BotFather.', 'success');
-        } else {
-          showToast('Failed: ' + (r.description || 'unknown error'), 'error');
-        }
-      } catch (err) {
-        showToast('Error: ' + err.message, 'error');
-      }
-    });
+    revealAndCopy(document.getElementById('token-spoiler'), currentToken);
   });
 }
 
@@ -2382,7 +2631,7 @@ function openVersionDetail(versionNum) {
     actionsHtml += `<a class="tm-row tm-row-link" id="btn-changelog-link"><span class="tm-icon af-icon-changelog"></span><span>${t('version_change_log')}</span></a>`;
   }
 
-  if (v.hasLog) {
+  if (v.hasLog && isAdmin) {
     actionsHtml += `<a class="tm-row tm-row-link" id="btn-view-log"><span class="tm-icon af-icon-log"></span><span>${t('version_view_log')}</span></a>`;
     actionsHtml += `<a class="tm-row tm-row-link" id="btn-download-log"><span class="tm-icon af-icon-download"></span><span>${t('version_download_log')}</span></a>`;
   }
@@ -2474,6 +2723,7 @@ async function openFeatures(projectId) {
     const listEl = document.getElementById('features-list');
     let html = '';
     for (const f of data.features) {
+      if (f.id === 'admin_panel') continue;
       const statusText = f.owned
         ? '<span class="feature-status feature-status--owned">Unlocked</span>'
         : `<span class="feature-status feature-status--price">$${f.price}</span>`;
@@ -2732,14 +2982,14 @@ async function openAdmUsers() {
     if (!users.length) { el.innerHTML = '<div class="adm-empty">No users yet</div>'; return; }
     let html = '<div class="tm-table-wrap">';
     for (const u of users) {
-      html += `<div class="adm-row" data-user-id="${u.id}">
-        <div class="adm-row-main">
-          <div class="adm-row-title">${esc(u.username || u.firstName || 'User ' + u.id)}</div>
-          <div class="adm-row-sub">${u.projectCount} app${u.projectCount !== 1 ? 's' : ''} · Joined ${admFmtDate(u.createdAt)}</div>
-        </div>
-        <div class="adm-row-right"><div class="adm-row-value">${admFmtMoney(u.balance)}</div></div>
-        <div class="adm-row-chevron">›</div>
-      </div>`;
+      const name = u.username || u.firstName || 'User ' + u.id;
+      const avatar = userAvatarHtml(name, u.username);
+      html += `<a class="tm-row tm-row-link" data-user-id="${u.id}">` +
+        avatar +
+        `<div style="flex:1;min-width:0;overflow:hidden;"><div class="tm-row-value" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(name)}</div>` +
+        `<div class="tm-row-description">${u.projectCount} app${u.projectCount !== 1 ? 's' : ''} · ${admFmtDate(u.createdAt)}</div></div>` +
+        `<div class="tm-row-status"><span class="tm-status-dot" style="background:${Number(u.balance) > 0 ? '#5CC377' : '#708499'}"></span>${admFmtMoney(u.balance)}</div>` +
+        `</a>`;
     }
     html += '</div>';
     el.innerHTML = html;
@@ -2761,62 +3011,109 @@ async function openAdmUserDetail(userId) {
   try {
     const u = await admApi('/users/' + userId);
     nameEl.textContent = u.username || u.firstName || 'User ' + u.id;
-    subEl.textContent = 'Telegram ID: ' + u.telegramId;
+    subEl.textContent = '@' + (u.username || u.telegramId);
 
-    let html = `<div class="adm-info-grid">
+    let html = '';
+
+    // Stats section
+    html += `<section class="tm-section"><div class="adm-info-grid">
       <div class="adm-info-card"><div class="lbl">Balance</div><div class="val" id="adm-bal-val">${admFmtMoney(u.balance)}</div></div>
       <div class="adm-info-card"><div class="lbl">Total Spent</div><div class="val">${admFmtMoney(u.totalSpent)}</div></div>
       <div class="adm-info-card"><div class="lbl">Projects</div><div class="val">${u.projects.length}</div></div>
       <div class="adm-info-card"><div class="lbl">Slots</div><div class="val">${u.appSlots}</div></div>
-    </div>`;
+    </div></section>`;
 
     if (u.referredBy) {
-      html += `<div class="adm-section-title">Referred By</div>
-        <div style="padding:0;font-size:13px;color:rgba(255,255,255,0.6);margin-bottom:8px;">${u.referredBy}</div>`;
+      html += `<section class="tm-section"><p class="help-text" style="margin:0">Referred by: ${u.referredBy}</p></section>`;
     }
 
-    html += `<div class="adm-section-title">Balance Management</div>
+    // Balance Management
+    html += `<section class="tm-section tm-menu-items">
+      <div class="tm-section-header"><h2 class="tm-section-header-text">Balance Management</h2></div>
       <div class="adm-inline-form">
         <select id="adm-bal-action"><option value="set">Set to</option><option value="add">Add</option></select>
         <input type="number" id="adm-bal-amount" placeholder="Amount" step="0.01" style="width:100px">
         <button class="adm-btn adm-btn-primary" id="adm-bal-btn">Apply</button>
-      </div>`;
+      </div>
+    </section>`;
 
+    // Partnership section
+    html += `<section class="tm-section tm-menu-items">
+      <div class="tm-section-header"><h2 class="tm-section-header-text">Partnership</h2></div>
+      <div class="tm-table-wrap">
+        <div class="tm-row" style="justify-content:space-between;cursor:default">
+          <span>Is Partner</span>
+          <label class="adm-toggle"><input type="checkbox" id="adm-partner-toggle" ${u.isPartner ? 'checked' : ''}><span class="adm-toggle-slider"></span></label>
+        </div>
+        <div class="tm-row" style="flex-wrap:wrap;gap:8px;cursor:default">
+          <span style="min-width:100px">Commission %</span>
+          <input type="number" id="adm-partner-percent" value="${u.partnerPercent ?? ''}" placeholder="e.g. 20" step="0.1" min="0" max="100" class="adm-input-sm">
+        </div>
+        <div class="tm-row" style="flex-wrap:wrap;gap:8px;cursor:default">
+          <span style="min-width:100px">Partner Tag</span>
+          <input type="text" id="adm-partner-tag" value="${u.partnerTag || ''}" placeholder="e.g. john_promo" class="adm-input-sm">
+        </div>
+        <div class="tm-row" style="flex-wrap:wrap;gap:8px;cursor:default">
+          <span style="min-width:100px">Referral Bonus $</span>
+          <input type="number" id="adm-partner-bonus" value="${u.partnerReferralBonus ?? ''}" placeholder="0.00" step="0.01" min="0" class="adm-input-sm">
+        </div>
+        <div class="tm-row" style="cursor:default">
+          <span>Partner Balance</span>
+          <span style="color:var(--tg-theme-accent-text-color,#4ea4f6);font-weight:600">${admFmtMoney(u.partnerBalance)}</span>
+        </div>
+      </div>
+      <button class="adm-btn adm-btn-primary" id="adm-partner-save" style="margin-top:8px;width:100%">Save Partnership</button>
+    </section>`;
+
+    // Projects
     if (u.projects.length) {
-      html += `<div class="adm-section-title">Projects</div><div class="tm-table-wrap">`;
+      html += `<section class="tm-section tm-menu-items">
+        <div class="tm-section-header"><h2 class="tm-section-header-text">Projects</h2></div>
+        <div class="tm-table-wrap">`;
       for (const p of u.projects) {
-        html += `<div class="adm-row" data-proj-id="${p.id}">
-          <div class="adm-row-main">
-            <div class="adm-row-title">${esc(p.name)}</div>
-            <div class="adm-row-sub">${p.botUsername ? '@' + esc(p.botUsername) : 'No bot'}</div>
-          </div>
-          <div class="adm-row-right">${admBadge(p.status)}</div>
-          <div class="adm-row-chevron">›</div>
-        </div>`;
+        const [c1, c2] = getGradient(p.name);
+        const pAvatar = `<div class="tm-row-pic tm-row-pic-user avatar-gradient" style="background:linear-gradient(135deg,${c1},${c2})">${getInitials(p.name)}</div>`;
+        const statusDot = p.status === 'building'
+          ? '<span class="loader" style="width:16px;height:16px;margin-right:8px"></span>'
+          : `<span class="tm-status-dot ${p.status}"></span>`;
+        html += `<a class="tm-row tm-row-link" data-proj-id="${p.id}" style="align-items:center;">` +
+          pAvatar +
+          `<div style="flex:1;min-width:0;overflow:hidden;"><div class="tm-row-value" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.name)}</div>` +
+          `<div class="tm-row-description">${p.botUsername ? '@' + esc(p.botUsername) : 'No bot'}</div></div>` +
+          `<div class="tm-row-status">${statusDot}${statusLabel(p.status)}</div>` +
+          `</a>`;
       }
-      html += `</div>`;
+      html += `</div></section>`;
     }
 
+    // Payments
     if (u.payments.length) {
-      html += `<div class="adm-section-title">Payments</div>
+      html += `<section class="tm-section tm-menu-items">
+        <div class="tm-section-header"><h2 class="tm-section-header-text">Payments</h2></div>
         <div class="adm-table-scroll"><table class="adm-table"><thead><tr><th>Amount</th><th>Status</th><th>Date</th></tr></thead><tbody>`;
       for (const p of u.payments) {
         html += `<tr><td>${admFmtMoney(p.amount)}</td><td>${admBadge(p.status)}</td><td>${admFmtDate(p.createdAt)}</td></tr>`;
       }
-      html += `</tbody></table></div>`;
+      html += `</tbody></table></div></section>`;
     }
 
+    // Usage History
     if (u.usageLogs.length) {
-      html += `<div class="adm-section-title">Usage History</div>
+      html += `<section class="tm-section tm-menu-items">
+        <div class="tm-section-header"><h2 class="tm-section-header-text">Usage History</h2></div>
         <div class="adm-table-scroll"><table class="adm-table"><thead><tr><th>Project</th><th>Op</th><th>Cost</th><th>Date</th></tr></thead><tbody>`;
       for (const l of u.usageLogs) {
         html += `<tr><td>${esc(l.project)}</td><td>${l.operation}</td><td>${admFmtMoney(l.cost)}</td><td>${admFmtDate(l.createdAt)}</td></tr>`;
       }
-      html += `</tbody></table></div>`;
+      html += `</tbody></table></div></section>`;
     }
+
+    // Info
+    html += `<section class="tm-section"><p class="help-text" style="text-align:center">Telegram ID: ${u.telegramId}<br>Joined: ${admFmtDate(u.createdAt)}</p></section>`;
 
     contentEl.innerHTML = html;
 
+    // Balance handler
     document.getElementById('adm-bal-btn')?.addEventListener('click', async () => {
       const action = document.getElementById('adm-bal-action').value;
       const amount = document.getElementById('adm-bal-amount').value;
@@ -2826,6 +3123,25 @@ async function openAdmUserDetail(userId) {
         document.getElementById('adm-bal-amount').value = '';
         showToast('Balance updated to ' + admFmtMoney(d.balance), 'success');
       } catch { showToast('Failed to update balance', 'error'); }
+    });
+
+    // Partnership save handler
+    document.getElementById('adm-partner-save')?.addEventListener('click', async () => {
+      const btn = document.getElementById('adm-partner-save');
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+      try {
+        const body = {
+          isPartner: document.getElementById('adm-partner-toggle').checked,
+          partnerPercent: document.getElementById('adm-partner-percent').value || null,
+          partnerTag: document.getElementById('adm-partner-tag').value || null,
+          partnerReferralBonus: document.getElementById('adm-partner-bonus').value || null,
+        };
+        await admApi('/users/' + userId + '/partner', { method: 'POST', body });
+        showToast('Partnership settings saved', 'success');
+      } catch { showToast('Failed to save partnership', 'error'); }
+      btn.disabled = false;
+      btn.textContent = 'Save Partnership';
     });
 
     contentEl.querySelectorAll('[data-proj-id]').forEach(row => {
@@ -3007,6 +3323,7 @@ function showView(view) {
   document.getElementById('view-edit-info').classList.toggle('hidden', view !== 'edit-info');
   document.getElementById('view-transfer').classList.toggle('hidden', view !== 'transfer');
   document.getElementById('view-delete').classList.toggle('hidden', view !== 'delete');
+  document.getElementById('view-partner').classList.toggle('hidden', view !== 'partner');
   document.getElementById('view-referral').classList.toggle('hidden', view !== 'referral');
   document.getElementById('view-help').classList.toggle('hidden', view !== 'help');
   document.getElementById('view-release-notes').classList.toggle('hidden', view !== 'release-notes');
@@ -3084,9 +3401,12 @@ function showView(view) {
 
 // ── Init ──
 
-async function loadProjects() {
+async function loadProjects(retry = 0) {
   try {
-    const res = await fetch(`${API_BASE}/projects`, { headers: apiHeaders() });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    const res = await fetch(`${API_BASE}/projects`, { headers: apiHeaders(), signal: controller.signal });
+    clearTimeout(timeout);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     projects = data.projects || data;
@@ -3096,6 +3416,10 @@ async function loadProjects() {
     loadSamples();
   } catch (err) {
     console.error('Failed to load projects:', err);
+    if (retry < 2) {
+      setTimeout(() => loadProjects(retry + 1), 1500);
+      return;
+    }
     document.getElementById('app-list').innerHTML =
       `<div class="tm-row-container tm-row-results-empty"><b>Failed to load apps</b><div>${esc(err.message)}</div></div>`;
   }
@@ -3273,7 +3597,7 @@ function initChatInput() {
   });
 
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !('ontouchstart' in window)) {
       e.preventDefault();
       if (input.value.trim()) sendMessage();
     }
@@ -3392,6 +3716,8 @@ function init() {
       } else if (currentView === 'topup') {
         showView(topupReturnView || 'list');
         topupReturnView = null;
+      } else if (currentView === 'partner') {
+        showView('list');
       } else if (currentView === 'referral') {
         showView('list');
       } else if (currentView === 'help') {
@@ -3490,9 +3816,11 @@ function init() {
   document.getElementById('btn-help-page').addEventListener('click', () => openHelp());
   document.getElementById('btn-language-page')?.addEventListener('click', () => openLanguage());
   document.getElementById('btn-admin')?.addEventListener('click', () => openAdmin());
+  document.getElementById('btn-partner')?.addEventListener('click', () => openPartner());
 
   applyLang();
   checkAdmin();
+  checkPartner();
   initTokenActions();
   initChatInput();
   initAutosize();

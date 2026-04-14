@@ -273,6 +273,7 @@ export class BillingService {
         userId,
         amountUsd: new Decimal(amountUsd.toFixed(4)),
         status: "pending",
+        nowpaymentsId: `ton:${amountNano}`,
       },
     });
 
@@ -305,12 +306,23 @@ export class BillingService {
       return { confirmed: true, balance: Number(user?.balance || 0) };
     }
 
-    const tonPrice = await this.getTonUsdPrice();
-    const tonAmount = Number(payment.amountUsd) / tonPrice;
-    const expectedNano = BigInt(Math.ceil(tonAmount * 1e9));
+    // Use the original nano amount stored at creation time to avoid price drift
+    let expectedNano: bigint;
+    if (payment.nowpaymentsId?.startsWith("ton:")) {
+      expectedNano = BigInt(payment.nowpaymentsId.slice(4));
+    } else {
+      const tonPrice = await this.getTonUsdPrice();
+      const tonAmount = Number(payment.amountUsd) / tonPrice;
+      expectedNano = BigInt(Math.ceil(tonAmount * 1e9));
+    }
+
+    // Allow 2% tolerance for network fees / rounding
+    const minAcceptable = expectedNano * 98n / 100n;
+
+    const createdAtSec = Math.floor(payment.createdAt.getTime() / 1000);
 
     try {
-      const url = `https://toncenter.com/api/v3/transactions?account=${encodeURIComponent(BillingService.TON_WALLET)}&limit=30&sort=desc`;
+      const url = `https://toncenter.com/api/v3/transactions?account=${encodeURIComponent(BillingService.TON_WALLET)}&limit=50&sort=desc&start_utime=${createdAtSec}`;
       const apiRes = await fetch(url, { headers: { "Content-Type": "application/json" } });
       if (!apiRes.ok) {
         console.error("[Billing] TonCenter error:", apiRes.status);
@@ -337,7 +349,10 @@ export class BillingService {
         if (!msgBody.includes(paymentIdStr)) continue;
 
         const receivedNano = BigInt(inMsg.value || "0");
-        if (receivedNano < expectedNano) continue;
+        if (receivedNano < minAcceptable) {
+          console.warn(`[Billing] TON payment #${paymentId}: received ${receivedNano} < min ${minAcceptable} (expected ${expectedNano})`);
+          continue;
+        }
 
         await this.confirmTonPayment(payment.id);
         const user = await prisma.user.findUnique({ where: { id: payment.userId } });
@@ -383,16 +398,7 @@ export class BillingService {
 
       notifyDeposit(Number(user.telegramId), user.username ?? undefined, Number(payment.amountUsd), newBalance);
 
-      if (user.referredBy) {
-        try {
-          const bonus = Number(payment.amountUsd) * 0.15;
-          const referrer = await prisma.user.update({
-            where: { telegramId: user.referredBy },
-            data: { balance: { increment: new Decimal(bonus.toFixed(4)) } },
-          });
-          notifyReferralBonus(Number(referrer.telegramId), referrer.username ?? undefined, bonus, Number(referrer.balance));
-        } catch {}
-      }
+      await this.creditReferralBonus(user, Number(payment.amountUsd));
     }
   }
 
@@ -434,35 +440,7 @@ export class BillingService {
 
       notifyDeposit(Number(user.telegramId), user.username ?? undefined, Number(payment.amountUsd), newBalance);
 
-      if (user.referredBy) {
-        try {
-          const bonus = Number(payment.amountUsd) * 0.15;
-          const referrer = await prisma.user.update({
-            where: { telegramId: user.referredBy },
-            data: { balance: { increment: new Decimal(bonus.toFixed(4)) } },
-          });
-
-          const bonusText =
-            `<b><tg-emoji emoji-id="5377544696656599429">✅</tg-emoji> Referral bonus!</b>\n\n` +
-            `Your referral just topped up their account.\n` +
-            `<b><tg-emoji emoji-id="5377851954321989517">💲</tg-emoji> +$${bonus.toFixed(2)}</b> has been added to your balance.\n\n` +
-            `<blockquote>New balance: <b>$${Number(referrer.balance).toFixed(2)}</b></blockquote>`;
-
-          await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              chat_id: referrer.telegramId.toString(),
-              text: bonusText,
-              parse_mode: "HTML",
-            }),
-          }).catch(() => {});
-
-          notifyReferralBonus(Number(referrer.telegramId), referrer.username ?? undefined, bonus, Number(user.telegramId));
-        } catch (refErr) {
-          console.error("[Billing] Failed to credit Stars referral bonus:", refErr);
-        }
-      }
+      await this.creditReferralBonus(user, Number(payment.amountUsd));
     }
   }
 
@@ -542,36 +520,7 @@ export class BillingService {
 
           notifyDeposit(Number(user.telegramId), user.username ?? undefined, Number(payment.amountUsd), newBalance);
 
-          if (user.referredBy) {
-            try {
-              const bonus = Number(payment.amountUsd) * 0.15;
-              const referrer = await prisma.user.update({
-                where: { telegramId: user.referredBy },
-                data: { balance: { increment: new Decimal(bonus.toFixed(4)) } },
-              });
-
-              const bonusText =
-                `<b><tg-emoji emoji-id="5377544696656599429">✅</tg-emoji> Referral bonus!</b>\n\n` +
-                `Your referral just topped up their account.\n` +
-                `<b><tg-emoji emoji-id="5377851954321989517">💲</tg-emoji> +$${bonus.toFixed(2)}</b> has been added to your balance.\n\n` +
-                `<blockquote>New balance: <b>$${Number(referrer.balance).toFixed(2)}</b></blockquote>`;
-
-              await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  chat_id: referrer.telegramId.toString(),
-                  text: bonusText,
-                  parse_mode: "HTML",
-                }),
-              });
-
-              notifyReferralBonus(Number(referrer.telegramId), referrer.username ?? undefined, bonus, Number(user.telegramId));
-              console.log(`[Billing] Referral bonus $${bonus.toFixed(2)} credited to ${referrer.telegramId}`);
-            } catch (refErr) {
-              console.error("[Billing] Failed to credit referral bonus:", refErr);
-            }
-          }
+          await this.creditReferralBonus(user, Number(payment.amountUsd));
         }
       } catch (notifyErr) {
         console.error("[Billing] Failed to notify user:", notifyErr);
@@ -599,6 +548,52 @@ export class BillingService {
       status: payment.status,
       amountUsd: Number(payment.amountUsd),
     };
+  }
+
+  async creditReferralBonus(user: { referredBy: bigint | null; telegramId: bigint }, amountUsd: number): Promise<void> {
+    if (!user.referredBy) return;
+
+    try {
+      const referrer = await prisma.user.findUnique({ where: { telegramId: user.referredBy } });
+      if (!referrer) return;
+
+      let bonus: number;
+      let balanceField: "partnerBalance" | "balance";
+      let label: string;
+
+      if (referrer.isPartner && referrer.partnerPercent) {
+        bonus = amountUsd * Number(referrer.partnerPercent) / 100;
+        balanceField = "partnerBalance";
+        label = "Partner";
+      } else {
+        bonus = amountUsd * 0.15;
+        balanceField = "balance";
+        label = "Referral";
+      }
+
+      const updated = await prisma.user.update({
+        where: { telegramId: user.referredBy },
+        data: { [balanceField]: { increment: new Decimal(bonus.toFixed(4)) } },
+      });
+
+      const newBal = Number(updated[balanceField]);
+      const bonusText =
+        `<b><tg-emoji emoji-id="5377544696656599429">✅</tg-emoji> ${label} bonus!</b>\n\n` +
+        `Your referral just topped up their account.\n` +
+        `<b><tg-emoji emoji-id="5377851954321989517">💲</tg-emoji> +$${bonus.toFixed(2)}</b> has been added to your ${referrer.isPartner ? "partner " : ""}balance.\n\n` +
+        `<blockquote>New ${referrer.isPartner ? "partner " : ""}balance: <b>$${newBal.toFixed(2)}</b></blockquote>`;
+
+      await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: referrer.telegramId.toString(), text: bonusText, parse_mode: "HTML" }),
+      }).catch(() => {});
+
+      notifyReferralBonus(Number(referrer.telegramId), referrer.username ?? undefined, bonus, Number(user.telegramId));
+      console.log(`[Billing] ${label} bonus $${bonus.toFixed(2)} credited to ${referrer.telegramId} (${balanceField})`);
+    } catch (err) {
+      console.error("[Billing] Failed to credit referral/partner bonus:", err);
+    }
   }
 }
 

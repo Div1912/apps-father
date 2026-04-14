@@ -666,10 +666,10 @@ export interface AgentResult {
 }
 
 export const QUALITY_TIERS: Record<number, { model: string; thinking: number; maxIterations: number }> = {
-  1: { model: "claude-sonnet-4-6", thinking: 4000, maxIterations: 60 },
-  2: { model: "claude-sonnet-4-6", thinking: 4000, maxIterations: 100 },
-  3: { model: "claude-opus-4-6", thinking: 4000, maxIterations: 60 },
-  4: { model: "claude-opus-4-6", thinking: 4000, maxIterations: 100 },
+  1: { model: "claude-sonnet-4-6", thinking: 2000, maxIterations: 100 },
+  2: { model: "claude-sonnet-4-6", thinking: 4000, maxIterations: 140 },
+  3: { model: "claude-opus-4-6", thinking: 2000, maxIterations: 100 },
+  4: { model: "claude-opus-4-6", thinking: 4000, maxIterations: 140 },
 };
 
 export class AgentService {
@@ -725,6 +725,7 @@ export class AgentService {
     lastUpdate?: string,
     appDescription?: string,
     conversationHistory?: { role: "user" | "assistant"; content: string }[],
+    lang?: string,
   ): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
     const project: any = await projectService.getProject(projectId);
     const context = this.loadLatestContext(projectId)
@@ -734,12 +735,16 @@ export class AgentService {
     const dbSummary = this.getDbSummary(projectId);
     const description = appDescription || project?.description || "";
 
+    const langInstruction = lang === "ru" ? "\nAlways reply in Russian."
+      : lang === "ua" ? "\nAlways reply in Ukrainian."
+      : "";
+
     const systemPrompt = `You are a friendly assistant helping an app owner (non-technical person) understand their Telegram Mini App.
 Answer in simple, everyday language. NO programming terms, NO code, NO file names, NO technical jargon.
 Talk as if explaining to a friend who doesn't know anything about coding.
 Use markdown formatting: **bold**, lists (- item), headings (## Title) to keep it readable.
 If the question is about app data/users/stats, give clear numbers and insights.
-Keep answers concise and actionable.
+Keep answers concise and actionable.${langInstruction}
 
 APP DESCRIPTION:
 ${description.substring(0, 2000)}
@@ -780,7 +785,7 @@ ${dbSummary ? `DB KEYS SUMMARY:\n${dbSummary}\n` : ""}`;
     };
   }
 
-  async getSuggestions(projectId: string): Promise<{ title: string; description: string }[]> {
+  async getSuggestions(projectId: string, lang?: string): Promise<{ title: string; description: string }[]> {
     const project: any = await projectService.getProject(projectId);
     const context = this.loadLatestContext(projectId)
       || project?.projectSummary
@@ -788,6 +793,10 @@ ${dbSummary ? `DB KEYS SUMMARY:\n${dbSummary}\n` : ""}`;
 
     const dbSummary = this.getDbSummary(projectId);
     const description = project?.description || "";
+
+    const langInstruction = lang === "ru" ? "\nWrite all titles and descriptions in Russian."
+      : lang === "ua" ? "\nWrite all titles and descriptions in Ukrainian."
+      : "";
 
     const prompt = `You are a product advisor for a Telegram Mini App. Analyze the current app and suggest 5 practical improvements the owner could make next.
 
@@ -808,7 +817,7 @@ Focus on:
 - Performance or usability fixes
 - Engagement or retention ideas
 
-Keep suggestions practical and specific to THIS app.`;
+Keep suggestions practical and specific to THIS app.${langInstruction}`;
 
     const response = await this.client.messages.create({
       model: "claude-sonnet-4-6",

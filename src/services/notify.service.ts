@@ -2,11 +2,11 @@ import { config } from "../config";
 
 const ADMIN_IDS = ["8784357184", "8796958409"];
 
-function sendTelegram(chatId: string, text: string): void {
+function sendTelegram(chatId: string, text: string, extra?: Record<string, any>): void {
   fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
+    body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML", ...extra }),
   }).catch((err) => console.error("[Notify] Failed to send to", chatId, err));
 }
 
@@ -46,4 +46,28 @@ export function notifyDeposit(telegramId: number, username: string | undefined, 
     `<b>Amount:</b> +$${amount.toFixed(2)}\n` +
     `<b>New balance:</b> $${newBalance.toFixed(2)}`
   );
+}
+
+export function notifyProcessDone(
+  telegramId: number,
+  appName: string,
+  summary: string,
+  kind: "build" | "update" | "fix",
+): void {
+  const emoji = kind === "build" ? "🚀" : kind === "fix" ? "🔧" : "✅";
+  const label = kind === "build" ? "App Created" : kind === "fix" ? "Error Fixed" : "Update Complete";
+  const miniAppUrl = `${config.baseUrl}/telegram-mini-app`;
+
+  const text = `${emoji} <b>${label}</b>\n\n` +
+    `<b>${appName}</b>\n` +
+    `${summary.substring(0, 300)}`;
+
+  sendTelegram(String(telegramId), text, {
+    reply_markup: {
+      inline_keyboard: [[{
+        text: "📱 View Details",
+        web_app: { url: miniAppUrl },
+      }]],
+    },
+  });
 }

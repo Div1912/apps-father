@@ -14,6 +14,9 @@ export const config = {
   nowpaymentsIpnSecret: process.env.NOWPAYMENTS_IPN_SECRET || "",
   adminPassword: process.env.ADMIN_PASSWORD || "admin",
   cryptoBotToken: process.env.CRYPTO_BOT_TOKEN || "",
+  walletMnemonic: process.env.WALLET_MNEMONIC || "",
+  toncenterApiKey: process.env.TONCENTER_API_KEY || "",
+  withdrawGroupId: process.env.WITHDRAW_GROUP_ID || "-1003984965330",
 
   get baseUrl(): string {
     if (this.nodeEnv === "development") {

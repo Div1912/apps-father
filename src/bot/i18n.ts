@@ -332,6 +332,16 @@ const translations: Record<Lang, Record<string, string>> = {
     file_video_failed: "Failed to download video. Please try again.",
     file_voice_failed: "Failed to download voice message. Please try again.",
 
+    // System messages (chat)
+    sys_already_processing: "Another process is already running for this app.",
+    insufficient_balance_amount: "Insufficient balance (${balance}). Minimum ${min} required.",
+    sys_starting: "Starting...",
+    sys_update_failed: "Update failed",
+    sys_fixing_error: "Fixing error...",
+    sys_autofix_failed: "Auto-fix failed",
+    sys_build_failed: "Build failed",
+    autofix_insufficient_balance: "Cannot auto-fix: insufficient balance (${balance}). Top up and send \"Fix the error\" to fix manually.",
+
     // Agent language instruction
     agent_lang_instruction: "",
   },
@@ -633,6 +643,15 @@ const translations: Record<Lang, Record<string, string>> = {
     file_video_failed: "Не удалось скачать видео. Попробуйте снова.",
     file_voice_failed: "Не удалось скачать голосовое. Попробуйте снова.",
 
+    sys_already_processing: "Для этого приложения уже выполняется другой процесс.",
+    insufficient_balance_amount: "Недостаточно средств (${balance}). Минимум ${min}.",
+    sys_starting: "Запуск...",
+    sys_update_failed: "Обновление не удалось",
+    sys_fixing_error: "Исправление ошибки...",
+    sys_autofix_failed: "Автоисправление не удалось",
+    sys_build_failed: "Сборка не удалась",
+    autofix_insufficient_balance: "Невозможно исправить автоматически: недостаточно средств (${balance}). Пополните баланс и отправьте «Исправь ошибку».",
+
     agent_lang_instruction: "\n\nIMPORTANT: All user-facing text in the app (UI labels, buttons, messages, placeholders, titles) must be written in Russian (Русский). The code, comments, and variable names should stay in English.",
   },
   ua: {
@@ -932,6 +951,15 @@ const translations: Record<Lang, Record<string, string>> = {
     file_audio_failed: "Не вдалося завантажити аудіо. Спробуйте ще раз.",
     file_video_failed: "Не вдалося завантажити відео. Спробуйте ще раз.",
     file_voice_failed: "Не вдалося завантажити голосове. Спробуйте ще раз.",
+
+    sys_already_processing: "Для цього додатка вже виконується інший процес.",
+    insufficient_balance_amount: "Недостатньо коштів (${balance}). Мінімум ${min}.",
+    sys_starting: "Запуск...",
+    sys_update_failed: "Оновлення не вдалося",
+    sys_fixing_error: "Виправлення помилки...",
+    sys_autofix_failed: "Автовиправлення не вдалося",
+    sys_build_failed: "Збірка не вдалася",
+    autofix_insufficient_balance: "Неможливо виправити автоматично: недостатньо коштів (${balance}). Поповніть баланс і надішліть «Виправ помилку».",
 
     agent_lang_instruction: "\n\nIMPORTANT: All user-facing text in the app (UI labels, buttons, messages, placeholders, titles) must be written in Ukrainian (Українська). The code, comments, and variable names should stay in English.",
   },

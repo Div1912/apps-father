@@ -8,7 +8,7 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <link href="bootstrap.min.css" rel="stylesheet">
   <link href="bootstrap-extra.css" rel="stylesheet">
-  <link href="styles.css?r=74" rel="stylesheet">
+  <link href="styles.css?r=84" rel="stylesheet">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
@@ -41,6 +41,9 @@
       ">beta</span></h1>
           <button id="btn-admin" class="admin-fab hidden" aria-label="Admin Panel">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15v2"/><path d="M12 3a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2h-2V7a4 4 0 0 0-4-4z"/></svg>
+          </button>
+          <button id="btn-partner" class="partner-fab hidden" aria-label="Partnership">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.42 4.58a5.4 5.4 0 0 0-7.65 0l-.77.78-.77-.78a5.4 5.4 0 0 0-7.65 0C1.46 6.7 1.33 10.28 4 13l8 8 8-8c2.67-2.72 2.54-6.3.42-8.42z"/></svg>
           </button>
           <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="app_subtitle">
             Create and manage your Telegram Mini Apps with AI. Build, update, and publish — all from here.
@@ -200,6 +203,59 @@
     </div>
   </div>
 
+  <!-- ═══ PARTNER DASHBOARD VIEW ═══ -->
+  <div id="view-partner" class="view-container hidden">
+    <div>
+      <main class="tm-main">
+        <section class="tm-main-intro">
+          <div class="partner-icon-header">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--tg-theme-accent-text-color,#4ea4f6)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20.42 4.58a5.4 5.4 0 0 0-7.65 0l-.77.78-.77-.78a5.4 5.4 0 0 0-7.65 0C1.46 6.7 1.33 10.28 4 13l8 8 8-8c2.67-2.72 2.54-6.3.42-8.42z"/></svg>
+          </div>
+          <h1 class="tm-main-intro-header">Partnership Program</h1>
+          <p class="tm-main-intro-text" style="max-width:312px;" id="partner-subtitle"></p>
+        </section>
+        <section class="tm-section tm-menu-items" id="partner-link-section">
+          <div class="tm-section-header">
+            <h2 class="tm-section-header-text">Invite Link</h2>
+          </div>
+          <div class="tm-api-token-wrap">
+            <div class="tm-api-token" style="overflow:hidden; margin-bottom:8px">
+              <div id="partner-link-text"></div>
+            </div>
+            <div class="tm-api-token-actions" style="gap:8px">
+              <div class="tm-active-button" id="btn-copy-partner-link">Copy</div>
+              <div class="tm-active-button" id="btn-share-partner-link">Share</div>
+            </div>
+          </div>
+        </section>
+        <section class="tm-section" id="partner-stats-section">
+          <div class="adm-info-grid" id="partner-stats"></div>
+        </section>
+        <section class="tm-section tm-menu-items" id="partner-actions-section">
+          <div class="tm-section-header">
+            <h2 class="tm-section-header-text">Actions</h2>
+          </div>
+          <div class="tm-table-wrap">
+            <a class="tm-row tm-row-link" id="btn-partner-transfer">
+              <span class="tm-icon af-icon-wallet"></span>
+              <span>Transfer to App Balance</span>
+            </a>
+            <a class="tm-row tm-row-link" id="btn-partner-withdraw">
+              <span class="tm-icon af-icon-send"></span>
+              <span>Withdraw</span>
+            </a>
+          </div>
+        </section>
+        <section class="tm-section tm-menu-items" id="partner-referrals-section">
+          <div class="tm-section-header">
+            <h2 class="tm-section-header-text">Referrals</h2>
+          </div>
+          <div id="partner-referrals-list" style="width: 100%;"></div>
+        </section>
+      </main>
+    </div>
+  </div>
+
   <!-- ═══ REFERRAL PROGRAM VIEW ═══ -->
   <div id="view-referral" class="view-container hidden">
     <div>
@@ -220,7 +276,7 @@
             <h2 class="tm-section-header-text" data-i18n="referral_your_link">Your Link</h2>
           </div>
           <div class="tm-api-token-wrap">
-            <div class="tm-api-token" style="overflow:hidden">
+            <div class="tm-api-token" style="overflow:hidden;">
               <div id="referral-link-text"></div>
             </div>
             <div class="tm-api-token-actions" style="gap:8px">
@@ -436,14 +492,15 @@
 
         <section class="tm-section tm-menu-items" id="section-token" style="display:none">
           <div class="tm-api-token-wrap">
+            <div class="tm-api-token tm-webapp-url" id="webapp-url-row" style="display:none">
+              <div class="js-spoiler spoiler-active" id="webapp-url-spoiler">
+                <span id="webapp-url-text"></span>
+              </div>
+            </div>
             <div class="tm-api-token">
               <div class="js-spoiler spoiler-active" id="token-spoiler">
                 <span id="token-text"></span>
               </div>
-            </div>
-            <div class="tm-api-token-actions">
-              <div class="tm-active-button" id="btn-copy-token" data-i18n="detail_copy">Copy</div>
-              <div class="tm-revoke-button" id="btn-revoke-token" style="display: none;">Revoke</div>
             </div>
           </div>
           <p class="help-text">Use this token to access the HTTP API. Keep it secure. <a href="https://core.telegram.org/bots/api" target="_blank">Read more</a></p>
@@ -701,7 +758,18 @@
     </div>
   </div>
 
-  <script src="i18n.js?r=3"></script>
-  <script src="app.js?r=77"></script>
+  <!-- ═══ MODAL ═══ -->
+  <div id="app-modal-overlay" class="app-modal-overlay hidden">
+    <div class="app-modal" id="app-modal">
+      <div class="app-modal-header">
+        <h3 class="app-modal-title" id="app-modal-title"></h3>
+        <button class="app-modal-close" id="app-modal-close">&times;</button>
+      </div>
+      <div class="app-modal-body" id="app-modal-body"></div>
+    </div>
+  </div>
+
+  <script src="i18n.js?r=6"></script>
+  <script src="app.js?r=92"></script>
 </body>
 </html>
