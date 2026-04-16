@@ -179,6 +179,17 @@ const I18N = {
     chat_preparing: "Preparing for next update...",
     chat_finalizing: "Finalizing previous update, please wait...",
     chat_question_title: "Agent needs your input",
+
+    // Desktop
+    desktop_login_title: "Apps Father",
+    desktop_login_subtitle: "Build Telegram apps without writing a single line of code",
+    desktop_login_btn: "Sign in with Telegram",
+    desktop_new_project: "New Project",
+    desktop_no_projects: "No projects yet",
+    desktop_select_chat: "Select a project to start chatting",
+    desktop_settings: "Settings",
+    desktop_logout: "Log out",
+    desktop_balance: "Balance",
   },
 
   ru: {
@@ -342,6 +353,16 @@ const I18N = {
     chat_preparing: "Подготовка к следующему обновлению...",
     chat_finalizing: "Завершаем предыдущее обновление, подождите...",
     chat_question_title: "Агенту нужен ваш ответ",
+
+    desktop_login_title: "Apps Father",
+    desktop_login_subtitle: "Создавайте Telegram-приложения без единой строчки кода",
+    desktop_login_btn: "Войти через Telegram",
+    desktop_new_project: "Новый проект",
+    desktop_no_projects: "Пока нет проектов",
+    desktop_select_chat: "Выберите проект для начала чата",
+    desktop_settings: "Настройки",
+    desktop_logout: "Выйти",
+    desktop_balance: "Баланс",
   },
 
   ua: {
@@ -505,6 +526,16 @@ const I18N = {
     chat_preparing: "Підготовка до наступного оновлення...",
     chat_finalizing: "Завершуємо попереднє оновлення, зачекайте...",
     chat_question_title: "Агенту потрібна ваша відповідь",
+
+    desktop_login_title: "Apps Father",
+    desktop_login_subtitle: "Створюйте Telegram-додатки без жодного рядка коду",
+    desktop_login_btn: "Увійти через Telegram",
+    desktop_new_project: "Новий проєкт",
+    desktop_no_projects: "Поки немає проєктів",
+    desktop_select_chat: "Оберіть проєкт для початку чату",
+    desktop_settings: "Налаштування",
+    desktop_logout: "Вийти",
+    desktop_balance: "Баланс",
   }
 };
 

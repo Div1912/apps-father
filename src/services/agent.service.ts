@@ -15,6 +15,7 @@ import { commitService } from "./commit.service";
 import { MODEL_PRICING } from "./billing.service";
 import { abortedProjects } from "../bot/processing";
 import { ConventionExtractor } from "./convention-extractor";
+import { forceReloadProjectWs } from "../web/ws-manager";
 
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
 const SKILLS_DIR = path.join(process.cwd(), "skills");
@@ -49,6 +50,7 @@ function getAvailableSkills(): string[] {
 
 const FRONTEND_SKILL = loadSkill("frontend");
 const BACKEND_SKILL = loadSkill("backend");
+const FRONTEND_DESIGN_SKILL = loadSkill("frontend-design");
 
 const AGENT_SYSTEM_PROMPT = `You are Apps Father AI — a senior full-stack developer that creates and updates Telegram Mini Apps.
 
@@ -230,6 +232,19 @@ IMPORTANT - ROUTES HOT-RELOAD:
 Backend routes.js is reloaded on EVERY API request. You do NOT need to restart anything after editing routes.js. Changes take effect immediately on the next http_request test.
 WebSocket handlers (module.exports.ws) are loaded once when the first client connects. To test WS changes, all clients must disconnect first (or reload the app).
 
+IMPORTANT - BACKGROUND TIMERS (setInterval / setTimeout) IN ROUTES.JS:
+The db object passed into module.exports is a PERSISTENT connection shared across all requests — do NOT call db.close() anywhere in routes.js.
+Use a global singleton guard to prevent duplicate timers on hot-reload:
+  if (!global._myLoopStarted) {
+    global._myLoopStarted = true;
+    global._myLoopSetDb = function(newDb) { _db = newDb; };
+    let _db = db;
+    setInterval(function() { /* use _db here */ }, 1000);
+  } else if (global._myLoopSetDb) {
+    global._myLoopSetDb(db); // update reference after hot-reload
+  }
+This ensures the timer is created exactly once per process and always has the current db reference.
+
 WEBSOCKET (for real-time apps):
 - Use WebSockets for: chat/messenger, live bets/trading, multiplayer games, auctions, live dashboards, collaborative tools — anything needing instant push updates.
 - Do NOT use WebSockets for: simple CRUD, leaderboards, settings, or anything where polling or occasional refresh is fine.
@@ -400,6 +415,8 @@ WRONG (5 iterations):
 RIGHT (1-2 iterations):
   Turn 1: grep("register") + grep("start_param") + grep("deposit") +
            read_file(routes.js, offset=2015, limit=50) + read_file(app.js, offset=1238, limit=20)
+
+${FRONTEND_DESIGN_SKILL ? "FRONTEND DESIGN SKILL (apply when creating or redesigning the app UI — build distinctive, production-grade interfaces):\n" + FRONTEND_DESIGN_SKILL : ""}
 
 ${FRONTEND_SKILL ? "FRONTEND PATTERNS REFERENCE:\n" + FRONTEND_SKILL : ""}
 
@@ -1426,6 +1443,9 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
               await progress({ action: "🚀 Deploying to dev", detail: `(${deployCount}/2)`, percent: currentPercent });
               try {
                 commitService.syncToDev(projectId, projectDir);
+                // Force-reload the dev WS so background timers and game loops
+                // pick up the new routes.js without requiring clients to reconnect.
+                try { forceReloadProjectWs(projectId, true); } catch {}
                 result = `OK: Code deployed to development environment (deploy ${deployCount}/2).\nTest frontend: ${config.baseUrl}/dev/${projectId}/\nTest API: ${config.baseUrl}/devapi/${projectId}/\nTest WS: wss://apps-father.com/devws/${projectId}`;
               } catch (err: any) {
                 result = `Error deploying to dev: ${err.message}`;

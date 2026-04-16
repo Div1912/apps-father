@@ -6,7 +6,7 @@ import crypto from "crypto";
 import multer from "multer";
 import { config } from "../config";
 import appRoutes from "./routes/app.routes";
-import apiRoutes from "./routes/api.routes";
+import apiRoutes, { invalidateProjectDbCache } from "./routes/api.routes";
 import devRoutes from "./routes/dev.routes";
 import devApiRoutes from "./routes/devapi.routes";
 import webhookRoutes from "./routes/webhook.routes";
@@ -14,7 +14,7 @@ import adminRoutes from "./routes/admin.routes";
 import editorRoutes from "./routes/editor.routes";
 import logsRoutes from "./routes/logs.routes";
 import billingRoutes from "./routes/billing.routes";
-import { setupWebSocket } from "./ws-manager";
+import { setupWebSocket, forceReloadProjectWs } from "./ws-manager";
 import { setupMiniAppWebSocket } from "./miniapp-ws";
 import { broadcastToProject, registerAnswerResolver, resolveAnswer } from "./miniapp-ws";
 import { projectService } from "../services/project.service";
@@ -32,10 +32,12 @@ import { runtimeConfig } from "../services/runtime-config.service";
 import { Decimal } from "@prisma/client/runtime/library";
 import { t, Lang } from "../bot/i18n";
 import { notifyProcessDone } from "../services/notify.service";
+import { signDesktopToken, verifyDesktopToken } from "./desktop-auth";
 
 let expressApp: express.Application | null = null;
 let httpServer: http.Server | null = null;
 const avatarCache = new Map<string, string>();
+
 
 export function createWebServer() {
   const app = express();
@@ -70,9 +72,52 @@ export function createWebServer() {
     } catch { return { valid: false }; }
   }
 
+  function validateAuth(req: express.Request): { valid: boolean; telegramId?: number; username?: string; firstName?: string } {
+    const initData = (req.headers["x-telegram-init-data"] || "") as string;
+    if (initData) return validateMiniAppInitData(initData);
+    const desktopToken = (req.headers["x-desktop-auth"] || "") as string;
+    if (desktopToken) return verifyDesktopToken(desktopToken);
+    return { valid: false };
+  }
+
+  // ── Desktop config (public, no auth) ──
+  app.get("/telegram-mini-app/api/desktop-config", (_req, res) => {
+    const botId = config.botToken.split(":")[0];
+    res.json({ botId });
+  });
+
+  // ── Desktop Web Auth (Telegram Login Widget) ──
+  app.post("/telegram-mini-app/api/web-auth", async (req, res) => {
+    try {
+      const { id, first_name, username, photo_url, auth_date, hash } = req.body;
+      if (!id || !hash || !auth_date) { res.status(400).json({ error: "Missing fields" }); return; }
+
+      const now = Math.floor(Date.now() / 1000);
+      if (now - Number(auth_date) > 86400) { res.status(401).json({ error: "Auth data expired" }); return; }
+
+      const checkData: Record<string, string> = {};
+      for (const key of Object.keys(req.body).sort()) {
+        if (key !== "hash") checkData[key] = String(req.body[key]);
+      }
+      const dataCheckString = Object.entries(checkData).map(([k, v]) => `${k}=${v}`).join("\n");
+      const secretKey = crypto.createHash("sha256").update(config.botToken).digest();
+      const computedHash = crypto.createHmac("sha256", secretKey).update(dataCheckString).digest("hex");
+
+      if (computedHash !== hash) { res.status(401).json({ error: "Invalid hash" }); return; }
+
+      const user = await projectService.getOrCreateUser(Number(id), username, first_name);
+      const token = signDesktopToken({ telegramId: Number(id), username, firstName: first_name });
+
+      res.json({ token, user: { id: user.id, telegramId: Number(id), username, firstName: first_name, photoUrl: photo_url } });
+    } catch (err) {
+      console.error("[Web Auth] Error:", err);
+      res.status(500).json({ error: "Auth failed" });
+    }
+  });
+
   app.get("/telegram-mini-app/api/projects", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
 
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
@@ -174,7 +219,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/language", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const { lang } = req.body;
       if (!lang || !["en", "ru", "ua"].includes(lang)) { res.status(400).json({ error: "Invalid lang" }); return; }
@@ -188,7 +233,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/buy-slot", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const result = await projectService.buySlot(user.id);
@@ -201,7 +246,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/topup", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const { amount, method } = req.body;
@@ -239,7 +284,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/ton-verify", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const { paymentId } = req.body;
       if (!paymentId) { res.status(400).json({ error: "Missing paymentId" }); return; }
@@ -253,7 +298,7 @@ export function createWebServer() {
 
   app.get("/telegram-mini-app/api/token/:projectId", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
 
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
@@ -271,7 +316,7 @@ export function createWebServer() {
 
   app.get("/telegram-mini-app/api/balance", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const balance = await billingService.getUserBalance(user.id);
@@ -286,7 +331,7 @@ export function createWebServer() {
 
   app.get("/telegram-mini-app/api/partner", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       if (!user.isPartner) { res.json({ isPartner: false }); return; }
@@ -335,7 +380,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/partner/transfer", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       if (!user.isPartner) { res.status(403).json({ error: "Not a partner" }); return; }
@@ -365,7 +410,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/partner/withdraw", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       if (!user.isPartner) { res.status(403).json({ error: "Not a partner" }); return; }
@@ -422,7 +467,7 @@ export function createWebServer() {
 
   app.get("/telegram-mini-app/api/chat/:projectId", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const project = await projectService.getProject(req.params.projectId);
@@ -442,7 +487,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/chat/:projectId/send", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const lang = (user.language as Lang) || "en";
@@ -887,7 +932,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/chat/:projectId/suggestions", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const suggestLang = (user.language as Lang) || "en";
@@ -904,7 +949,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/chat/:projectId/plan", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const planLang = (user.language as Lang) || "en";
@@ -948,7 +993,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/chat/:projectId/approve-plan", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const buildLang = (user.language as Lang) || "en";
@@ -1047,6 +1092,8 @@ export function createWebServer() {
           try {
             await commitService.createCommit(projectId, `App created: ${(project.description || "").substring(0, 80)}`, result.commitNum!, result.commitDir!, result.logPath);
             await commitService.releaseCurrentDev(projectId);
+            try { forceReloadProjectWs(projectId, false); } catch {}
+            try { invalidateProjectDbCache(projectId); } catch {}
           } catch {}
 
           const appName = project.name || "App";
@@ -1109,7 +1156,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/chat/:projectId/edit-plan", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const editPlanLang = (user.language as Lang) || "en";
@@ -1151,7 +1198,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/chat/:projectId/answer", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const project = await projectService.getProject(req.params.projectId);
@@ -1168,7 +1215,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/chat/:projectId/abort", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId;
@@ -1206,7 +1253,7 @@ export function createWebServer() {
 
   app.get("/telegram-mini-app/api/versions/:projectId", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const project = await projectService.getProject(req.params.projectId as string);
@@ -1237,7 +1284,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/versions/:projectId/release", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
@@ -1249,6 +1296,10 @@ export function createWebServer() {
         await commitService.revertToCommit(projectId, version);
       }
       const commitNum = await commitService.releaseCurrentDev(projectId);
+      // Reload the release WS handler and evict the DB cache so the new
+      // routes.js takes effect immediately without a server restart.
+      try { forceReloadProjectWs(projectId, false); } catch {}
+      try { invalidateProjectDbCache(projectId); } catch {}
       res.json({ released: commitNum });
     } catch (err) {
       console.error("[MiniApp API] Release error:", err);
@@ -1258,7 +1309,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/versions/:projectId/revert", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
@@ -1277,7 +1328,7 @@ export function createWebServer() {
 
   app.get("/telegram-mini-app/api/versions/:projectId/log/:version", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
@@ -1300,7 +1351,7 @@ export function createWebServer() {
   // Parsed log data as JSON for the viewer
   app.get("/telegram-mini-app/api/versions/:projectId/log-data/:version", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
@@ -1321,7 +1372,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/quality/:projectId", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
@@ -1345,7 +1396,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/regenerate-context/:projectId", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
@@ -1368,7 +1419,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/transfer/:projectId", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
@@ -1397,7 +1448,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/delete/:projectId", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
@@ -1428,7 +1479,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/bot-info/:projectId", upload.single("photo"), async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
@@ -1517,7 +1568,7 @@ export function createWebServer() {
 
   app.get("/telegram-mini-app/api/features/:projectId", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
@@ -1545,7 +1596,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/features/:projectId/buy", async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
@@ -1569,7 +1620,7 @@ export function createWebServer() {
 
   app.post("/telegram-mini-app/api/chat/:projectId/upload", upload.array("files", 5), async (req, res) => {
     try {
-      const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+      const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
@@ -1603,14 +1654,14 @@ export function createWebServer() {
   const PROJECTS_DIR = path.join(process.cwd(), "projects");
 
   function adminGuard(req: express.Request, res: express.Response): { telegramId: number } | null {
-    const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+    const auth = validateAuth(req);
     if (!auth.valid || !auth.telegramId) { res.status(401).json({ error: "Unauthorized" }); return null; }
     if (!ADMIN_TELEGRAM_IDS.includes(auth.telegramId)) { res.status(403).json({ error: "Forbidden" }); return null; }
     return { telegramId: auth.telegramId };
   }
 
   app.get("/telegram-mini-app/api/admin/check", (req, res) => {
-    const auth = validateMiniAppInitData((req.headers["x-telegram-init-data"] || "") as string);
+    const auth = validateAuth(req);
     if (!auth.valid || !auth.telegramId) { res.json({ isAdmin: false }); return; }
     res.json({ isAdmin: ADMIN_TELEGRAM_IDS.includes(auth.telegramId) });
   });

@@ -9,6 +9,10 @@ import { decryptToken } from "../../services/crypto.service";
 const router = Router();
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
 
+// Persistent per-project DB connections — never closed between requests so that
+// background setInterval/setTimeout loops (game schedulers, etc.) keep working.
+const projectDbCache = new Map<string, ReturnType<typeof createProjectDb>>();
+
 function createProjectDb(projectDir: string, botToken: string, botUsername: string, projectId: string) {
   const dataDir = path.join(projectDir, "data");
   fs.mkdirSync(dataDir, { recursive: true });
@@ -61,9 +65,8 @@ router.all("/:projectId/{*routePath}", async (req: Request, res: Response) => {
     return;
   }
 
-  let db: ReturnType<typeof createProjectDb> | null = null;
-
   try {
+    // Clear module cache so route code changes take effect on next request
     for (const key of Object.keys(require.cache)) {
       if (key.startsWith(backendDir) && !key.includes("node_modules")) delete require.cache[key];
     }
@@ -71,18 +74,23 @@ router.all("/:projectId/{*routePath}", async (req: Request, res: Response) => {
     const projectRouter = Router();
     const routeModule = require(routesFile);
 
-    const project = await projectService.getProject(projectId);
-    let botToken = "";
-    let botUsername = "";
-    if (project?.botTokenEncrypted) {
-      botToken = decryptToken(project.botTokenEncrypted);
-    }
-    if (project?.botUsername) {
-      botUsername = project.botUsername;
-    }
+    // Get or create a persistent DB connection for this project.
+    // We intentionally do NOT close it per-request — background timers (game loops,
+    // schedulers, etc.) inside routes.js hold a reference to the same db object and
+    // would crash with "database connection is not open" if we closed it here.
+    let db = projectDbCache.get(projectId);
+    if (!db) {
+      const project = await projectService.getProject(projectId);
+      let botToken = "";
+      let botUsername = "";
+      if (project?.botTokenEncrypted) botToken = decryptToken(project.botTokenEncrypted);
+      if (project?.botUsername) botUsername = project.botUsername;
 
-    const releaseDir = path.join(projectDir, "release");
-    db = createProjectDb(releaseDir, botToken, botUsername, projectId);
+      const releaseDir = path.join(projectDir, "release");
+      db = createProjectDb(releaseDir, botToken, botUsername, projectId);
+      projectDbCache.set(projectId, db);
+      console.log(`[API] Opened persistent DB for project ${projectId.substring(0, 8)}`);
+    }
 
     if (typeof routeModule === "function") {
       try {
@@ -102,21 +110,27 @@ router.all("/:projectId/{*routePath}", async (req: Request, res: Response) => {
       }
     }
 
-    req.url = "/" + routePath;
+    // Preserve the original query string when rewriting the URL
+    const qs = req.originalUrl.includes("?") ? req.originalUrl.slice(req.originalUrl.indexOf("?")) : "";
+    req.url = "/" + routePath + qs;
     projectRouter(req, res, () => {
       console.error(`[API] 404 for /${routePath} in project ${projectId.substring(0, 8)} | Registered: [${registeredRoutes.join(", ")}]`);
       res.status(404).json({ error: "Endpoint not found" });
-      if (db) db.close();
-    });
-
-    res.on("finish", () => {
-      if (db) db.close();
     });
   } catch (err) {
     console.error(`[API] Error loading routes for ${projectId}:`, err);
     res.status(500).json({ error: "Internal server error" });
-    if (db) db.close();
   }
 });
+
+/** Evict a project's cached DB connection so the next request opens a fresh one. */
+export function invalidateProjectDbCache(projectId: string): void {
+  const db = projectDbCache.get(projectId);
+  if (db) {
+    try { (db as any).close?.(); } catch {}
+    projectDbCache.delete(projectId);
+    console.log(`[API] Evicted DB cache for project ${projectId.substring(0, 8)}`);
+  }
+}
 
 export default router;

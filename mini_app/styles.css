@@ -4265,7 +4265,19 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
 
 /* ── Release Notes page ── */
 .rn-version {
-  margin-bottom: 24px;
+  margin-bottom: 32px;
+}
+
+.rn-banner {
+  width: 100%;
+  padding: 0 16px 16px;
+}
+
+.rn-banner img {
+  width: 100%;
+  border-radius: 14px;
+  display: block;
+  object-fit: cover;
 }
 .rn-version-header {
   display: flex;

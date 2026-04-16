@@ -704,7 +704,7 @@ function loadProjectDetail(projectId) {
     const files = filesData.files || [];
     el.innerHTML = \`
       <button class="detail-back" id="back-projects">← Back to Projects</button>
-      <div class="page-hdr"><div><h2>\${esc(p.name)}</h2><div class="sub">\${p.id}</div></div><div style="display:flex;gap:8px"><a class="btn btn-sm" href="/editor/\${p.id}/" target="_blank">Open Editor</a><a class="btn btn-sm" href="/app/\${p.id}/" target="_blank">Open App</a></div></div>
+      <div class="page-hdr"><div><h2>\${esc(p.name)}</h2><div class="sub">\${p.id}</div></div><div style="display:flex;gap:8px"><a class="btn btn-sm" href="/editor/\${p.id}/" target="_blank">Open Editor</a><a class="btn btn-sm" href="/app/\${p.id}/" target="_blank">Open App</a><a class="btn btn-sm" href="/telegram-mini-app/desktop.html" target="_blank">Desktop</a></div></div>
       <div class="info-grid">
         <div class="info-card"><div class="lbl">Status</div><div class="val">\${statusBadge(p.status)}</div></div>
         <div class="info-card"><div class="lbl">Owner</div><div class="val">\${esc(p.owner)}</div></div>

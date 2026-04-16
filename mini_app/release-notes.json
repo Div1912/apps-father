@@ -1,5 +1,68 @@
 [
   {
+    "version": "2.1.0",
+    "date": "2026-04-14",
+    "title": "Quality of Life & Partners",
+    "image": "assets/updates/0.png",
+    "sections": [
+      {
+        "label": "Payments & Balance",
+        "items": [
+          "TON deposits — top up directly with TON",
+          "CryptoBot opens instantly inside Telegram instead of browser",
+          "Other Crypto payment method fixed on mobile"
+        ]
+      },
+      {
+        "label": "AI & Chat",
+        "items": [
+          "Ask mode now tracks full dialog history for better context",
+          "Ask mode cost multiplier applied correctly",
+          "Agent iterations limit raised from 60 to 100 for all tiers",
+          "Ctrl+V to paste images directly into chat"
+        ]
+      },
+      {
+        "label": "App Dashboard",
+        "items": [
+          "Web App URL visible in App Dashboard",
+          "Process blur effect when input is disabled",
+          "App error overlay shown only to the owner",
+          "Abort button to stop a running process mid-way"
+        ]
+      },
+      {
+        "label": "Partnership Program",
+        "items": [
+          "Partners get a personal dashboard: referred users, revenue, commission",
+          "Admins can assign partner status and set referral percentage per user",
+          "Partners can withdraw or transfer earnings from their partner balance",
+          "Referral system improvements"
+        ]
+      },
+      {
+        "label": "UI & UX",
+        "items": [
+          "Scroll fixed in multiple views",
+          "Notification message when process finishes — with View Details button",
+          "Text selection enabled in chat messages",
+          "Localization fixes across the platform",
+          "Admin-only controls (Update Context, Download Log, See Agent Log) hidden for regular users",
+          "New app slot price reduced to $5"
+        ]
+      },
+      {
+        "label": "Bug Fixes",
+        "items": [
+          "Fixed double process message on first plan confirmation",
+          "Fixed log viewer loading old entries",
+          "Removed non-functional Answer messages from chat",
+          "Admin Panel feature hidden from paid features list"
+        ]
+      }
+    ]
+  },
+  {
     "version": "2.0.0",
     "date": "2026-04-11",
     "title": "Major Platform Update",

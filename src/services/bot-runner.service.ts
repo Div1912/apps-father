@@ -225,15 +225,23 @@ export class BotRunnerService {
     }
   }
 
-  private async hasCustomWebhook(projectId: string): Promise<boolean> {
+  /** Returns the webhook route path registered in routes.js, or null if none. */
+  private getCustomWebhookPath(projectId: string): string | null {
     const routesFile = path.join(process.cwd(), "projects", projectId, "release", "backend", "routes.js");
-    if (!fs.existsSync(routesFile)) return false;
+    if (!fs.existsSync(routesFile)) return null;
     try {
       const content = fs.readFileSync(routesFile, "utf-8");
-      return content.includes("bot-webhook");
+      // Check for explicit bot-webhook first, then fall back to generic /webhook route
+      if (content.includes("bot-webhook")) return "/bot-webhook";
+      if (/router\s*\.\s*post\s*\(\s*['"`]\/webhook['"`]/.test(content)) return "/webhook";
+      return null;
     } catch {
-      return false;
+      return null;
     }
+  }
+
+  private async hasCustomWebhook(projectId: string): Promise<boolean> {
+    return this.getCustomWebhookPath(projectId) !== null;
   }
 
   private async forwardToAppWebhook(
@@ -246,11 +254,8 @@ export class BotRunnerService {
     const routesFile = path.join(projectDir, "release", "backend", "routes.js");
     if (!fs.existsSync(routesFile)) return;
 
-    let content: string;
-    try {
-      content = fs.readFileSync(routesFile, "utf-8");
-    } catch { return; }
-    if (!content.includes("bot-webhook")) return;
+    const webhookPath = this.getCustomWebhookPath(projectId);
+    if (!webhookPath) return;
 
     let db: any = null;
     try {
@@ -283,8 +288,8 @@ export class BotRunnerService {
       await new Promise<void>((resolve) => {
         const fakeReq = {
           method: "POST",
-          url: "/bot-webhook",
-          path: "/bot-webhook",
+          url: webhookPath,
+          path: webhookPath,
           headers: { "content-type": "application/json" },
           body,
           params: {},

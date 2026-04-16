@@ -157,8 +157,8 @@ async function initProjectWs(projectId: string, isDev: boolean): Promise<Project
   return state;
 }
 
-function cleanupProject(projectId: string) {
-  const state = projectStates.get(projectId);
+function cleanupProject(stateKey: string) {
+  const state = projectStates.get(stateKey);
   if (!state) return;
 
   for (const timer of state.timers) {
@@ -166,7 +166,7 @@ function cleanupProject(projectId: string) {
     clearTimeout(timer);
   }
   if (state.timers.size > 0) {
-    console.log(`[WS] Cleared ${state.timers.size} timer(s) for project ${projectId.substring(0, 12)}`);
+    console.log(`[WS] Cleared ${state.timers.size} timer(s) for ${stateKey.substring(0, 12)}`);
   }
   state.timers.clear();
 
@@ -175,8 +175,34 @@ function cleanupProject(projectId: string) {
     state.db = null;
   }
   state.connectionHandler = null;
-  projectStates.delete(projectId);
-  projectInitPromises.delete(projectId);
+  projectStates.delete(stateKey);
+  projectInitPromises.delete(stateKey);
+}
+
+/**
+ * Force-reload a project's WebSocket handler.
+ * Closes all connected clients (they will auto-reconnect), clears timers,
+ * closes the DB, and removes the cached state so the next connection
+ * re-initializes from the latest routes.js on disk.
+ */
+export function forceReloadProjectWs(projectId: string, isDev: boolean): void {
+  const stateKey = (isDev ? "dev:" : "rel:") + projectId;
+  const state = projectStates.get(stateKey);
+
+  if (!state) return; // nothing running — no-op
+
+  const clientCount = state.clients.size;
+
+  // Tell clients to reconnect (graceful close with code 1012 = Service Restart)
+  for (const client of state.clients) {
+    try {
+      client.close(1012, "Server reload");
+    } catch {}
+  }
+  state.clients.clear();
+
+  cleanupProject(stateKey);
+  console.log(`[WS] Force-reloaded ${isDev ? "dev" : "release"} WS for project ${projectId.substring(0, 8)} (${clientCount} client(s) disconnected)`);
 }
 
 export function setupWebSocket(server: import("http").Server, miniAppWss?: import("ws").WebSocketServer) {

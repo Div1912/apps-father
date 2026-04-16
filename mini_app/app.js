@@ -2300,6 +2300,7 @@ async function openReleaseNotes() {
     for (const v of notes) {
       const date = new Date(v.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
       html += `<div class="rn-version">`;
+      if (v.image) html += `<div class="rn-banner"><img src="${v.image}" alt="v${v.version}" loading="lazy"></div>`;
       html += `<div class="rn-version-header"><span class="rn-version-badge">${v.version}</span><span class="rn-version-date">${date}</span></div>`;
       if (v.title) html += `<div class="rn-version-title">${v.title}</div>`;
       for (const s of v.sections) {
@@ -2939,13 +2940,17 @@ function openAdmin() {
     menuRowAction('Users', 'af-icon-users', 'adm-open-users') +
     menuRowAction('Apps', 'af-icon-apps', 'adm-open-apps') +
     menuRowAction('Vouchers', 'af-icon-vouchers', 'adm-open-vouchers') +
-    menuRowAction('Configuration', 'af-icon-config', 'adm-open-config');
+    menuRowAction('Configuration', 'af-icon-config', 'adm-open-config') +
+    `<a class="tm-row tm-row-link" id="adm-open-desktop"><span class="tm-icon af-icon-open"></span><span>Desktop Version</span></a>`;
   rows.querySelector('[data-action="adm-open-dashboard"]')?.addEventListener('click', openAdmDashboard);
   rows.querySelector('[data-action="adm-open-activities"]')?.addEventListener('click', openAdmActivities);
   rows.querySelector('[data-action="adm-open-users"]')?.addEventListener('click', openAdmUsers);
   rows.querySelector('[data-action="adm-open-apps"]')?.addEventListener('click', openAdmApps);
   rows.querySelector('[data-action="adm-open-vouchers"]')?.addEventListener('click', openAdmVouchers);
   rows.querySelector('[data-action="adm-open-config"]')?.addEventListener('click', openAdmConfig);
+  rows.querySelector('#adm-open-desktop')?.addEventListener('click', () => {
+    tg?.openLink(`${location.origin}/telegram-mini-app/desktop.html`);
+  });
   admApi('/stats').then(d => {
     document.getElementById('adm-info').innerHTML =
       `Users: <b>${d.userCount}</b> · Apps: <b>${d.projectCount}</b> · Revenue: <b>${admFmtMoney(d.totalTopups)}</b>`;
