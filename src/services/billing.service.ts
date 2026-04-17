@@ -4,6 +4,7 @@ import crypto from "crypto";
 import { Decimal } from "@prisma/client/runtime/library";
 import { runtimeConfig } from "./runtime-config.service";
 import { notifyDeposit, notifyReferralBonus } from "./notify.service";
+import { trackEvent } from "./analytics.service";
 
 export const MODEL_PRICING: Record<string, { input: number; output: number; cache_write: number; cache_read: number }> = {
   "claude-sonnet-4-6": {
@@ -385,9 +386,10 @@ export class BillingService {
     const user = await prisma.user.findUnique({ where: { id: payment.userId } });
     if (user) {
       const newBalance = Number(user.balance);
+      const amountUsd = Number(payment.amountUsd);
       const text =
         `<b><tg-emoji emoji-id="5377544696656599429">✅</tg-emoji> Payment confirmed!</b>\n\n` +
-        `<b><tg-emoji emoji-id="5377851954321989517">💲</tg-emoji> +$${Number(payment.amountUsd).toFixed(2)}</b> has been added to your balance.\n\n` +
+        `<b><tg-emoji emoji-id="5377851954321989517">💲</tg-emoji> +$${amountUsd.toFixed(2)}</b> has been added to your balance.\n\n` +
         `<blockquote>New balance: <b>$${newBalance.toFixed(2)}</b></blockquote>`;
 
       await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
@@ -396,9 +398,10 @@ export class BillingService {
         body: JSON.stringify({ chat_id: user.telegramId.toString(), text, parse_mode: "HTML" }),
       }).catch(() => {});
 
-      notifyDeposit(Number(user.telegramId), user.username ?? undefined, Number(payment.amountUsd), newBalance);
+      notifyDeposit(Number(user.telegramId), user.username ?? undefined, amountUsd, newBalance);
+      void trackEvent(Number(user.telegramId), "payment", { amount: amountUsd, method: "ton" });
 
-      await this.creditReferralBonus(user, Number(payment.amountUsd));
+      await this.creditReferralBonus(user, amountUsd);
     }
   }
 
@@ -439,6 +442,7 @@ export class BillingService {
       }).catch(() => {});
 
       notifyDeposit(Number(user.telegramId), user.username ?? undefined, Number(payment.amountUsd), newBalance);
+      void trackEvent(Number(user.telegramId), "payment", { amount: Number(payment.amountUsd), method: "stars" });
 
       await this.creditReferralBonus(user, Number(payment.amountUsd));
     }
@@ -519,6 +523,7 @@ export class BillingService {
           });
 
           notifyDeposit(Number(user.telegramId), user.username ?? undefined, Number(payment.amountUsd), newBalance);
+          void trackEvent(Number(user.telegramId), "payment", { amount: Number(payment.amountUsd), method: "nowpayments" });
 
           await this.creditReferralBonus(user, Number(payment.amountUsd));
         }

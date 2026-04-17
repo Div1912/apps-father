@@ -4,6 +4,7 @@ import { billingService } from "../../services/billing.service";
 import { config } from "../../config";
 import { prisma } from "../../db";
 import { notifyDeposit } from "../../services/notify.service";
+import { trackEvent } from "../../services/analytics.service";
 
 const router = Router();
 
@@ -108,6 +109,7 @@ router.post("/cryptobot", async (req: Request, res: Response) => {
         });
 
         notifyDeposit(Number(user.telegramId), user.username ?? undefined, Number(payment.amountUsd), newBalance);
+        void trackEvent(Number(user.telegramId), "payment", { amount: Number(payment.amountUsd), method: "cryptobot" });
 
         await billingService.creditReferralBonus(user, Number(payment.amountUsd));
       }

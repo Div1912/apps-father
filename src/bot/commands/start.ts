@@ -56,7 +56,7 @@ export async function startCommand(ctx: BotContext) {
     }
   }
 
-  const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name, referredBy);
+  const { user } = await projectService.getOrCreateUser(from.id, from.username, from.first_name, referredBy);
 
   // Credit partner referral bonus to new user
   if (partnerBonus && user.referredBy) {
@@ -114,7 +114,9 @@ export async function startCommand(ctx: BotContext) {
   }
 
   const imagePath = path.join(__dirname, "..", "..", "..", "assets", "bot_images", "welcome.png");
-  const miniAppUrl = `${config.baseUrl}/telegram-mini-app`;
+  const miniAppUrl = startParam
+    ? `${config.baseUrl}/telegram-mini-app/?startapp=${encodeURIComponent(startParam)}`
+    : `${config.baseUrl}/telegram-mini-app/`;
 
   const chatId = ctx.chat!.id;
 

@@ -15,6 +15,7 @@ model User {
   balance    Decimal   @default(0) @db.Decimal(12, 4)
   appSlots   Int       @default(1) @map("app_slots")
   referredBy BigInt?   @map("referred_by")
+  utmSource  String?   @map("utm_source")
   language   String    @default("en")
   createdAt  DateTime  @default(now()) @map("created_at")
 

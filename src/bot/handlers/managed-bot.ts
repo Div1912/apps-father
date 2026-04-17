@@ -3,6 +3,7 @@ import { BotContext } from "../../types";
 import { config } from "../../config";
 import { projectService } from "../../services/project.service";
 import { botRunnerService } from "../../services/bot-runner.service";
+import { trackEvent } from "../../services/analytics.service";
 import { EMOJI, ce } from "../emoji";
 import { Lang, t } from "../i18n";
 
@@ -43,7 +44,7 @@ async function handleManagedBotAsync(bot: Bot<BotContext>, creator: any, newBot:
   };
 
   try {
-    const user = await projectService.getOrCreateUser(
+    const { user } = await projectService.getOrCreateUser(
       creator.id,
       creator.username,
       creator.first_name
@@ -91,6 +92,12 @@ async function handleManagedBotAsync(bot: Bot<BotContext>, creator: any, newBot:
       newBot.username || "",
       botToken
     );
+
+    void trackEvent(creator.id, "app_created", {
+      project_id: project.id,
+      project_name: projectName,
+      bot_username: newBot.username || "",
+    });
 
     await botRunnerService.startBot(project.id, botToken, newBot.username || "");
   } catch (err) {

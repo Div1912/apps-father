@@ -9,6 +9,20 @@
   <link href="bootstrap.min.css" rel="stylesheet">
   <link href="bootstrap-extra.css" rel="stylesheet">
   <link href="styles.css?r=86" rel="stylesheet">
+  <script>
+    window.op=window.op||function(){var n=[];return new Proxy(function(){arguments.length&&n.push([].slice.call(arguments))},{get:function(t,r){return"q"===r?n:function(){n.push([r].concat([].slice.call(arguments)))}} ,has:function(t,r){return"q"===r}}) }();
+    window.op('init', {
+      clientId: '94c4b9ff-7935-45b5-be8b-3d22360f4bf5',
+      trackScreenViews: true,
+      trackOutgoingLinks: true,
+      trackAttributes: true,
+      sessionReplay: {
+        enabled: true,
+        maskAllText: false,
+      },
+    });
+  </script>
+  <script src="https://openpanel.dev/op1.js" defer async></script>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
@@ -396,6 +410,19 @@
           <p class="tm-main-intro-text" style="max-width:312px;">Platform statistics</p>
         </section>
         <section class="tm-section" style="padding-top:0;" id="adm-dashboard-content"></section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ═══ ADMIN SOURCES (Analytics) ═══ -->
+  <div id="view-adm-sources" class="view-container hidden">
+    <div>
+      <main class="tm-main">
+        <section class="tm-main-intro">
+          <h1 class="tm-main-intro-header">Sources</h1>
+          <p class="tm-main-intro-text" style="max-width:312px;">Acquisition & conversion per traffic source</p>
+        </section>
+        <section class="tm-section" style="padding-top:0;" id="adm-sources-content"></section>
       </main>
     </div>
   </div>

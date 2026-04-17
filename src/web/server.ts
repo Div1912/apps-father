@@ -27,6 +27,7 @@ import { processingProjects, abortedProjects } from "../bot/processing";
 import { commitService } from "../services/commit.service";
 import { publishReport } from "../services/telegraph.service";
 import { claudeService } from "../services/claude.service";
+import { parseStartParam, trackEvent } from "../services/analytics.service";
 import { prisma } from "../db";
 import { runtimeConfig } from "../services/runtime-config.service";
 import { Decimal } from "@prisma/client/runtime/library";
@@ -105,7 +106,7 @@ export function createWebServer() {
 
       if (computedHash !== hash) { res.status(401).json({ error: "Invalid hash" }); return; }
 
-      const user = await projectService.getOrCreateUser(Number(id), username, first_name);
+      const { user } = await projectService.getOrCreateUser(Number(id), username, first_name);
       const token = signDesktopToken({ telegramId: Number(id), username, firstName: first_name });
 
       res.json({ token, user: { id: user.id, telegramId: Number(id), username, firstName: first_name, photoUrl: photo_url } });
@@ -115,12 +116,47 @@ export function createWebServer() {
     }
   });
 
+  // Analytics init — called on every Mini App load; records utm_source on first-time users
+  app.post("/telegram-mini-app/api/init", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+
+      const { startParam } = req.body as { startParam?: string };
+      const { source, referrerId } = parseStartParam(startParam);
+      const referredBy = referrerId ? Number(referrerId) : undefined;
+
+      const { user, isNew } = await projectService.getOrCreateUser(
+        auth.telegramId!,
+        auth.username,
+        auth.firstName,
+        referredBy,
+        source
+      );
+
+      // Fire server-side analytics events (identify happens on the frontend
+      // for accurate device/IP/location attribution)
+      if (isNew) {
+        void trackEvent(auth.telegramId!, "user_registered", {
+          source,
+          referrer_id: referrerId,
+          telegram_id: auth.telegramId,
+        });
+      }
+
+      res.json({ ok: true, isNew, utmSource: user.utmSource });
+    } catch (err: any) {
+      console.error("[MiniApp API] Init error:", err);
+      res.status(500).json({ error: "Internal error" });
+    }
+  });
+
   app.get("/telegram-mini-app/api/projects", async (req, res) => {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
 
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projects = await projectService.getProjectsByUser(user.id);
 
       const result = await Promise.all(projects.map(async (p: any) => {
@@ -235,8 +271,15 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const result = await projectService.buySlot(user.id);
+
+      void trackEvent(auth.telegramId!, "purchase", {
+        type: "slot",
+        amount: 25,
+        new_slots: result.newSlots,
+      });
+
       res.json({ ok: true, newSlots: result.newSlots, newBalance: result.newBalance });
     } catch (err: any) {
       console.error("[MiniApp API] Buy slot error:", err);
@@ -248,7 +291,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const { amount, method } = req.body;
       const amountUsd = parseFloat(amount);
       if (isNaN(amountUsd) || amountUsd < 10) {
@@ -301,7 +344,7 @@ export function createWebServer() {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
 
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const project = await projectService.getProject(req.params.projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
       if (!project.botTokenEncrypted) { res.status(404).json({ error: "No token" }); return; }
@@ -318,7 +361,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const balance = await billingService.getUserBalance(user.id);
       res.json({ balance });
     } catch (err) {
@@ -333,7 +376,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       if (!user.isPartner) { res.json({ isPartner: false }); return; }
 
       const referrals = await prisma.user.findMany({
@@ -382,7 +425,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       if (!user.isPartner) { res.status(403).json({ error: "Not a partner" }); return; }
 
       const { amount } = req.body;
@@ -412,7 +455,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       if (!user.isPartner) { res.status(403).json({ error: "Not a partner" }); return; }
 
       const { amount, address } = req.body;
@@ -469,7 +512,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const project = await projectService.getProject(req.params.projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
@@ -489,7 +532,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const lang = (user.language as Lang) || "en";
       const project = await projectService.getProject(req.params.projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -524,6 +567,11 @@ export function createWebServer() {
         }
 
         res.json({ messageId: userMsg.id, status: "processing" });
+
+        void trackEvent(auth.telegramId!, "agent_started", {
+          project_id: projectId,
+          source: "chat_update",
+        });
 
         // Run agent in background
         (async () => {
@@ -934,7 +982,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const suggestLang = (user.language as Lang) || "en";
       const project = await projectService.getProject(req.params.projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -951,7 +999,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const planLang = (user.language as Lang) || "en";
       const projectId = req.params.projectId;
       const project = await projectService.getProject(projectId);
@@ -984,6 +1032,11 @@ export function createWebServer() {
         metadata: { costUsd: usage.costUsd, balance: usage.newBalance },
       });
 
+      void trackEvent(auth.telegramId!, "plan_created", {
+        project_id: projectId,
+        cost_usd: usage.costUsd,
+      });
+
       res.json({ plan: result.plan, costUsd: usage.costUsd, balance: usage.newBalance });
     } catch (err) {
       console.error("[Chat API] Plan generation error:", err);
@@ -995,7 +1048,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const buildLang = (user.language as Lang) || "en";
       const projectId = req.params.projectId;
       const project = await projectService.getProject(projectId);
@@ -1011,6 +1064,11 @@ export function createWebServer() {
       }
 
       res.json({ status: "building" });
+
+      void trackEvent(auth.telegramId!, "agent_started", {
+        project_id: projectId,
+        source: "approve_plan",
+      });
 
       (async () => {
         processingProjects.add(projectId);
@@ -1158,7 +1216,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const editPlanLang = (user.language as Lang) || "en";
       const projectId = req.params.projectId;
       const project = await projectService.getProject(projectId);
@@ -1200,7 +1258,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const project = await projectService.getProject(req.params.projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
@@ -1217,7 +1275,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1255,7 +1313,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const project = await projectService.getProject(req.params.projectId as string);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
@@ -1286,7 +1344,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1311,7 +1369,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1330,7 +1388,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1353,7 +1411,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1374,7 +1432,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1398,7 +1456,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1421,7 +1479,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1450,7 +1508,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1481,7 +1539,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1570,7 +1628,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1598,7 +1656,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1611,6 +1669,15 @@ export function createWebServer() {
       if (!feature) { res.status(400).json({ error: "Unknown feature" }); return; }
 
       const { newBalance } = await purchaseFeature(user.id, projectId, featureId);
+
+      void trackEvent(auth.telegramId!, "purchase", {
+        type: "feature",
+        feature_id: featureId,
+        feature_label: feature.label,
+        amount: feature.price,
+        project_id: projectId,
+      });
+
       res.json({ success: true, newBalance, featureId });
     } catch (err: any) {
       console.error("[MiniApp API] Feature purchase error:", err);
@@ -1622,7 +1689,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const user = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1699,6 +1766,173 @@ export function createWebServer() {
         })),
       });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/telegram-mini-app/api/admin/stats/sources", async (req, res) => {
+    if (!adminGuard(req, res)) return;
+    try {
+      // One pass: user-level aggregate (cheap on admin scale)
+      const userAgg = await prisma.$queryRawUnsafe<Array<{
+        id: number;
+        utm_source: string | null;
+        referred_by: bigint | null;
+        has_bot: boolean;
+        has_plan: boolean;
+        has_app: boolean;
+        revenue: any;
+      }>>(`
+        SELECT
+          u.id,
+          NULLIF(u.utm_source, '') AS utm_source,
+          u.referred_by,
+          EXISTS (
+            SELECT 1 FROM projects p
+            WHERE p.user_id = u.id AND p.bot_username IS NOT NULL
+          ) AS has_bot,
+          EXISTS (
+            SELECT 1 FROM projects p
+            WHERE p.user_id = u.id AND p.plan IS NOT NULL
+          ) AS has_plan,
+          EXISTS (
+            SELECT 1 FROM projects p
+            WHERE p.user_id = u.id AND p.status IN ('deployed', 'released')
+          ) AS has_app,
+          COALESCE((
+            SELECT SUM(pm.amount_usd) FROM payments pm
+            WHERE pm.user_id = u.id AND pm.status = 'confirmed'
+          ), 0) AS revenue
+        FROM users u
+      `);
+
+      type Metrics = {
+        users: number; createdBot: number; createdPlan: number; createdApp: number;
+        payingUsers: number; revenue: number;
+      };
+      const emptyMetrics = (): Metrics => ({
+        users: 0, createdBot: 0, createdPlan: 0, createdApp: 0, payingUsers: 0, revenue: 0,
+      });
+      const addUser = (m: Metrics, r: (typeof userAgg)[number]) => {
+        m.users++;
+        if (r.has_bot) m.createdBot++;
+        if (r.has_plan) m.createdPlan++;
+        if (r.has_app) m.createdApp++;
+        const rev = Number(r.revenue);
+        if (rev > 0) m.payingUsers++;
+        m.revenue += rev;
+      };
+      const finalizeMetrics = (m: Metrics) => ({
+        ...m,
+        conversion: m.users > 0 ? (m.payingUsers / m.users) * 100 : 0,
+        arpu: m.users > 0 ? m.revenue / m.users : 0,
+        arppu: m.payingUsers > 0 ? m.revenue / m.payingUsers : 0,
+      });
+
+      // --- Referrers / Partners: group users by their referrer's telegramId ---
+      const perReferrer = new Map<string, Metrics>();
+      // --- Sources: group users by utm_source ---
+      const perSource = new Map<string, Metrics>();
+      // --- Organic: no utm, no referral ---
+      const organicMetrics = emptyMetrics();
+      const allMetrics = emptyMetrics();
+
+      for (const r of userAgg) {
+        addUser(allMetrics, r);
+        if (r.referred_by) {
+          const key = String(r.referred_by);
+          let m = perReferrer.get(key);
+          if (!m) { m = emptyMetrics(); perReferrer.set(key, m); }
+          addUser(m, r);
+        }
+        if (r.utm_source) {
+          let m = perSource.get(r.utm_source);
+          if (!m) { m = emptyMetrics(); perSource.set(r.utm_source, m); }
+          addUser(m, r);
+        }
+        if (!r.referred_by && !r.utm_source) {
+          addUser(organicMetrics, r);
+        }
+      }
+
+      // Fetch referrer user info (to split into partner vs referrer + for display)
+      const referrerIds = Array.from(perReferrer.keys()).map(k => BigInt(k));
+      const referrerUsers = referrerIds.length > 0
+        ? await prisma.user.findMany({
+            where: { telegramId: { in: referrerIds } },
+            select: {
+              id: true, telegramId: true, username: true, firstName: true,
+              isPartner: true, partnerTag: true, partnerPercent: true,
+            },
+          })
+        : [];
+
+      const sources = Array.from(perSource.entries())
+        .map(([source, m]) => ({ source, ...finalizeMetrics(m) }))
+        .sort((a, b) => b.users - a.users);
+
+      const partners: any[] = [];
+      const referrers: any[] = [];
+      for (const user of referrerUsers) {
+        const key = String(user.telegramId);
+        const m = perReferrer.get(key);
+        if (!m) continue;
+        const base = {
+          telegramId: String(user.telegramId),
+          username: user.username,
+          firstName: user.firstName,
+          ...finalizeMetrics(m),
+        };
+        if (user.isPartner) {
+          partners.push({
+            ...base,
+            partnerTag: user.partnerTag,
+            partnerPercent: user.partnerPercent != null ? Number(user.partnerPercent) : null,
+          });
+        } else {
+          referrers.push(base);
+        }
+      }
+      partners.sort((a, b) => b.users - a.users);
+      referrers.sort((a, b) => b.users - a.users);
+
+      // Resolve avatars for partners + referrers via main bot token (cached)
+      const mainToken = config.botToken;
+      if (mainToken) {
+        const resolveAvatar = async (telegramId: string): Promise<string | null> => {
+          const cacheKey = `u:${telegramId}`;
+          if (avatarCache.has(cacheKey)) return avatarCache.get(cacheKey)!;
+          try {
+            const r = await fetch(`https://api.telegram.org/bot${mainToken}/getUserProfilePhotos?user_id=${telegramId}&limit=1`);
+            const d: any = await r.json();
+            if (!d.ok || !d.result?.photos?.length) return null;
+            const photo = d.result.photos[0];
+            const biggest = photo[photo.length - 1];
+            const fr = await fetch(`https://api.telegram.org/bot${mainToken}/getFile?file_id=${biggest.file_id}`);
+            const fd: any = await fr.json();
+            if (!fd.ok) return null;
+            const url = `https://api.telegram.org/file/bot${mainToken}/${fd.result.file_path}`;
+            avatarCache.set(cacheKey, url);
+            return url;
+          } catch { return null; }
+        };
+
+        await Promise.allSettled(
+          [...partners, ...referrers].map(async (p) => {
+            p.avatarUrl = await resolveAvatar(p.telegramId);
+          })
+        );
+      }
+
+      res.json({
+        all: { source: "All", ...finalizeMetrics(allMetrics) },
+        organic: { source: "Organic", ...finalizeMetrics(organicMetrics) },
+        sources,
+        partners,
+        referrers,
+      });
+    } catch (err: any) {
+      console.error("[Admin] Sources stats error:", err);
+      res.status(500).json({ error: err.message });
+    }
   });
 
   app.get("/telegram-mini-app/api/admin/users", async (req, res) => {
@@ -1922,6 +2156,17 @@ export function createWebServer() {
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
+  // Serve index.html with OpenPanel clientId injected as data attribute
+  app.get("/telegram-mini-app/", (req, res) => {
+    const indexPath = path.join(__dirname, "..", "..", "mini_app", "index.html");
+    let html = fs.readFileSync(indexPath, "utf8");
+    html = html.replace(
+      '<html class="">',
+      `<html class="" data-op-client-id="${config.openPanelClientId}">`
+    );
+    res.setHeader("Content-Type", "text/html");
+    res.send(html);
+  });
   app.use("/telegram-mini-app", express.static(path.join(__dirname, "..", "..", "mini_app")));
 
   app.use("/app", appRoutes);

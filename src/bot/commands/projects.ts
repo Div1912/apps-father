@@ -6,7 +6,7 @@ export async function projectsCommand(ctx: BotContext) {
   const from = ctx.from;
   if (!from) return;
 
-  const user = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
+  const { user } = await projectService.getOrCreateUser(from.id, from.username, from.first_name);
   const projects = await projectService.getProjectsByUser(user.id);
 
   if (projects.length === 0) {

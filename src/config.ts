@@ -17,6 +17,8 @@ export const config = {
   walletMnemonic: process.env.WALLET_MNEMONIC || "",
   toncenterApiKey: process.env.TONCENTER_API_KEY || "",
   withdrawGroupId: process.env.WITHDRAW_GROUP_ID || "-1003984965330",
+  openPanelClientId: process.env.OPENPANEL_CLIENT_ID || "",
+  openPanelClientSecret: process.env.OPENPANEL_CLIENT_SECRET || "",
 
   get baseUrl(): string {
     if (this.nodeEnv === "development") {

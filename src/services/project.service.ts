@@ -4,21 +4,25 @@ import { ProjectStatus } from "../types";
 import { notifyNewUser } from "./notify.service";
 
 export class ProjectService {
-  async getOrCreateUser(telegramId: number, username?: string, firstName?: string, referredBy?: number) {
+  async getOrCreateUser(telegramId: number, username?: string, firstName?: string, referredBy?: number, utmSource?: string | null) {
     const existing = await prisma.user.findUnique({ where: { telegramId: BigInt(telegramId) } });
+    const isNew = !existing;
     const createData: any = { telegramId: BigInt(telegramId), username, firstName, balance: 0.2 };
-    if (!existing && referredBy && referredBy !== telegramId) {
+    if (isNew && referredBy && referredBy !== telegramId) {
       createData.referredBy = BigInt(referredBy);
+    }
+    if (isNew && utmSource) {
+      createData.utmSource = utmSource;
     }
     const user = await prisma.user.upsert({
       where: { telegramId: BigInt(telegramId) },
       update: { username, firstName },
       create: createData,
     });
-    if (!existing) {
+    if (isNew) {
       notifyNewUser(telegramId, username, firstName, referredBy !== telegramId ? referredBy : undefined);
     }
-    return user;
+    return { user, isNew };
   }
 
   async createProject(userId: number, name: string) {

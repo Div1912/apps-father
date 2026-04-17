@@ -3,6 +3,47 @@
 const tg = window.Telegram?.WebApp;
 const API_BASE = '/telegram-mini-app/api';
 
+// ── Analytics (OpenPanel) ──────────────────────────────────────────────────
+
+function parseStartParam(param) {
+  if (!param) return { source: null, referrerId: null };
+  if (param.includes('|')) {
+    const [src, id] = param.split('|');
+    return { source: src || null, referrerId: /^\d+$/.test(id || '') ? id : null };
+  }
+  if (/^\d+$/.test(param)) return { source: null, referrerId: param };
+  return { source: param, referrerId: null };
+}
+
+function initAnalytics() {
+  const clientId = document.documentElement.dataset.opClientId;
+  if (!clientId || typeof window.op !== 'function') return;
+  window.op('init', { clientId, trackScreenViews: false });
+
+  const startParam = tg?.initDataUnsafe?.start_param || '';
+  const { source } = parseStartParam(startParam);
+  const user = tg?.initDataUnsafe?.user;
+  if (user) {
+    window.op('identify', {
+      profileId: String(user.id),
+      firstName: user.first_name,
+      lastName: user.last_name,
+      username: user.username,
+      avatar: user.photo_url,
+      properties: { ...(source ? { utm_source: source } : {}) },
+    });
+  }
+
+  // Report init to backend for server-side attribution on first visit
+  if (tg?.initData) {
+    fetch(`${API_BASE}/init`, {
+      method: 'POST',
+      headers: { ...{ 'X-Telegram-Init-Data': tg.initData }, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ startParam }),
+    }).catch(() => {});
+  }
+}
+
 let projects = [];
 let slots = { used: 0, total: 1 };
 let currentProject = null;
@@ -2936,6 +2977,7 @@ function openAdmin() {
   const rows = document.getElementById('adm-menu-rows');
   rows.innerHTML =
     menuRowAction('Dashboard', 'af-icon-dashboard', 'adm-open-dashboard') +
+    menuRowAction('Sources', 'af-icon-dashboard', 'adm-open-sources') +
     menuRowAction('Activities', 'af-icon-activities', 'adm-open-activities') +
     menuRowAction('Users', 'af-icon-users', 'adm-open-users') +
     menuRowAction('Apps', 'af-icon-apps', 'adm-open-apps') +
@@ -2943,6 +2985,7 @@ function openAdmin() {
     menuRowAction('Configuration', 'af-icon-config', 'adm-open-config') +
     `<a class="tm-row tm-row-link" id="adm-open-desktop"><span class="tm-icon af-icon-open"></span><span>Desktop Version</span></a>`;
   rows.querySelector('[data-action="adm-open-dashboard"]')?.addEventListener('click', openAdmDashboard);
+  rows.querySelector('[data-action="adm-open-sources"]')?.addEventListener('click', openAdmSources);
   rows.querySelector('[data-action="adm-open-activities"]')?.addEventListener('click', openAdmActivities);
   rows.querySelector('[data-action="adm-open-users"]')?.addEventListener('click', openAdmUsers);
   rows.querySelector('[data-action="adm-open-apps"]')?.addEventListener('click', openAdmApps);
@@ -2977,6 +3020,215 @@ async function openAdmDashboard() {
     </div>`;
     el.innerHTML = html;
   } catch (err) { el.innerHTML = `<div class="adm-empty">Failed to load: ${esc(err.message)}</div>`; }
+}
+
+function admFmtInt(n) {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K';
+  return String(n);
+}
+
+// Cache for Sources screen data + active tab
+let admSourcesData = null;
+let admSourcesTab = 'all'; // 'all' | 'sources' | 'partners' | 'referrers'
+
+// Build a uniform "block" object from any type (source/partner/referrer/organic/all)
+function admBuildBlock(item, kind) {
+  switch (kind) {
+    case 'all':
+      return { kind: 'all', title: 'All Users', ...item };
+    case 'organic':
+      return { kind: 'organic', title: 'Organic', ...item };
+    case 'source':
+      return { kind: 'source', title: item.source, ...item };
+    case 'partner': {
+      const name = item.firstName || item.username || `User ${item.telegramId}`;
+      return {
+        kind: 'partner',
+        title: name,
+        subtitle: item.partnerTag ? `@${item.partnerTag}` : (item.username ? `@${item.username}` : ''),
+        avatarUrl: item.avatarUrl || null,
+        partnerPercent: item.partnerPercent,
+        ...item,
+      };
+    }
+    case 'referrer': {
+      const name = item.firstName || item.username || `User ${item.telegramId}`;
+      return {
+        kind: 'referrer',
+        title: name,
+        subtitle: item.username ? `@${item.username}` : `ID ${item.telegramId}`,
+        avatarUrl: item.avatarUrl || null,
+        ...item,
+      };
+    }
+  }
+  return null;
+}
+
+const ADM_KIND_META = {
+  all:      { label: 'TOTAL',    cssClass: 'all' },
+  organic:  { label: 'ORGANIC',  cssClass: 'organic' },
+  source:   { label: 'SOURCE',   cssClass: 'source' },
+  partner:  { label: 'PARTNER',  cssClass: 'partner' },
+  referrer: { label: 'REFERRER', cssClass: 'referrer' },
+};
+
+function admAvatarBlock(b) {
+  if (b.avatarUrl) {
+    return `<div class="adm-src-avatar"><img src="${esc(b.avatarUrl)}" alt="" loading="lazy"></div>`;
+  }
+  const initial = (b.title || '?').trim().charAt(0).toUpperCase() || '?';
+  const hue = Math.abs(
+    Array.from(String(b.telegramId || b.title || '?'))
+      .reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 0)
+  ) % 360;
+  return `<div class="adm-src-avatar placeholder" style="background:hsl(${hue}, 55%, 35%);">${esc(initial)}</div>`;
+}
+
+function admSourceCard(block) {
+  const meta = ADM_KIND_META[block.kind] || ADM_KIND_META.source;
+  const conv = block.conversion.toFixed(1);
+  const arpu = block.arpu.toFixed(2);
+  const arppu = block.arppu.toFixed(2);
+  const funnelPct = (num) => block.users > 0 ? Math.round((num / block.users) * 100) : 0;
+  const hasPerson = block.kind === 'partner' || block.kind === 'referrer';
+
+  // Title label
+  let titleLabel = block.title;
+  if (block.kind === 'source' && block.title === '(direct)') titleLabel = 'Direct / Unknown';
+
+  const subtitle = block.subtitle
+    ? `<div class="adm-src-subtitle">${esc(block.subtitle)}</div>`
+    : '';
+
+  const partnerBadge = block.kind === 'partner' && block.partnerPercent != null
+    ? `<span class="adm-src-pct">${Number(block.partnerPercent).toFixed(0)}%</span>`
+    : '';
+
+  return `
+    <div class="adm-src-card ${meta.cssClass}">
+      <div class="adm-src-head">
+        ${hasPerson ? admAvatarBlock(block) : ''}
+        <div class="adm-src-head-main">
+          <div class="adm-src-type-row">
+            <span class="adm-src-pill ${meta.cssClass}">${meta.label}</span>
+            ${partnerBadge}
+          </div>
+          <div class="adm-src-title">${esc(titleLabel)}</div>
+          ${subtitle}
+        </div>
+        <div class="adm-src-users">
+          <div class="adm-src-users-num">${admFmtInt(block.users)}</div>
+          <div class="adm-src-users-lbl">users</div>
+        </div>
+      </div>
+
+      <div class="adm-src-funnel">
+        <div class="adm-funnel-row">
+          <div class="adm-funnel-label">Created Bot</div>
+          <div class="adm-funnel-bar"><div class="adm-funnel-fill bot" style="width:${funnelPct(block.createdBot)}%"></div></div>
+          <div class="adm-funnel-val">${block.createdBot} <span>·</span> ${funnelPct(block.createdBot)}%</div>
+        </div>
+        <div class="adm-funnel-row">
+          <div class="adm-funnel-label">Created Plan</div>
+          <div class="adm-funnel-bar"><div class="adm-funnel-fill plan" style="width:${funnelPct(block.createdPlan)}%"></div></div>
+          <div class="adm-funnel-val">${block.createdPlan} <span>·</span> ${funnelPct(block.createdPlan)}%</div>
+        </div>
+        <div class="adm-funnel-row">
+          <div class="adm-funnel-label">Created App</div>
+          <div class="adm-funnel-bar"><div class="adm-funnel-fill app" style="width:${funnelPct(block.createdApp)}%"></div></div>
+          <div class="adm-funnel-val">${block.createdApp} <span>·</span> ${funnelPct(block.createdApp)}%</div>
+        </div>
+        <div class="adm-funnel-row">
+          <div class="adm-funnel-label">Paying</div>
+          <div class="adm-funnel-bar"><div class="adm-funnel-fill pay" style="width:${funnelPct(block.payingUsers)}%"></div></div>
+          <div class="adm-funnel-val">${block.payingUsers} <span>·</span> ${funnelPct(block.payingUsers)}%</div>
+        </div>
+      </div>
+
+      <div class="adm-src-metrics">
+        <div class="adm-src-metric">
+          <div class="adm-src-metric-label">Conversion</div>
+          <div class="adm-src-metric-value blue">${conv}%</div>
+        </div>
+        <div class="adm-src-metric">
+          <div class="adm-src-metric-label">Revenue</div>
+          <div class="adm-src-metric-value green">$${block.revenue.toFixed(2)}</div>
+        </div>
+        <div class="adm-src-metric">
+          <div class="adm-src-metric-label">ARPU</div>
+          <div class="adm-src-metric-value">$${arpu}</div>
+        </div>
+        <div class="adm-src-metric">
+          <div class="adm-src-metric-label">ARPPU</div>
+          <div class="adm-src-metric-value yellow">$${arppu}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function admRenderSources() {
+  const el = document.getElementById('adm-sources-content');
+  if (!admSourcesData) { el.innerHTML = '<div class="loading-spinner"></div>'; return; }
+  const d = admSourcesData;
+
+  const tabs = [
+    { id: 'all',       label: 'All' },
+    { id: 'sources',   label: 'Sources',   count: d.sources.length },
+    { id: 'partners',  label: 'Partners',  count: d.partners.length },
+    { id: 'referrers', label: 'Referrers', count: d.referrers.length },
+  ];
+
+  const tabsHtml = `<div class="adm-tabs">${
+    tabs.map(t => {
+      const badge = t.count != null ? `<span class="adm-tab-count">${t.count}</span>` : '';
+      return `<button class="adm-tab ${t.id === admSourcesTab ? 'active' : ''}" data-tab="${t.id}">${t.label}${badge}</button>`;
+    }).join('')
+  }</div>`;
+
+  let blocks = [];
+  if (admSourcesTab === 'all') {
+    blocks.push(admBuildBlock(d.all, 'all'));
+    if (d.organic.users > 0) blocks.push(admBuildBlock(d.organic, 'organic'));
+    for (const s of d.sources)   blocks.push(admBuildBlock(s, 'source'));
+    for (const p of d.partners)  blocks.push(admBuildBlock(p, 'partner'));
+    for (const r of d.referrers) blocks.push(admBuildBlock(r, 'referrer'));
+  } else if (admSourcesTab === 'sources') {
+    blocks = d.sources.map(s => admBuildBlock(s, 'source'));
+  } else if (admSourcesTab === 'partners') {
+    blocks = d.partners.map(p => admBuildBlock(p, 'partner'));
+  } else if (admSourcesTab === 'referrers') {
+    blocks = d.referrers.map(r => admBuildBlock(r, 'referrer'));
+  }
+
+  const body = blocks.length
+    ? blocks.map(admSourceCard).join('')
+    : `<div class="adm-empty">No data for this tab yet</div>`;
+
+  el.innerHTML = tabsHtml + body;
+
+  el.querySelectorAll('.adm-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      admSourcesTab = btn.dataset.tab;
+      admRenderSources();
+    });
+  });
+}
+
+async function openAdmSources() {
+  admLastSubpage = 'adm-sources';
+  showView('adm-sources');
+  const el = document.getElementById('adm-sources-content');
+  admSourcesData = null;
+  el.innerHTML = '<div class="loading-spinner"></div>';
+  try {
+    admSourcesData = await admApi('/stats/sources');
+    admRenderSources();
+  } catch (err) {
+    el.innerHTML = `<div class="adm-empty">Failed to load: ${esc(err.message)}</div>`;
+  }
 }
 
 async function openAdmActivities() {
@@ -3362,6 +3614,7 @@ function showView(view) {
   document.getElementById('view-release-notes').classList.toggle('hidden', view !== 'release-notes');
   document.getElementById('view-admin').classList.toggle('hidden', view !== 'admin');
   document.getElementById('view-adm-dashboard').classList.toggle('hidden', view !== 'adm-dashboard');
+  document.getElementById('view-adm-sources').classList.toggle('hidden', view !== 'adm-sources');
   document.getElementById('view-adm-activities').classList.toggle('hidden', view !== 'adm-activities');
   document.getElementById('view-adm-users').classList.toggle('hidden', view !== 'adm-users');
   document.getElementById('view-adm-apps').classList.toggle('hidden', view !== 'adm-apps');
@@ -3761,7 +4014,7 @@ function init() {
         showView('list');
       } else if (currentView === 'admin-user') {
         openAdmUsers();
-      } else if (currentView === 'adm-dashboard' || currentView === 'adm-activities' || currentView === 'adm-users' || currentView === 'adm-apps' || currentView === 'adm-vouchers' || currentView === 'adm-config') {
+      } else if (currentView === 'adm-dashboard' || currentView === 'adm-sources' || currentView === 'adm-activities' || currentView === 'adm-users' || currentView === 'adm-apps' || currentView === 'adm-vouchers' || currentView === 'adm-config') {
         openAdmin();
       } else if (currentView === 'admin') {
         showView('list');
@@ -3861,6 +4114,7 @@ function init() {
   initTopupEvents();
   loadBalance();
   loadProjects();
+  initAnalytics();
 }
 
 init();
