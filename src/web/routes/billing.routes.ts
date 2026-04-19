@@ -108,9 +108,10 @@ router.post("/cryptobot", async (req: Request, res: Response) => {
           }),
         });
 
-        notifyDeposit(Number(user.telegramId), user.username ?? undefined, Number(payment.amountUsd), newBalance);
+        notifyDeposit(Number(user.telegramId), user.username ?? undefined, Number(payment.amountUsd), newBalance, "cryptobot");
         void trackEvent(Number(user.telegramId), "payment", { amount: Number(payment.amountUsd), method: "cryptobot" });
 
+        await billingService.creditFirstDepositBonus(user.id, paymentId);
         await billingService.creditReferralBonus(user, Number(payment.amountUsd));
       }
     } catch (notifyErr) {

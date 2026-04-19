@@ -6,6 +6,7 @@ import { botRunnerService } from "./services/bot-runner.service";
 import { webhookCallback } from "grammy";
 import { processingProjects } from "./bot/processing";
 import { commitService } from "./services/commit.service";
+import { startRetentionScheduler } from "./services/retention.service";
 
 async function recoverStuckProjects() {
   const stuck = await prisma.project.findMany({ where: { status: "building" } });
@@ -55,6 +56,8 @@ async function main() {
       },
     });
   }
+
+  startRetentionScheduler();
 
   console.log("\n✅ Apps Father is running!");
   console.log(`   Domain: ${config.domain}`);

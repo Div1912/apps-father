@@ -15,33 +15,104 @@ function parseStartParam(param) {
   return { source: param, referrerId: null };
 }
 
+// Resolve the start parameter from EVERY surface Telegram exposes it on:
+//   1. tg.initDataUnsafe.start_param  — set when launched via deep link
+//      (t.me/<bot>/<app>?startapp=xxx or tg://resolve?...&startapp=xxx)
+//   2. window.location.search.startapp — set when launched via web_app
+//      inline button whose URL carries ?startapp=xxx (e.g. the bot welcome
+//      card "Create app" button). In that case Telegram does NOT populate
+//      initDataUnsafe.start_param, so without this fallback we'd lose 100%
+//      of attribution for users who arrive via the bot welcome flow.
+// Sanitization matches Telegram's own startapp constraint: A-Z, a-z, 0-9,
+// underscore, hyphen, max 64 chars. Anything else is dropped on the floor
+// to avoid storing garbage that would never round-trip back through TG.
+function getStartParam() {
+  let raw = '';
+  try { raw = tg?.initDataUnsafe?.start_param || ''; } catch (_) {}
+  if (!raw) {
+    try {
+      raw = new URLSearchParams(window.location.search).get('startapp') || '';
+    } catch (_) {}
+  }
+  // Android fallback: on some Telegram Android launch paths (inline
+  // web_app button, deep link via custom tabs, after a task switch),
+  // tg.initDataUnsafe.start_param is empty even when the SDK was given
+  // the parameter. The raw value still lives in window.location.hash as
+  // tgWebAppStartParam=xxx — that's literally where the SDK reads it from.
+  // iOS doesn't need this; Android does. This is the missing piece behind
+  // the "Android shows Direct, iOS shows the source" pattern.
+  if (!raw) {
+    try {
+      const hash = (window.location.hash || '').replace(/^#/, '');
+      const hp = new URLSearchParams(hash);
+      raw = hp.get('tgWebAppStartParam') || '';
+    } catch (_) {}
+  }
+  // Also probe the SDK's signed initData string directly — on Android it's
+  // sometimes already populated in initData (URL-encoded form fields)
+  // before initDataUnsafe.start_param has been parsed out of it.
+  if (!raw) {
+    try {
+      const initStr = tg?.initData || '';
+      if (initStr) {
+        const sp = new URLSearchParams(initStr);
+        raw = sp.get('start_param') || '';
+      }
+    } catch (_) {}
+  }
+  raw = (raw || '').trim();
+  // Persist across reloads AND sessions. localStorage survives WebView
+  // close/reopen (sessionStorage does not), which matters for users who
+  // arrive from an ad and then reopen the Mini App later. Cache lookup
+  // runs only when neither live source had a value.
+  if (!raw) {
+    try { raw = localStorage.getItem('af_start_param') || ''; } catch (_) {}
+    if (!raw) {
+      try { raw = sessionStorage.getItem('af_start_param') || ''; } catch (_) {}
+    }
+  }
+  if (!raw) return '';
+  try { sessionStorage.setItem('af_start_param', raw); } catch (_) {}
+  try { localStorage.setItem('af_start_param', raw); } catch (_) {}
+  return raw.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
+}
+
 function initAnalytics() {
   const clientId = document.documentElement.dataset.opClientId;
-  if (!clientId || typeof window.op !== 'function') return;
-  window.op('init', { clientId, trackScreenViews: false });
+  if (clientId && typeof window.op === 'function') {
+    window.op('init', { clientId, trackScreenViews: false });
 
-  const startParam = tg?.initDataUnsafe?.start_param || '';
-  const { source } = parseStartParam(startParam);
-  const user = tg?.initDataUnsafe?.user;
-  if (user) {
-    window.op('identify', {
-      profileId: String(user.id),
-      firstName: user.first_name,
-      lastName: user.last_name,
-      username: user.username,
-      avatar: user.photo_url,
-      properties: { ...(source ? { utm_source: source } : {}) },
-    });
+    const startParam = getStartParam();
+    const { source } = parseStartParam(startParam);
+    const user = tg?.initDataUnsafe?.user;
+    if (user) {
+      window.op('identify', {
+        profileId: String(user.id),
+        firstName: user.first_name,
+        lastName: user.last_name,
+        username: user.username,
+        avatar: user.photo_url,
+        properties: { ...(source ? { utm_source: source } : {}) },
+      });
+    }
   }
+}
 
-  // Report init to backend for server-side attribution on first visit
-  if (tg?.initData) {
-    fetch(`${API_BASE}/init`, {
+// /api/init MUST run before /api/projects, /api/balance, etc., so it wins
+// the user-creation race on the backend and the start_param attribution
+// (referrer / partner-tag / utm_source) actually gets persisted to the
+// brand-new user record. We resolve as soon as the request completes
+// (success or failure) so the rest of the boot sequence is never blocked.
+async function reportInit() {
+  if (!tg?.initData) return;
+  const startParam = getStartParam();
+  try {
+    await fetch(`${API_BASE}/init`, {
       method: 'POST',
-      headers: { ...{ 'X-Telegram-Init-Data': tg.initData }, 'Content-Type': 'application/json' },
+      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ startParam }),
-    }).catch(() => {});
-  }
+    });
+  } catch {}
 }
 
 let projects = [];
@@ -189,6 +260,15 @@ function hasFeature(project, feature) {
 function apiHeaders() {
   const h = {};
   if (tg?.initData) h['X-Telegram-Init-Data'] = tg.initData;
+  // Attach the start_param to EVERY API request so the backend can attribute
+  // the user atomically on the very first call that creates the row, not
+  // only on /api/init. Without this, any other endpoint (loadProjects,
+  // checkAdmin, loadBalance, ...) that races ahead creates the user as
+  // Direct and the source-backfill arrives too late for the admin notify.
+  try {
+    const sp = getStartParam();
+    if (sp) h['X-Apps-Father-Start-Param'] = sp;
+  } catch (_) {}
   return h;
 }
 
@@ -466,10 +546,24 @@ let topupMethod = 'ton';
 let topupAnimInstance = null;
 let topupReturnView = null;
 let userBalance = 0;
+let userPaymentCount = 0;
+let firstDepositBonusEligible = false;
+const FIRST_DEPOSIT_BONUS_USD = 10;
+const ESTIMATED_APP_COST_USD = 3;
 let tonConnectUI = null;
 let tonVerifyTimeout = null;
 let tonVerifyAttempts = 0;
-const TON_MAX_VERIFY = 90;
+let tonVerifyingPaymentId = null;
+const TON_MAX_VERIFY = 30; // 30 attempts * 10s = 5 minutes
+const TON_VERIFY_INTERVAL = 10000;
+let starsVerifyTimeout = null;
+let starsVerifyAttempts = 0;
+let starsVerifyingPaymentId = null;
+const STARS_MAX_VERIFY = 36; // 36 * 5s = 3 minutes
+const STARS_VERIFY_INTERVAL = 5000;
+// "Other Crypto" (NowPayments) charges high fees on small invoices, so we
+// only allow it when the amount is at least this much.
+const OTHER_CRYPTO_MIN_USD = 15;
 
 function openTopup(returnTo) {
   topupReturnView = returnTo || currentView || 'list';
@@ -484,10 +578,77 @@ function openTopup(returnTo) {
     m.classList.toggle('active', m.dataset.method === topupMethod);
   });
 
+  updateOtherCryptoLock();
   updateTonWalletPanel();
   loadTopupBalance();
   loadTopupTgs();
   showView('topup');
+}
+
+function updateOtherCryptoLock() {
+  const row = document.querySelector('.topup-method[data-method="crypto"]');
+  if (!row) return;
+  const locked = (Number(topupAmount) || 0) < OTHER_CRYPTO_MIN_USD;
+  row.classList.toggle('locked', locked);
+  let hint = row.querySelector('.topup-method-lock');
+  if (locked) {
+    if (!hint) {
+      hint = document.createElement('span');
+      hint.className = 'topup-method-lock';
+      row.appendChild(hint);
+    }
+    hint.textContent = `🔒 ≥ $${OTHER_CRYPTO_MIN_USD}`;
+  } else if (hint) {
+    hint.remove();
+  }
+  // If user is currently on the "crypto" method but amount dropped below
+  // threshold, fall back to TON to avoid a confusing payment failure.
+  if (locked && topupMethod === 'crypto') {
+    topupMethod = 'ton';
+    document.querySelectorAll('.topup-method').forEach(m => {
+      m.classList.toggle('active', m.dataset.method === 'ton');
+    });
+    updateTonWalletPanel();
+  }
+}
+
+function renderBalanceErrorCard(balance) {
+  const eligible = firstDepositBonusEligible;
+  const ctaText = eligible
+    ? (t('chat_topup_cta_bonus') || `Top Up & Claim $${FIRST_DEPOSIT_BONUS_USD} Bonus`)
+    : (t('chat_topup_cta') || t('chat_topup_btn') || 'Top Up Balance');
+
+  const bonusChip = eligible
+    ? `<div class="balance-bonus-chip">
+         <span class="balance-bonus-chip-icon">🎁</span>
+         <span>${esc(t('chat_first_deposit_chip') || `Get +$${FIRST_DEPOSIT_BONUS_USD} FREE on your first deposit`)}</span>
+       </div>`
+    : '';
+
+  return `
+    <div class="balance-cta-header">
+      <div class="balance-cta-icon">🚀</div>
+      <div class="balance-cta-headtext">
+        <div class="balance-cta-title">${esc(t('chat_almost_there_title') || 'Almost there!')}</div>
+        <div class="balance-cta-sub">${esc(t('chat_almost_there_sub') || 'Your app is just one step away')}</div>
+      </div>
+    </div>
+    <div class="balance-cta-stats">
+      <div class="balance-cta-stat">
+        <div class="balance-cta-stat-label">${esc(t('chat_estimated_cost') || 'Estimated cost')}</div>
+        <div class="balance-cta-stat-value">~$${ESTIMATED_APP_COST_USD.toFixed(2)}</div>
+      </div>
+      <div class="balance-cta-stat">
+        <div class="balance-cta-stat-label">${esc(t('chat_your_balance') || 'Your balance')}</div>
+        <div class="balance-cta-stat-value low">$${Number(balance).toFixed(2)}</div>
+      </div>
+    </div>
+    ${bonusChip}
+    <button class="balance-cta-btn ${eligible ? 'with-bonus' : ''}">
+      <span>${esc(ctaText)}</span>
+      <span class="balance-cta-arrow">→</span>
+    </button>
+  `;
 }
 
 async function loadTopupBalance() {
@@ -496,9 +657,24 @@ async function loadTopupBalance() {
     if (res.ok) {
       const data = await res.json();
       userBalance = data.balance;
+      userPaymentCount = data.paymentCount ?? 0;
+      firstDepositBonusEligible = !!data.firstDepositBonusEligible;
       document.getElementById('topup-balance-text').textContent = `Current balance: $${Number(data.balance).toFixed(2)}`;
       const balEl = document.getElementById('balance-amount');
       if (balEl) balEl.textContent = `$${Number(data.balance).toFixed(2)}`;
+
+      // First-deposit bonus banner on the Top-Up page
+      const bonusSection = document.getElementById('topup-bonus-section');
+      const bonusBanner = document.getElementById('topup-bonus-banner');
+      if (bonusSection && bonusBanner) {
+        if (firstDepositBonusEligible) {
+          bonusBanner.querySelector('.topup-bonus-title').textContent = t('topup_first_bonus_title') || `Get +$${FIRST_DEPOSIT_BONUS_USD} FREE on your first deposit`;
+          bonusBanner.querySelector('.topup-bonus-sub').textContent = t('topup_first_bonus_sub') || 'Auto-credited the moment your first payment is confirmed';
+          bonusSection.style.display = '';
+        } else {
+          bonusSection.style.display = 'none';
+        }
+      }
     }
   } catch {}
 }
@@ -534,7 +710,7 @@ function updateTopupButton() {
 async function submitTopup() {
   const inputVal = parseInt(document.getElementById('topup-input').value);
   const amount = isNaN(inputVal) ? topupAmount : inputVal;
-  if (amount < 10) {
+  if (amount < 2) {
     showToast(t('toast_topup_min'), 'error');
     return;
   }
@@ -559,7 +735,35 @@ async function submitTopup() {
     }
 
     if (topupMethod === 'stars') {
-      tg?.openInvoice(data.invoiceUrl);
+      // Always start the polling fallback BEFORE opening the invoice, so
+      // even if Telegram never fires the close callback (e.g. the user
+      // backgrounds the app) we still detect the confirmed payment.
+      const paymentId = data.paymentId;
+      if (paymentId) startStarsVerifying(paymentId);
+
+      try {
+        tg?.openInvoice(data.invoiceUrl, (status) => {
+          console.log('[Stars] Invoice closed with status:', status);
+          if (status === 'paid') {
+            showToast('Payment received, confirming...', 'info');
+            // Trigger an immediate verification check
+            if (paymentId) {
+              setTimeout(() => {
+                stopStarsVerifying();
+                startStarsVerifying(paymentId);
+              }, 500);
+            }
+            // Optimistic balance refresh
+            setTimeout(() => loadTopupBalance(), 1500);
+          } else if (status === 'cancelled' || status === 'failed') {
+            stopStarsVerifying();
+          }
+        });
+      } catch (e) {
+        console.error('openInvoice error:', e);
+        // openInvoice may throw without a callback param on older clients
+        try { tg?.openInvoice(data.invoiceUrl); } catch {}
+      }
     } else {
       if (data.invoiceUrl.includes('t.me/')) {
         tg?.openTelegramLink(data.invoiceUrl);
@@ -630,9 +834,17 @@ async function encodeTextComment(text) {
 }
 
 async function handleTonPayment(data) {
+  const { paymentId, walletAddress, amountNano } = data;
+
+  // Start verification polling IMMEDIATELY when invoice is created.
+  // The wallet flow (TonConnect) is unreliable: connect callback may never fire,
+  // user may pay from a separate wallet app, or sendTransaction promise may hang.
+  // On-chain polling is the source of truth.
+  startTonVerifying(paymentId);
+
   initTonConnect();
   if (!tonConnectUI) {
-    showToast('TON Connect not available', 'error');
+    showToast('Pay to the wallet shown in your TON app — auto-verifying for 5 min', 'info');
     return;
   }
 
@@ -648,12 +860,10 @@ async function handleTonPayment(data) {
         });
       });
     } catch {
-      showToast('Wallet connection cancelled', 'info');
+      showToast('Auto-verifying any TON payment for this invoice (5 min)...', 'info');
       return;
     }
   }
-
-  const { paymentId, walletAddress, amountNano } = data;
 
   try {
     const payload = await encodeTextComment(String(paymentId));
@@ -670,18 +880,22 @@ async function handleTonPayment(data) {
     showToast('Confirm in your TON wallet...', 'info');
     await tonConnectUI.sendTransaction(transaction);
     showToast('Transaction sent! Verifying...', 'success');
-    startTonVerifying(paymentId);
   } catch (err) {
     console.error('TON transaction error:', err);
-    showToast('Transaction cancelled or failed', 'error');
+    // Polling is already running — keep it. User may have paid via another wallet.
+    showToast('If you already paid, balance will update automatically (5 min)', 'info');
   }
 }
 
 function startTonVerifying(paymentId) {
+  // Don't start a duplicate poller for the same paymentId
+  if (tonVerifyingPaymentId === paymentId && tonVerifyTimeout) return;
   stopTonVerifying();
+  tonVerifyingPaymentId = paymentId;
   tonVerifyAttempts = 0;
   tg?.MainButton?.setText('Verifying payment...');
   tg?.MainButton?.showProgress();
+  console.log(`[TON] Started verifying payment ${paymentId}, every ${TON_VERIFY_INTERVAL/1000}s for ${TON_MAX_VERIFY * TON_VERIFY_INTERVAL / 60000}min`);
 
   async function poll() {
     tonVerifyAttempts++;
@@ -714,12 +928,11 @@ function startTonVerifying(paymentId) {
       return;
     }
 
-    // First 20 attempts every 3s, then every 5s for slower blockchain confirmations
-    const delay = tonVerifyAttempts <= 20 ? 3000 : 5000;
-    tonVerifyTimeout = setTimeout(poll, delay);
+    tonVerifyTimeout = setTimeout(poll, TON_VERIFY_INTERVAL);
   }
 
-  tonVerifyTimeout = setTimeout(poll, 3000);
+  // Quick first check after 5s, then steady 10s cadence
+  tonVerifyTimeout = setTimeout(poll, 5000);
 }
 
 function stopTonVerifying() {
@@ -727,6 +940,52 @@ function stopTonVerifying() {
     clearTimeout(tonVerifyTimeout);
     tonVerifyTimeout = null;
   }
+  tonVerifyingPaymentId = null;
+}
+
+// Poll generic payment status (used as fallback for Stars when the bot
+// webhook misses or is delayed).
+function startStarsVerifying(paymentId) {
+  if (starsVerifyingPaymentId === paymentId && starsVerifyTimeout) return;
+  stopStarsVerifying();
+  starsVerifyingPaymentId = paymentId;
+  starsVerifyAttempts = 0;
+  console.log(`[Stars] Started verifying payment ${paymentId}, every ${STARS_VERIFY_INTERVAL/1000}s for ${STARS_MAX_VERIFY * STARS_VERIFY_INTERVAL / 60000}min`);
+
+  async function poll() {
+    starsVerifyAttempts++;
+    try {
+      const res = await fetch(`${API_BASE}/payment-status?paymentId=${paymentId}`, {
+        headers: { ...apiHeaders() },
+      });
+      const result = await res.json();
+      if (result.status === 'confirmed') {
+        stopStarsVerifying();
+        showToast('Payment confirmed! Balance updated.', 'success');
+        tg?.HapticFeedback?.notificationOccurred('success');
+        loadTopupBalance();
+        return;
+      }
+    } catch (e) {
+      console.error('Stars verify poll error:', e);
+    }
+
+    if (starsVerifyAttempts >= STARS_MAX_VERIFY) {
+      stopStarsVerifying();
+      return;
+    }
+    starsVerifyTimeout = setTimeout(poll, STARS_VERIFY_INTERVAL);
+  }
+
+  starsVerifyTimeout = setTimeout(poll, 3000);
+}
+
+function stopStarsVerifying() {
+  if (starsVerifyTimeout) {
+    clearTimeout(starsVerifyTimeout);
+    starsVerifyTimeout = null;
+  }
+  starsVerifyingPaymentId = null;
 }
 
 function initTopupEvents() {
@@ -737,6 +996,7 @@ function initTopupEvents() {
       topupAmount = parseInt(btn.dataset.amount);
       topupInput.value = topupAmount;
       document.querySelectorAll('.topup-amount-btn').forEach(b => b.classList.toggle('active', b === btn));
+      updateOtherCryptoLock();
       updateTopupButton();
     });
   });
@@ -747,11 +1007,16 @@ function initTopupEvents() {
     document.querySelectorAll('.topup-amount-btn').forEach(b => {
       b.classList.toggle('active', parseInt(b.dataset.amount) === topupAmount);
     });
+    updateOtherCryptoLock();
     updateTopupButton();
   });
 
   document.querySelectorAll('.topup-method').forEach(row => {
     row.addEventListener('click', () => {
+      if (row.classList.contains('locked')) {
+        showToast(t('topup_other_crypto_locked') || `Other Crypto requires at least $${OTHER_CRYPTO_MIN_USD}`, 'info');
+        return;
+      }
       topupMethod = row.dataset.method;
       document.querySelectorAll('.topup-method').forEach(m => m.classList.toggle('active', m === row));
       updateTopupButton();
@@ -1175,18 +1440,30 @@ function appendMessage(msg, animate = true) {
     el.innerHTML = html;
   } else if (msg.type === 'balance_error') {
     el.className = 'chat-bubble chat-bubble--balance-error';
-    const bal = msg.metadata?.balance ?? 0;
-    el.innerHTML = `
-      <div class="balance-error-icon">💳</div>
-      <div class="balance-error-title">${t('chat_insufficient')}</div>
-      <div class="balance-error-desc">$${Number(bal).toFixed(2)}</div>
-      <button class="balance-error-btn" onclick="openTopup()">${t('chat_topup_btn')}</button>`;
+    const bal = Number(msg.metadata?.balance ?? userBalance ?? 0);
+    el.innerHTML = renderBalanceErrorCard(bal);
+    el.querySelector('.balance-cta-btn')?.addEventListener('click', () => openTopup('chat'));
     if (isProcessing) {
       setProcessing(false);
       setInputDisabled(false);
       setTyping(false);
       setHeaderWorking(false);
     }
+    // Refresh eligibility flag in the background so the CTA reflects latest state
+    fetch(`${API_BASE}/balance`, { headers: apiHeaders() })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d) return;
+        userBalance = d.balance;
+        userPaymentCount = d.paymentCount ?? 0;
+        firstDepositBonusEligible = !!d.firstDepositBonusEligible;
+        const fresh = el.parentElement?.querySelector(`#${el.id}`);
+        if (fresh) {
+          fresh.innerHTML = renderBalanceErrorCard(Number(d.balance));
+          fresh.querySelector('.balance-cta-btn')?.addEventListener('click', () => openTopup('chat'));
+        }
+      })
+      .catch(() => {});
   } else if (msg.content === 'preparing_next_update' || msg.metadata?.preparing) {
     setInputFinalizing(true);
     return;
@@ -2157,7 +2434,7 @@ async function saveEditInfo() {
 
     const res = await fetch(`${API_BASE}/bot-info/${currentProject.id}`, {
       method: 'POST',
-      headers: { 'X-Telegram-Init-Data': tg?.initData || '' },
+      headers: apiHeaders(),
       body: formData,
     });
     const data = await res.json();
@@ -2285,7 +2562,9 @@ let referralAnimInstance = null;
 
 function openReferral() {
   const userId = tg?.initDataUnsafe?.user?.id || '';
-  const refLink = `https://t.me/apps_father_bot?start=${userId}`;
+  // Direct Mini App deep link — opens the app right away with the referrer
+  // ID in `start_param`, which is processed by /api/init for attribution.
+  const refLink = `https://t.me/apps_father_bot/app?startapp=${userId}`;
 
   const container = document.getElementById('referral-anim');
   container.innerHTML = '';
@@ -2811,8 +3090,8 @@ async function openFeatures(projectId) {
         const featureId = row.dataset.feature;
         const price = row.dataset.price;
         const label = row.dataset.label;
-        tg?.showConfirm(`Unlock "${label}" for $${price}?`, async (ok) => {
-          if (!ok) return;
+        const msg = `Unlock "${label}" for $${price}?`;
+        const doBuy = async () => {
           try {
             const r = await fetch(`${API_BASE}/features/${projectId}/buy`, {
               method: 'POST',
@@ -2834,7 +3113,12 @@ async function openFeatures(projectId) {
             console.error('Purchase error:', err);
             showToast(err.message || 'Failed to purchase.', 'error');
           }
-        });
+        };
+        if (tg?.showConfirm) {
+          tg.showConfirm(msg, (ok) => { if (ok) doBuy(); });
+        } else if (confirm(msg)) {
+          doBuy();
+        }
       });
     });
 
@@ -2850,8 +3134,8 @@ async function openFeatures(projectId) {
 const QUALITY_TIERS = [
   { tier: 1, name: 'Good (Sonnet)', model: 'Sonnet 4.6, 60 iterations', desc: 'Regular pricing' },
   { tier: 2, name: 'Better (Sonnet+)', model: 'Sonnet 4.6+, 100 iterations', desc: '+~50% pricing' },
-  { tier: 3, name: 'Best (Opus)', model: 'Opus 4.6, 60 iterations', desc: '+~75% pricing' },
-  { tier: 4, name: 'The Best (Opus+)', model: 'Opus 4.6+, 100 iterations', desc: '+~100% pricing' },
+  { tier: 3, name: 'Best (Opus)', model: 'Opus 4.7, 60 iterations', desc: '+~75% pricing' },
+  { tier: 4, name: 'The Best (Opus+)', model: 'Opus 4.7+, 100 iterations', desc: '+~100% pricing' },
 ];
 
 function openQuality(projectId) {
@@ -3031,6 +3315,56 @@ function admFmtInt(n) {
 // Cache for Sources screen data + active tab
 let admSourcesData = null;
 let admSourcesTab = 'all'; // 'all' | 'sources' | 'partners' | 'referrers'
+let admSourcesRange = { preset: 'all', from: null, to: null }; // preset: 'today' | 'week' | 'all' | 'custom'
+
+function admIsoStartOfToday() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
+}
+
+function admIsoStartDaysAgo(days) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - days);
+  return d.toISOString();
+}
+
+function admIsoEndOfToday() {
+  const d = new Date();
+  d.setHours(23, 59, 59, 999);
+  return d.toISOString();
+}
+
+function admPresetToRange(preset) {
+  switch (preset) {
+    case 'today': return { preset, from: admIsoStartOfToday(),    to: admIsoEndOfToday() };
+    case 'week':  return { preset, from: admIsoStartDaysAgo(6),   to: admIsoEndOfToday() };
+    case 'all':   return { preset, from: null,                    to: null };
+    default:      return { preset: 'all', from: null, to: null };
+  }
+}
+
+// Convert an ISO string into the value expected by <input type="date"> (YYYY-MM-DD)
+function admIsoToDateInput(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+// Convert a YYYY-MM-DD value into ISO timestamps for the start of that
+// local day (for `from`) or the very end of the day (for `to`).
+function admDateInputToIso(value, edge) {
+  if (!value) return null;
+  const [y, m, d] = value.split('-').map(Number);
+  if (!y || !m || !d) return null;
+  const dt = new Date(y, m - 1, d, edge === 'end' ? 23 : 0, edge === 'end' ? 59 : 0, edge === 'end' ? 59 : 0, edge === 'end' ? 999 : 0);
+  return dt.toISOString();
+}
 
 // Build a uniform "block" object from any type (source/partner/referrer/organic/all)
 function admBuildBlock(item, kind) {
@@ -3205,9 +3539,11 @@ function admRenderSources() {
 
   const body = blocks.length
     ? blocks.map(admSourceCard).join('')
-    : `<div class="adm-empty">No data for this tab yet</div>`;
+    : `<div class="adm-empty">No users registered in this date range</div>`;
 
-  el.innerHTML = tabsHtml + body;
+  el.innerHTML = admSourcesControlsHtml() + tabsHtml + body;
+
+  admWireSourcesControls();
 
   el.querySelectorAll('.adm-tab').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -3220,14 +3556,75 @@ function admRenderSources() {
 async function openAdmSources() {
   admLastSubpage = 'adm-sources';
   showView('adm-sources');
+  await admReloadSources();
+}
+
+async function admReloadSources() {
   const el = document.getElementById('adm-sources-content');
   admSourcesData = null;
-  el.innerHTML = '<div class="loading-spinner"></div>';
+  el.innerHTML = admSourcesControlsHtml() + '<div class="loading-spinner"></div>';
+  admWireSourcesControls();
   try {
-    admSourcesData = await admApi('/stats/sources');
+    const params = new URLSearchParams();
+    if (admSourcesRange.from) params.set('from', admSourcesRange.from);
+    if (admSourcesRange.to)   params.set('to',   admSourcesRange.to);
+    const qs = params.toString();
+    admSourcesData = await admApi('/stats/sources' + (qs ? `?${qs}` : ''));
     admRenderSources();
   } catch (err) {
-    el.innerHTML = `<div class="adm-empty">Failed to load: ${esc(err.message)}</div>`;
+    el.innerHTML = admSourcesControlsHtml() + `<div class="adm-empty">Failed to load: ${esc(err.message)}</div>`;
+    admWireSourcesControls();
+  }
+}
+
+function admSourcesControlsHtml() {
+  const r = admSourcesRange;
+  const presets = [
+    { id: 'today', label: 'Today' },
+    { id: 'week',  label: 'Week' },
+    { id: 'all',   label: 'All Time' },
+  ];
+  const presetBtns = presets.map(p =>
+    `<button class="adm-range-btn ${r.preset === p.id ? 'active' : ''}" data-range-preset="${p.id}">${p.label}</button>`
+  ).join('');
+
+  const fromVal = admIsoToDateInput(r.from);
+  const toVal   = admIsoToDateInput(r.to);
+
+  return `
+    <div class="adm-range">
+      <div class="adm-range-presets">${presetBtns}</div>
+      <div class="adm-range-custom">
+        <input type="date" id="adm-range-from" value="${fromVal}" aria-label="From date">
+        <span class="adm-range-sep">→</span>
+        <input type="date" id="adm-range-to"   value="${toVal}"   aria-label="To date">
+        <button class="adm-range-apply" id="adm-range-apply">Apply</button>
+      </div>
+    </div>
+  `;
+}
+
+function admWireSourcesControls() {
+  const root = document.getElementById('adm-sources-content');
+  if (!root) return;
+
+  root.querySelectorAll('[data-range-preset]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      admSourcesRange = admPresetToRange(btn.dataset.rangePreset);
+      admReloadSources();
+    });
+  });
+
+  const apply = root.querySelector('#adm-range-apply');
+  if (apply) {
+    apply.addEventListener('click', () => {
+      const fromInput = root.querySelector('#adm-range-from');
+      const toInput   = root.querySelector('#adm-range-to');
+      const from = admDateInputToIso(fromInput && fromInput.value, 'start');
+      const to   = admDateInputToIso(toInput && toInput.value, 'end');
+      admSourcesRange = { preset: 'custom', from, to };
+      admReloadSources();
+    });
   }
 }
 
@@ -3396,6 +3793,15 @@ async function openAdmUserDetail(userId) {
     // Info
     html += `<section class="tm-section"><p class="help-text" style="text-align:center">Telegram ID: ${u.telegramId}<br>Joined: ${admFmtDate(u.createdAt)}</p></section>`;
 
+    // Danger zone — wipe user data (keeps apps) + full reset (testing)
+    html += `<section class="tm-section tm-menu-items">
+      <div class="tm-section-header"><h2 class="tm-section-header-text" style="color:#ff4d4f">Danger Zone</h2></div>
+      <p class="help-text" style="margin:0 0 8px">Permanently delete all data attached to this user (payments, conversations, usage logs, withdrawals, voucher redemptions) and reset their profile (balance, partnership, name, language) to defaults. <b>Apps and bots are kept</b> and continue to work.</p>
+      <button class="adm-btn adm-btn-danger" id="adm-wipe-user" style="width:100%">Wipe User Data</button>
+      <p class="help-text" style="margin:12px 0 8px"><b style="color:#ff6b6b">Full Reset (testing)</b> — deletes EVERYTHING for this user: all data, all apps, the user row itself. After this, opening the Mini App registers them fresh, so source / referrer / partner-tag attribution can be re-tested from scratch.</p>
+      <button class="adm-btn adm-btn-danger" id="adm-full-reset" style="width:100%">Full Reset (Delete User &amp; Apps)</button>
+    </section>`;
+
     contentEl.innerHTML = html;
 
     // Balance handler
@@ -3433,6 +3839,59 @@ async function openAdmUserDetail(userId) {
       row.addEventListener('click', () => {
         openAdmProjectChat(row.dataset.projId);
       });
+    });
+
+    document.getElementById('adm-wipe-user')?.addEventListener('click', () => {
+      const userLabel = u.username ? '@' + u.username : (u.firstName || ('User #' + u.id));
+      const msg = `Wipe ALL data for ${userLabel}?\n\nDeletes payments, conversations, usage logs, withdrawals and voucher redemptions. Resets balance, partnership, name and language.\n\nApps and bots are KEPT. This cannot be undone.`;
+      const doWipe = async () => {
+        const btn = document.getElementById('adm-wipe-user');
+        if (!btn) return;
+        btn.disabled = true;
+        btn.textContent = 'Wiping...';
+        try {
+          const r = await admApi('/users/' + userId + '/data', { method: 'DELETE' });
+          const d = r.deleted || {};
+          showToast(`Wiped: ${d.payments||0} payments, ${d.conversations||0} chats, ${d.usageLogs||0} usage, ${d.withdrawals||0} withdrawals`, 'success');
+          openAdmUserDetail(userId);
+        } catch (err) {
+          showToast('Failed to wipe user data', 'error');
+          btn.disabled = false;
+          btn.textContent = 'Wipe User Data';
+        }
+      };
+      if (tg?.showConfirm) {
+        tg.showConfirm(msg, (ok) => { if (ok) doWipe(); });
+      } else if (confirm(msg)) {
+        doWipe();
+      }
+    });
+
+    document.getElementById('adm-full-reset')?.addEventListener('click', () => {
+      const userLabel = u.username ? '@' + u.username : (u.firstName || ('User #' + u.id));
+      const projCount = u.projects.length;
+      const msg = `FULL RESET for ${userLabel}?\n\nDeletes ALL data, ALL ${projCount} app${projCount === 1 ? '' : 's'}, and the user row itself.\n\nNext time they open the Mini App they will register as a brand new user — useful for testing referral / source / partner attribution.\n\nThis cannot be undone.`;
+      const doFullReset = async () => {
+        const btn = document.getElementById('adm-full-reset');
+        if (!btn) return;
+        btn.disabled = true;
+        btn.textContent = 'Resetting...';
+        try {
+          const r = await admApi('/users/' + userId + '/full', { method: 'DELETE' });
+          const d = r.deleted || {};
+          showToast(`Full reset: ${d.projects||0} apps, ${d.payments||0} payments, ${d.usageLogs||0} usage, user deleted`, 'success');
+          setTimeout(() => openAdmUsers(), 1200);
+        } catch (err) {
+          showToast('Failed to full-reset user', 'error');
+          btn.disabled = false;
+          btn.textContent = 'Full Reset (Delete User & Apps)';
+        }
+      };
+      if (tg?.showConfirm) {
+        tg.showConfirm(msg, (ok) => { if (ok) doFullReset(); });
+      } else if (confirm(msg)) {
+        doFullReset();
+      }
     });
   } catch (err) { contentEl.innerHTML = `<div class="adm-empty">Failed to load user: ${esc(String(err))}</div>`; }
 }
@@ -3636,15 +4095,9 @@ function showView(view) {
   if (chatEl) chatEl.classList.toggle('hidden', view !== 'chat');
 
   if (tg) {
-    if (view === 'chat') {
-      tg.setHeaderColor('#000000');
-      tg.setBackgroundColor('#000000');
-      tg.setBottomBarColor('#000000');
-    } else {
-      tg.setHeaderColor('#000000');
-      tg.setBackgroundColor('#000000');
-      tg.setBottomBarColor('#000000');
-    }
+    try { tg.setHeaderColor('#000000'); } catch {}
+    try { tg.setBackgroundColor('#000000'); } catch {}
+    try { if (typeof tg.setBottomBarColor === 'function') tg.setBottomBarColor('#000000'); } catch {}
   }
 
   if (tg?.BackButton) {
@@ -3953,23 +4406,30 @@ function openLanguage() {
   showView('language');
 }
 
-function init() {
+async function init() {
   document.addEventListener('click', (e) => {
     const t = e.target.closest('button, a, .tm-row, .chat-pill, .topup-amount-btn, .topup-method, .chat-plan-btn, .result-action-btn, .question-opt-btn, .feature-row, .quality-row');
     if (t) haptic('light');
   }, true);
 
   if (tg) {
-    tg.ready();
-    tg.setHeaderColor('#000000');
-      tg.setBackgroundColor('#000000');
-      tg.setBottomBarColor('#000000');
-    tg.MainButton.setParams({ color: '#248BDA' });
-    tg.disableVerticalSwipes();
+    // Each call must be guarded individually: older iOS/Android Telegram
+    // clients are missing newer methods (setBottomBarColor: 7.10+,
+    // disableVerticalSwipes: 7.7+, requestFullscreen: 8.0+). A single
+    // TypeError here would abort init() and leave the page looking
+    // unstyled / unresponsive ("broken styles + broken script").
+    const safe = (fn) => { try { fn(); } catch (e) { console.warn('[tg]', e?.message || e); } };
+
+    safe(() => tg.ready());
+    safe(() => tg.setHeaderColor('#000000'));
+    safe(() => tg.setBackgroundColor('#000000'));
+    if (typeof tg.setBottomBarColor === 'function') safe(() => tg.setBottomBarColor('#000000'));
+    safe(() => tg.MainButton?.setParams({ color: '#248BDA' }));
+    if (typeof tg.disableVerticalSwipes === 'function') safe(() => tg.disableVerticalSwipes());
 
     if (['android', 'ios'].includes(tg.platform)) {
       document.body.classList.add('mobile', 'platform-' + tg.platform);
-      tg.requestFullscreen();
+      if (typeof tg.requestFullscreen === 'function') safe(() => tg.requestFullscreen());
     }
   }
 
@@ -4105,16 +4565,24 @@ function init() {
   document.getElementById('btn-partner')?.addEventListener('click', () => openPartner());
 
   applyLang();
-  checkAdmin();
-  checkPartner();
   initTokenActions();
   initChatInput();
   initAutosize();
   initEditPhoto();
   initTopupEvents();
+  initAnalytics();
+  // CRITICAL: /api/init MUST complete BEFORE any other API call that lands
+  // on getOrCreateUser. The backend uses the very first request to lock in
+  // the new user's start_param attribution (referrer / partner-tag /
+  // utm_source) and to send the admin "new user" notification exactly
+  // once. Calls like /api/admin/check, /api/partner, /api/balance,
+  // /api/projects all hit getOrCreateUser too — if any of them lands
+  // first, the source data is lost.
+  await reportInit();
+  checkAdmin();
+  checkPartner();
   loadBalance();
   loadProjects();
-  initAnalytics();
 }
 
 init();

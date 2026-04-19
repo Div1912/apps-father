@@ -24,14 +24,30 @@ model User {
   partnerTag          String?  @unique @map("partner_tag")
   partnerReferralBonus Decimal? @map("partner_referral_bonus") @db.Decimal(12, 4)
   partnerBalance      Decimal  @default(0) @map("partner_balance") @db.Decimal(12, 4)
+  firstDepositBonusGiven Boolean @default(false) @map("first_deposit_bonus_given")
+  adminNotifiedAt     DateTime? @map("admin_notified_at")
 
-  projects      Project[]
-  conversations Conversation[]
-  payments      Payment[]
-  usageLogs     UsageLog[]
-  withdrawals   Withdrawal[]
+  projects        Project[]
+  conversations   Conversation[]
+  payments        Payment[]
+  usageLogs       UsageLog[]
+  withdrawals     Withdrawal[]
+  retentionPushes RetentionPush[]
 
   @@map("users")
+}
+
+model RetentionPush {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  scenario  String
+  sentAt    DateTime @default(now()) @map("sent_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, scenario])
+  @@index([userId])
+  @@map("retention_pushes")
 }
 
 model Project {

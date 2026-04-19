@@ -8,7 +8,7 @@ import { Decimal } from "@prisma/client/runtime/library";
 import { Lang, t } from "../i18n";
 import { config } from "../../config";
 
-function getWelcomeCaption(lang: Lang): string {
+export function getWelcomeCaption(lang: Lang): string {
   return (
     `<b>${ce(EMOJI.logo)} ${t(lang, "welcome_caption_title")}</b> - ${t(lang, "welcome_caption_desc")}\n\n` +
     `<b>${ce(EMOJI.idea)} ${t(lang, "welcome_caption_idea")}</b>\n` +
@@ -17,6 +17,18 @@ function getWelcomeCaption(lang: Lang): string {
     `${t(lang, "welcome_caption_samples_body")} \n\n` +
     `${ce(EMOJI.indicator_none)} <a href="https://t.me/InstagramMysbot"><b>GramMini</b></a>   ${ce(EMOJI.indicator_none)} <a href="https://t.me/teleweatherabot"><b>TeleWeather</b></a>   ${ce(EMOJI.indicator_none)} <a href="https://t.me/pixelduel7bot"><b>Pixel Duel</b></a>   ${ce(EMOJI.indicator_none)} <a href="https://t.me/my_best_ton_walletbot"><b>TON Wallet</b></a>`
   );
+}
+
+export function buildMiniAppUrl(startParam?: string | null): string {
+  const base = `${config.baseUrl}/telegram-mini-app/`;
+  return startParam ? `${base}?startapp=${encodeURIComponent(startParam)}` : base;
+}
+
+export function buildWelcomeKeyboard(lang: Lang, startParam?: string | null): InlineKeyboard {
+  const keyboard = new InlineKeyboard().webApp(t(lang, "btn_create_app"), buildMiniAppUrl(startParam));
+  const btnRow = (keyboard as any).inline_keyboard;
+  if (btnRow?.[0]?.[0]) btnRow[0][0].style = "primary";
+  return keyboard;
 }
 
 export function getNavWelcomeText(balance: number, lang: Lang = "en"): string {
@@ -40,6 +52,14 @@ export async function startCommand(ctx: BotContext) {
   const startParam = ctx.match ? String(ctx.match) : undefined;
   let referredBy = startParam && /^\d+$/.test(startParam) ? parseInt(startParam, 10) : undefined;
 
+  // Non-numeric, non-voucher start params are kept as a marketing source
+  // tag (utm_source). For partner tags we additionally set referredBy
+  // below; for plain campaign tags (e.g. "ga_direct_ww_0") we only set
+  // utm_source. Numeric start params (legacy referrer-only links) and
+  // voucher codes do NOT contribute to source.
+  const utmSource: string | null =
+    startParam && !referredBy && !startParam.startsWith("v_") ? startParam : null;
+
   // Resolve partner tag to referrer telegramId
   let partnerBonus: number | null = null;
   if (!referredBy && startParam && !startParam.startsWith("v_")) {
@@ -56,7 +76,13 @@ export async function startCommand(ctx: BotContext) {
     }
   }
 
-  const { user } = await projectService.getOrCreateUser(from.id, from.username, from.first_name, referredBy);
+  const { user } = await projectService.getOrCreateUser(
+    from.id,
+    from.username,
+    from.first_name,
+    referredBy,
+    utmSource,
+  );
 
   // Credit partner referral bonus to new user
   if (partnerBonus && user.referredBy) {
@@ -114,20 +140,13 @@ export async function startCommand(ctx: BotContext) {
   }
 
   const imagePath = path.join(__dirname, "..", "..", "..", "assets", "bot_images", "welcome.png");
-  const miniAppUrl = startParam
-    ? `${config.baseUrl}/telegram-mini-app/?startapp=${encodeURIComponent(startParam)}`
-    : `${config.baseUrl}/telegram-mini-app/`;
 
   const chatId = ctx.chat!.id;
 
   const hideMsg = await ctx.reply("⏳", { reply_markup: { remove_keyboard: true } });
   await ctx.api.deleteMessage(chatId, hideMsg.message_id);
 
-  const keyboard = new InlineKeyboard()
-    .webApp(t(lang, "btn_create_app"), miniAppUrl);
-
-  const btnRow = (keyboard as any).inline_keyboard;
-  if (btnRow?.[0]?.[0]) btnRow[0][0].style = "primary";
+  const keyboard = buildWelcomeKeyboard(lang, startParam);
 
   try {
     await ctx.replyWithPhoto(new InputFile(imagePath), {

@@ -14,7 +14,7 @@ const clients = new Set<MiniAppClient>();
 
 const pendingAnswers = new Map<string, (answer: string) => void>();
 
-function validateInitData(initData: string): { valid: boolean; telegramId?: number; username?: string } {
+function validateInitData(initData: string): { valid: boolean; telegramId?: number; username?: string; firstName?: string } {
   if (!initData) return { valid: false };
   try {
     const params = new URLSearchParams(initData);
@@ -30,7 +30,7 @@ function validateInitData(initData: string): { valid: boolean; telegramId?: numb
     let userData: any;
     try { userData = JSON.parse(params.get("user") || "{}"); } catch { userData = {}; }
     if (!userData.id) return { valid: false };
-    return { valid: true, telegramId: userData.id, username: userData.username };
+    return { valid: true, telegramId: userData.id, username: userData.username, firstName: userData.first_name };
   } catch { return { valid: false }; }
 }
 

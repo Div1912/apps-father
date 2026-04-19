@@ -20,10 +20,13 @@ const I18N = {
     // Top up
     topup_title: "Top Up Balance",
     topup_amount: "Amount",
-    topup_min: "Minimum top-up is $10",
+    topup_min: "Minimum top-up is $2",
+    topup_first_bonus_title: "Get +$10 FREE on your first deposit",
+    topup_first_bonus_sub: "Auto-credited the moment your first payment is confirmed",
     topup_method: "Payment Method",
     topup_crypto_bot: "Crypto Bot",
     topup_other_crypto: "Other Crypto",
+    topup_other_crypto_locked: "Other Crypto requires at least $15 — increase the amount or use TON / Stars / Crypto Bot",
     topup_ton: "TON",
     topup_stars: "Telegram Stars",
     topup_note: "Your balance will be credited after payment confirmation.",
@@ -152,6 +155,13 @@ const I18N = {
     chat_release_confirm: "Are you sure you want to release this update?",
     chat_insufficient: "Insufficient Balance",
     chat_topup_btn: "Top Up Balance",
+    chat_almost_there_title: "Almost there!",
+    chat_almost_there_sub: "Your app is just one step away",
+    chat_estimated_cost: "Estimated cost",
+    chat_your_balance: "Your balance",
+    chat_first_deposit_chip: "Get +$10 FREE on your first deposit",
+    chat_topup_cta_bonus: "Top Up & Claim $10 Bonus",
+    chat_topup_cta: "Top Up Balance",
     chat_show_more: "Show more",
     chat_show_less: "Show less",
 
@@ -172,7 +182,7 @@ const I18N = {
     toast_transfer_self: "You can't transfer to yourself",
     toast_deleted: "App deleted",
     toast_slot_purchased: "App slot purchased!",
-    toast_topup_min: "Minimum top-up is $10",
+    toast_topup_min: "Minimum top-up is $2",
     toast_feature_unlocked: "Feature unlocked!",
     toast_balance_updated: "Balance updated",
     chat_update_completed: "Update Completed",
@@ -209,10 +219,13 @@ const I18N = {
 
     topup_title: "Пополнение баланса",
     topup_amount: "Сумма",
-    topup_min: "Минимальная сумма — $10",
+    topup_min: "Минимальная сумма — $2",
+    topup_first_bonus_title: "Получите +$10 БЕСПЛАТНО за первое пополнение",
+    topup_first_bonus_sub: "Бонус начислится автоматически после подтверждения платежа",
     topup_method: "Способ оплаты",
     topup_crypto_bot: "Crypto Bot",
     topup_other_crypto: "Другая крипта",
+    topup_other_crypto_locked: "Другая крипта доступна от $15 — увеличьте сумму или выберите TON / Stars / Crypto Bot",
     topup_ton: "TON",
     topup_stars: "Telegram Stars",
     topup_note: "Баланс будет зачислен после подтверждения платежа.",
@@ -328,6 +341,13 @@ const I18N = {
     chat_release_confirm: "Вы уверены, что хотите опубликовать это обновление?",
     chat_insufficient: "Недостаточно средств",
     chat_topup_btn: "Пополнить баланс",
+    chat_almost_there_title: "Почти готово!",
+    chat_almost_there_sub: "До запуска вашего приложения остался один шаг",
+    chat_estimated_cost: "Стоимость",
+    chat_your_balance: "Ваш баланс",
+    chat_first_deposit_chip: "Получите +$10 БЕСПЛАТНО за первое пополнение",
+    chat_topup_cta_bonus: "Пополнить и получить $10",
+    chat_topup_cta: "Пополнить баланс",
     chat_show_more: "Показать больше",
     chat_show_less: "Скрыть",
 
@@ -346,7 +366,7 @@ const I18N = {
     toast_transfer_self: "Нельзя передать самому себе",
     toast_deleted: "Приложение удалено",
     toast_slot_purchased: "Слот куплен!",
-    toast_topup_min: "Минимальная сумма — $10",
+    toast_topup_min: "Минимальная сумма — $2",
     toast_feature_unlocked: "Функция разблокирована!",
     toast_balance_updated: "Баланс обновлён",
     chat_update_completed: "Обновление завершено",
@@ -382,10 +402,13 @@ const I18N = {
 
     topup_title: "Поповнення балансу",
     topup_amount: "Сума",
-    topup_min: "Мінімальна сума — $10",
+    topup_min: "Мінімальна сума — $2",
+    topup_first_bonus_title: "Отримайте +$10 БЕЗКОШТОВНО за перше поповнення",
+    topup_first_bonus_sub: "Бонус нараховується автоматично після підтвердження платежу",
     topup_method: "Спосіб оплати",
     topup_crypto_bot: "Crypto Bot",
     topup_other_crypto: "Інша крипта",
+    topup_other_crypto_locked: "Інша крипта доступна від $15 — збільште суму або оберіть TON / Stars / Crypto Bot",
     topup_ton: "TON",
     topup_stars: "Telegram Stars",
     topup_note: "Баланс буде зараховано після підтвердження платежу.",
@@ -501,6 +524,13 @@ const I18N = {
     chat_release_confirm: "Ви впевнені, що хочете опублікувати це оновлення?",
     chat_insufficient: "Недостатньо коштів",
     chat_topup_btn: "Поповнити баланс",
+    chat_almost_there_title: "Майже готово!",
+    chat_almost_there_sub: "До запуску вашого застосунку лишився один крок",
+    chat_estimated_cost: "Вартість",
+    chat_your_balance: "Ваш баланс",
+    chat_first_deposit_chip: "Отримайте +$10 БЕЗКОШТОВНО за перше поповнення",
+    chat_topup_cta_bonus: "Поповнити та отримати $10",
+    chat_topup_cta: "Поповнити баланс",
     chat_show_more: "Показати більше",
     chat_show_less: "Сховати",
 
@@ -519,7 +549,7 @@ const I18N = {
     toast_transfer_self: "Не можна передати самому собі",
     toast_deleted: "Додаток видалено",
     toast_slot_purchased: "Слот куплено!",
-    toast_topup_min: "Мінімальна сума — $10",
+    toast_topup_min: "Мінімальна сума — $2",
     toast_feature_unlocked: "Функцію розблоковано!",
     toast_balance_updated: "Баланс оновлено",
     chat_update_completed: "Оновлення завершено",
@@ -552,9 +582,16 @@ function setLang(lang) {
 
   const initData = window.Telegram?.WebApp?.initData;
   if (initData) {
+    const headers = { 'Content-Type': 'application/json', 'X-Telegram-Init-Data': initData };
+    try {
+      const sp = (typeof getStartParam === 'function')
+        ? getStartParam()
+        : (localStorage.getItem('af_start_param') || '');
+      if (sp) headers['X-Apps-Father-Start-Param'] = sp;
+    } catch (_) {}
     fetch('/telegram-mini-app/api/language', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Telegram-Init-Data': initData },
+      headers,
       body: JSON.stringify({ lang }),
     }).catch(() => {});
   }

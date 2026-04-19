@@ -63,6 +63,15 @@ function timeStr(ts) {
 function apiHeaders() {
   const h = {};
   if (authToken) h['X-Desktop-Auth'] = authToken;
+  // Same rationale as mini_app/app.js: attribute every request so the
+  // backend can race-resolve the source on whichever endpoint fires first
+  // (loadProjects / balance / etc.), not only on /web-auth.
+  try {
+    const sp = (typeof getDesktopStartParam === 'function')
+      ? getDesktopStartParam()
+      : (localStorage.getItem('af_desktop_startparam') || '');
+    if (sp) h['X-Apps-Father-Start-Param'] = sp;
+  } catch (_) {}
   return h;
 }
 
@@ -175,18 +184,34 @@ async function fetchBotConfig() {
   } catch {}
 }
 
+function getDesktopStartParam() {
+  let raw = '';
+  try {
+    raw = new URLSearchParams(window.location.search).get('startapp') ||
+          new URLSearchParams(window.location.search).get('start') || '';
+  } catch (_) {}
+  raw = (raw || '').trim();
+  if (raw) {
+    try { localStorage.setItem('af_desktop_startparam', raw); } catch (_) {}
+  } else {
+    try { raw = localStorage.getItem('af_desktop_startparam') || ''; } catch (_) {}
+  }
+  return raw.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
+}
+
 $('btn-telegram-login').addEventListener('click', () => {
   if (!botId) { showToast('Loading bot config, please try again'); fetchBotConfig(); return; }
   Telegram.Login.auth(
     { bot_id: botId, origin: location.origin },
     (data) => {
       if (!data) return;
-      // Telegram Login Widget returns { user: {...}, html: ..., origin: ... }
       const userData = data.user || data;
+      const startParam = getDesktopStartParam();
+      const payload = startParam ? { ...userData, startParam } : userData;
       fetch(`${API_BASE}/web-auth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(userData),
+        body: JSON.stringify(payload),
       })
         .then(r => r.json())
         .then(result => {
@@ -885,11 +910,29 @@ function appendMessage(msg, animate = true) {
     el.innerHTML = html;
   } else if (msg.type === 'balance_error') {
     el.className = 'chat-bubble chat-bubble--balance-error';
-    const bal = msg.metadata?.balance ?? 0;
+    const bal = Number(msg.metadata?.balance ?? 0);
     el.innerHTML = `
-      <div class="balance-error-icon">💳</div>
-      <div class="balance-error-title">${t('chat_insufficient') || 'Insufficient balance'}</div>
-      <div class="balance-error-desc">$${Number(bal).toFixed(2)}</div>`;
+      <div class="balance-cta-header">
+        <div class="balance-cta-icon">🚀</div>
+        <div class="balance-cta-headtext">
+          <div class="balance-cta-title">${t('chat_almost_there_title') || 'Almost there!'}</div>
+          <div class="balance-cta-sub">${t('chat_almost_there_sub') || 'Your app is just one step away'}</div>
+        </div>
+      </div>
+      <div class="balance-cta-stats">
+        <div class="balance-cta-stat">
+          <div class="balance-cta-stat-label">${t('chat_estimated_cost') || 'Estimated cost'}</div>
+          <div class="balance-cta-stat-value">~$3.00</div>
+        </div>
+        <div class="balance-cta-stat">
+          <div class="balance-cta-stat-label">${t('chat_your_balance') || 'Your balance'}</div>
+          <div class="balance-cta-stat-value low">$${Number(bal).toFixed(2)}</div>
+        </div>
+      </div>
+      <div class="balance-bonus-chip">
+        <span class="balance-bonus-chip-icon">🎁</span>
+        <span>${t('chat_first_deposit_chip') || 'Get +$10 FREE on your first deposit'}</span>
+      </div>`;
     if (isProcessing) {
       isProcessing = false;
       setInputDisabled(false);

@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+  <meta name="robots" content="noindex,nofollow">
+  <title data-i18n="title">Open Apps Father</title>
+
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=AW-18093639890"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag() { dataLayer.push(arguments); }
+    gtag('js', new Date());
+    gtag('config', 'AW-18093639890');
+  </script>
+
+  <style>
+    :root {
+      --bg: #07091a;
+      --text: #e9edf6;
+      --muted: #8b97a8;
+      --accent: #00c2ff;
+      --accent-2: #4f8cff;
+      --grad: linear-gradient(135deg, #00d4ff, #00a8ff 50%, #4f8cff);
+      --hi-grad: linear-gradient(135deg, rgba(0, 212, 255, 0.22), rgba(79, 140, 255, 0.18));
+      --border: rgba(99, 179, 237, 0.18);
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    body {
+      position: relative;
+      min-height: 100vh;
+      min-height: 100dvh;
+      padding: 12px 18px 28px;
+      background:
+        radial-gradient(900px 600px at 80% -10%, rgba(0, 168, 255, 0.18), transparent 60%),
+        radial-gradient(800px 600px at 10% 110%, rgba(79, 140, 255, 0.14), transparent 60%),
+        var(--bg);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* ===========================================================
+       TOP ARROW — points to the top-right ⋯ menu of the browser
+       =========================================================== */
+    .arrow-zone {
+      position: relative;
+      width: 100%;
+      max-width: 460px;
+      height: 200px;
+      margin-bottom: 4px;
+    }
+
+    .arrow {
+      position: absolute;
+      top: 6px;
+      right: -2px;
+      width: 130px;
+      height: 180px;
+      pointer-events: none;
+      animation: bob 1.4s ease-in-out infinite;
+    }
+
+    .arrow svg { width: 100%; height: 100%; overflow: visible; }
+
+    .arrow .stroke {
+      stroke: url(#arrowGrad);
+      stroke-width: 5;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      filter: drop-shadow(0 0 10px rgba(0, 200, 255, 0.55));
+      stroke-dasharray: 360;
+      stroke-dashoffset: 360;
+      animation: draw 2s ease-in-out infinite;
+    }
+
+    .arrow .head {
+      fill: url(#arrowGrad);
+      filter: drop-shadow(0 0 10px rgba(0, 200, 255, 0.65));
+    }
+
+    .arrow-label {
+      position: absolute;
+      left: 6px;
+      top: 76px;
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      line-height: 1.25;
+      color: #fff;
+      text-shadow: 0 2px 12px rgba(0, 168, 255, 0.45);
+      max-width: 260px;
+    }
+
+    .arrow-label .dots {
+      display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 24px;
+    padding-bottom: 4px;
+    border-radius: 8px;
+    background: rgb(255 255 255);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    margin: 0px 3px;
+    font-size: 22px;
+    line-height: 1px;
+    vertical-align: middle;
+    color: black;
+    }
+
+    .arrow-sub {
+      position: absolute;
+      left: 6px;
+      top: 122px;
+      font-size: 13px;
+      color: var(--muted);
+      max-width: 240px;
+    }
+
+    @keyframes bob {
+      0%, 100% { transform: translate(0, 0); }
+      50%      { transform: translate(8px, -8px); }
+    }
+
+    @keyframes draw {
+      0%   { stroke-dashoffset: 360; opacity: 0.2; }
+      45%  { stroke-dashoffset: 0;   opacity: 1; }
+      80%  { stroke-dashoffset: 0;   opacity: 1; }
+      100% { stroke-dashoffset: 0;   opacity: 0.2; }
+    }
+
+    /* ===========================================================
+       LOGO + HEADLINE
+       =========================================================== */
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 4px 0 14px;
+    }
+
+    .logo {
+      width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    background: var(--grad);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 16px;
+    color: #fff;
+    letter-spacing: 1px;
+    box-shadow: 0 0 22px rgba(0, 168, 255, 0.45);
+    background: url(full-logo.png);
+    background-size: contain;
+    }
+
+    .brand-text { line-height: 1.2; }
+    .brand-name { font-size: 16px; font-weight: 700; }
+    .brand-sub  { font-size: 12px; color: var(--muted); }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+      text-align: center;
+      background: linear-gradient(180deg, #ffffff 0%, #c9d6ee 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .lead {
+      margin: 0 0 22px;
+      font-size: 14px;
+      color: var(--muted);
+      text-align: center;
+      max-width: 320px;
+      line-height: 1.5;
+    }
+
+    /* ===========================================================
+       MENU DEMO — mimics TikTok's "Open in browser" sheet
+       =========================================================== */
+    .demo-wrap {
+      width: 100%;
+      max-width: 360px;
+      margin: 4px auto 18px;
+    }
+
+    .demo-frame {
+      position: relative;
+      background: #fff;
+      border-radius: 20px;
+      padding: 8px 0 12px;
+      box-shadow:
+        0 30px 80px rgba(0, 0, 0, 0.55),
+        0 0 0 1px rgba(255, 255, 255, 0.05);
+      overflow: hidden;
+    }
+
+    .demo-handle {
+      width: 38px;
+      height: 4px;
+      background: #d6d8df;
+      border-radius: 2px;
+      margin: 6px auto 10px;
+    }
+
+    .menu-item {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 16px 20px;
+      color: #1a1a1a;
+      font-size: 16px;
+      font-weight: 500;
+      border-top: 1px solid #f0f1f5;
+      position: relative;
+    }
+
+    .menu-item:first-of-type { border-top: none; }
+
+    .menu-item .icon {
+      width: 22px;
+      height: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #4a4a4a;
+    }
+
+    .menu-item .icon svg { width: 22px; height: 22px; }
+
+    .menu-item.dim { opacity: 0.55; }
+
+    .menu-item.highlight {
+      background: linear-gradient(90deg, rgba(0, 200, 255, 0.10), rgba(79, 140, 255, 0.06));
+      animation: pulse-row 1.6s ease-in-out infinite;
+    }
+
+    .menu-item.highlight .icon,
+    .menu-item.highlight .label {
+      color: #0078d4;
+      font-weight: 700;
+    }
+
+    .menu-item.highlight::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 4px;
+      background: var(--grad);
+    }
+
+    /* Pointer hand drifting over "Open in browser" */
+    .pointer-hand {
+      position: absolute;
+      right: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 30px;
+      filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.35));
+      animation: tap 1.4s ease-in-out infinite;
+      pointer-events: none;
+    }
+
+    .ripple {
+      position: absolute;
+      right: 22px;
+      top: 50%;
+      width: 14px;
+      height: 14px;
+      margin-top: -7px;
+      border-radius: 50%;
+      background: rgba(0, 168, 255, 0.5);
+      transform: scale(0.4);
+      opacity: 0;
+      animation: ripple 1.4s ease-out infinite;
+      pointer-events: none;
+    }
+
+    @keyframes pulse-row {
+      0%, 100% { box-shadow: inset 0 0 0 0 rgba(0, 168, 255, 0.0); }
+      50%      { box-shadow: inset 0 0 30px 0 rgba(0, 168, 255, 0.18); }
+    }
+
+    @keyframes tap {
+      0%, 100% { transform: translateY(-50%) scale(1) rotate(-8deg); }
+      50%      { transform: translateY(-44%) scale(0.88) rotate(-4deg); }
+    }
+
+    @keyframes ripple {
+      0%   { transform: scale(0.4); opacity: 0.0; }
+      30%  { transform: scale(0.4); opacity: 0.7; }
+      100% { transform: scale(2.6); opacity: 0; }
+    }
+
+    /* ===========================================================
+       STEPS
+       =========================================================== */
+    .steps {
+      width: 100%;
+      max-width: 380px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+
+    .step {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 12px 14px;
+      background: rgba(15, 22, 40, 0.6);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+    }
+
+    .step-num {
+      flex: 0 0 28px;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--grad);
+      color: #fff;
+      font-weight: 800;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 16px rgba(0, 168, 255, 0.45);
+    }
+
+    .step-text {
+      font-size: 14px;
+      line-height: 1.45;
+      color: #d6dceb;
+    }
+
+    .step-text b { color: #fff; }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 28px;
+      height: 22px;
+      padding: 0 8px;
+      margin: 0 3px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      font-size: 14px;
+      line-height: 1;
+      vertical-align: -3px;
+    }
+
+    .footer {
+      margin-top: 6px;
+      font-size: 12px;
+      color: rgba(139, 151, 168, 0.85);
+      text-align: center;
+      max-width: 320px;
+    }
+
+    .footer a { color: var(--accent); text-decoration: none; }
+
+    /* ===========================================================
+       FALLBACK PANEL — visible when not in TikTok in-app browser
+       =========================================================== */
+    .auto-open {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      max-width: 420px;
+      margin: 24px auto 0;
+      padding: 28px 22px;
+      background: rgba(15, 22, 40, 0.7);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      text-align: center;
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+    }
+
+    .auto-open.show { display: flex; }
+
+    .spinner {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      border: 2px solid rgba(255, 255, 255, 0.12);
+      border-top-color: var(--accent);
+      animation: spin 0.9s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      padding: 14px 20px;
+      border: none;
+      border-radius: 12px;
+      background: var(--grad);
+      color: #fff;
+      font-size: 15px;
+      font-weight: 700;
+      text-decoration: none;
+      cursor: pointer;
+      box-shadow: 0 0 24px rgba(0, 168, 255, 0.35);
+    }
+
+    /* small phones */
+    @media (max-height: 720px) {
+      .arrow-zone { height: 170px; }
+      .arrow { height: 150px; }
+      .arrow-label { top: 58px; font-size: 16px; }
+      .arrow-sub { top: 100px; }
+      h1 { font-size: 22px; }
+      .menu-item { padding: 14px 18px; font-size: 15px; }
+    }
+
+    @media (max-height: 620px) {
+      body { padding-top: 8px; }
+      .arrow-zone { height: 140px; }
+      .arrow { height: 130px; }
+      .arrow-label { top: 46px; font-size: 15px; }
+      .arrow-sub { top: 84px; }
+      .lead { display: none; }
+      .demo-wrap { max-width: 320px; }
+      .menu-item { padding: 12px 16px; font-size: 14px; }
+      .steps { gap: 8px; }
+      .step { padding: 10px 12px; }
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- =================================================== -->
+  <!--  IN-APP BROWSER VIEW (TikTok / IG / FB) — default   -->
+  <!-- =================================================== -->
+  <div id="instructions" class="instructions">
+
+    <!-- Animated arrow pointing to the ⋯ in the top-right corner -->
+    <div class="arrow-zone">
+      <div class="arrow" aria-hidden="true">
+        <svg viewBox="0 0 130 180" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="arrowGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+              <stop offset="0%"  stop-color="#00d4ff"/>
+              <stop offset="60%" stop-color="#00a8ff"/>
+              <stop offset="100%" stop-color="#4f8cff"/>
+            </linearGradient>
+          </defs>
+          <!-- Curved path from bottom-left up to top-right corner -->
+          <path class="stroke"
+                d="M 18 168 C 18 110, 60 70, 110 22"/>
+          <!-- Arrow head pointing up-right -->
+          <polygon class="head"
+                   points="110,22 92,30 102,42"/>
+        </svg>
+      </div>
+
+      <div class="arrow-label" data-i18n-html="arrow.label">
+        Tap <span class="dots">⋯</span> in the<br>top-right corner
+      </div>
+      <div class="arrow-sub" data-i18n="arrow.sub">
+        (the three dots on the browser bar)
+      </div>
+    </div>
+
+    <div class="brand">
+      <div class="logo"></div>
+      <div class="brand-text">
+        <div class="brand-name">Apps Father</div>
+        <div class="brand-sub" data-i18n="brand.sub">Build apps without code</div>
+      </div>
+    </div>
+
+    <h1 data-i18n="h1">Open in your browser</h1>
+    <p class="lead" data-i18n="lead">
+      To launch the app, please open this page in your real browser — it only
+      takes 2 taps.
+    </p>
+
+    <!-- Live demo of the menu sheet -->
+    <div class="demo-wrap" aria-hidden="true">
+      <div class="demo-frame">
+        <div class="demo-handle"></div>
+
+        <div class="menu-item dim">
+          <span class="icon">
+            <!-- flag -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22V4M4 4h12l-2 4 2 4H4"/></svg>
+          </span>
+          <span class="label" data-i18n="demo.report">Report</span>
+        </div>
+
+        <div class="menu-item highlight">
+          <span class="icon">
+            <!-- compass / browser -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polygon points="15.5,8.5 13,13 8.5,15.5 11,11"/></svg>
+          </span>
+          <span class="label" data-i18n="demo.openInBrowser">Open in browser</span>
+          <span class="ripple"></span>
+          <span class="pointer-hand">👆</span>
+        </div>
+
+        <div class="menu-item dim">
+          <span class="icon">
+            <!-- link -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>
+          </span>
+          <span class="label" data-i18n="demo.copyLink">Copy link</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step list -->
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-text" data-i18n-html="step.1">
+          Tap the <span class="pill">⋯</span> button in the top-right corner of this browser bar.
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-text" data-i18n-html="step.2">
+          Choose <b>"Open in browser"</b> from the menu that appears.
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-text" data-i18n-html="step.3">
+          Apps Father will launch automatically in Telegram. <b>That's it!</b>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer" data-i18n-html="footer">
+      Having trouble? <a id="manualLink" href="#">Tap here to copy the link</a>
+    </div>
+  </div>
+
+  <!-- ====================================================== -->
+  <!--  Real browser view: spinner + auto-redirect to Telegram -->
+  <!-- ====================================================== -->
+  <div id="autoOpen" class="auto-open">
+    <div class="logo">AF</div>
+    <h1 style="margin:6px 0 0;" data-i18n="auto.h1">Opening Telegram…</h1>
+    <div class="spinner"></div>
+    <p class="lead" style="margin:0;" data-i18n="auto.lead">
+      If nothing happens, tap the button below.
+    </p>
+    <a id="openBtn" class="btn" href="#" rel="noopener" data-i18n="auto.btn">Open in Telegram</a>
+  </div>
+
+  <!-- ====================================================== -->
+  <!--  i18n — picks lang from ?lang= → navigator.language → en -->
+  <!--  Translates everything tagged with data-i18n / -html in -->
+  <!--  one synchronous pass, before the redirect script runs. -->
+  <!-- ====================================================== -->
+  <script>
+    (function () {
+      var TR = {
+        en: {
+          "title": "Open Apps Father",
+          "arrow.label": "Tap <span class=\"dots\">⋯</span> in the<br>top-right corner",
+          "arrow.sub": "(the three dots on the browser bar)",
+          "brand.sub": "Build apps without code",
+          "h1": "Open in your browser",
+          "lead": "To launch the app, please open this page in your real browser — it only takes 2 taps.",
+          "demo.report": "Report",
+          "demo.openInBrowser": "Open in browser",
+          "demo.copyLink": "Copy link",
+          "step.1": "Tap the <span class=\"pill\">⋯</span> button in the top-right corner of this browser bar.",
+          "step.2": "Choose <b>\"Open in browser\"</b> from the menu that appears.",
+          "step.3": "Apps Father will launch automatically in Telegram. <b>That's it!</b>",
+          "footer": "Having trouble? <a id=\"manualLink\" href=\"#\">Tap here to copy the link</a>",
+          "auto.h1": "Opening Telegram…",
+          "auto.lead": "If nothing happens, tap the button below.",
+          "auto.btn": "Open in Telegram",
+          "copy.copied": "Link copied — paste it in your browser",
+          "copy.prompt": "Copy this link and paste it in your browser:"
+        },
+        ru: {
+          "title": "Открыть Apps Father",
+          "arrow.label": "Нажмите <span class=\"dots\">⋯</span> в правом<br>верхнем углу",
+          "arrow.sub": "(три точки на панели браузера)",
+          "brand.sub": "Создавай приложения без кода",
+          "h1": "Откройте в браузере",
+          "lead": "Чтобы запустить приложение, откройте эту страницу в обычном браузере — это всего 2 нажатия.",
+          "demo.report": "Пожаловаться",
+          "demo.openInBrowser": "Открыть в браузере",
+          "demo.copyLink": "Скопировать ссылку",
+          "step.1": "Нажмите кнопку <span class=\"pill\">⋯</span> в правом верхнем углу панели браузера.",
+          "step.2": "Выберите <b>«Открыть в браузере»</b> в появившемся меню.",
+          "step.3": "Apps Father откроется в Telegram автоматически. <b>Готово!</b>",
+          "footer": "Не получается? <a id=\"manualLink\" href=\"#\">Нажмите, чтобы скопировать ссылку</a>",
+          "auto.h1": "Открываем Telegram…",
+          "auto.lead": "Если ничего не происходит, нажмите кнопку ниже.",
+          "auto.btn": "Открыть в Telegram",
+          "copy.copied": "Ссылка скопирована — вставьте её в браузере",
+          "copy.prompt": "Скопируйте эту ссылку и вставьте в браузере:"
+        },
+        uk: {
+          "title": "Відкрити Apps Father",
+          "arrow.label": "Натисніть <span class=\"dots\">⋯</span> у правому<br>верхньому куті",
+          "arrow.sub": "(три крапки на панелі браузера)",
+          "brand.sub": "Створюй застосунки без коду",
+          "h1": "Відкрийте у браузері",
+          "lead": "Щоб запустити застосунок, відкрийте цю сторінку у звичайному браузері — це лише 2 натискання.",
+          "demo.report": "Поскаржитись",
+          "demo.openInBrowser": "Відкрити у браузері",
+          "demo.copyLink": "Скопіювати посилання",
+          "step.1": "Натисніть кнопку <span class=\"pill\">⋯</span> у правому верхньому куті панелі браузера.",
+          "step.2": "Оберіть <b>«Відкрити у браузері»</b> у меню, що з'явиться.",
+          "step.3": "Apps Father відкриється у Telegram автоматично. <b>Готово!</b>",
+          "footer": "Не виходить? <a id=\"manualLink\" href=\"#\">Натисніть, щоб скопіювати посилання</a>",
+          "auto.h1": "Відкриваємо Telegram…",
+          "auto.lead": "Якщо нічого не відбувається, натисніть кнопку нижче.",
+          "auto.btn": "Відкрити в Telegram",
+          "copy.copied": "Посилання скопійовано — вставте його у браузері",
+          "copy.prompt": "Скопіюйте це посилання та вставте у браузері:"
+        }
+      };
+
+      function pickLang() {
+        var raw = "";
+        try { raw = (new URLSearchParams(window.location.search).get("lang") || "").trim().toLowerCase(); } catch (_) {}
+        if (!raw) {
+          // Fallback to the device language so users from RU/UA see their
+          // native version even if the campaign URL forgot the lang param.
+          try { raw = ((navigator.language || "en") + "").toLowerCase(); } catch (_) { raw = "en"; }
+        }
+        if (raw.indexOf("ru") === 0) return "ru";
+        if (raw.indexOf("uk") === 0 || raw.indexOf("ua") === 0) return "uk";
+        return "en";
+      }
+
+      var lang = pickLang();
+      var dict = TR[lang] || TR.en;
+
+      // Reflect on <html lang="..."> for screen readers and SEO.
+      try { document.documentElement.lang = lang; } catch (_) {}
+
+      // Translate all tagged elements. data-i18n sets textContent (safe),
+      // data-i18n-html sets innerHTML (allows the small inline markup we
+      // need for ⋯ pills, <b>, <br>, and the manualLink anchor).
+      function applyI18n() {
+        try {
+          document.querySelectorAll("[data-i18n]").forEach(function (el) {
+            var key = el.getAttribute("data-i18n");
+            if (dict[key] != null) el.textContent = dict[key];
+          });
+          document.querySelectorAll("[data-i18n-html]").forEach(function (el) {
+            var key = el.getAttribute("data-i18n-html");
+            if (dict[key] != null) el.innerHTML = dict[key];
+          });
+        } catch (_) {}
+      }
+
+      // Run immediately — the elements are already in the DOM because this
+      // script is at the end of <body>.
+      applyI18n();
+
+      // Expose for the redirect script below.
+      window.__tt = { lang: lang, t: function (k) { return dict[k] || k; } };
+    })();
+  </script>
+
+  <script>
+    (function () {
+      var BOT = "apps_father_bot";
+      var APP = "app";
+
+      function getStartApp() {
+        try {
+          var sp = new URLSearchParams(window.location.search).get("startapp") || "";
+          sp = sp.trim();
+          if (!sp) return "";
+          return sp.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
+        } catch (_) { return ""; }
+      }
+
+      var sa = getStartApp();
+      var qsTg  = sa ? ("&startapp=" + encodeURIComponent(sa)) : "";
+      var qsWeb = sa ? ("?startapp=" + encodeURIComponent(sa)) : "";
+
+      var tgUrl  = "tg://resolve?domain=" + BOT + "&appname=" + APP + qsTg;
+      var webUrl = "https://t.me/" + BOT + "/" + APP + qsWeb;
+
+      // ----- detect the in-app browser the user is stuck inside -----
+      var ua = (navigator.userAgent || "").toLowerCase();
+      var isTikTok    = /bytedance|musical_ly|tiktok|bytelocale|byteloc/i.test(ua);
+      var isInstagram = /instagram/i.test(ua);
+      var isFacebook  = /\bfb_iab\b|\bfban\b|\bfbav\b|fbios|\bfb4a\b|messenger/i.test(ua);
+      var isInApp     = isTikTok || isInstagram || isFacebook;
+
+      // Always fire the conversion as soon as the user lands here
+      // (use 'beacon' so the request still completes if we navigate away).
+      try {
+        window.gtag && window.gtag("event", "conversion", {
+          send_to: "AW-18093639890/NXdICOnui54cENKR3LND",
+          value: 1.0,
+          currency: "UAH",
+          transport_type: "beacon"
+        });
+      } catch (_) {}
+
+      var instructions = document.getElementById("instructions");
+      var autoOpen     = document.getElementById("autoOpen");
+      var openBtn      = document.getElementById("openBtn");
+      var manualLink   = document.getElementById("manualLink");
+
+      openBtn.href    = tgUrl;
+      manualLink.href = webUrl;
+
+      // "copy link" fallback inside the in-app browser
+      var tt = window.__tt || { t: function (k) { return k; } };
+      manualLink.addEventListener("click", function (e) {
+        e.preventDefault();
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(webUrl).then(function () {
+              manualLink.textContent = tt.t("copy.copied");
+            }, function () {
+              window.prompt(tt.t("copy.prompt"), webUrl);
+            });
+          } else {
+            window.prompt(tt.t("copy.prompt"), webUrl);
+          }
+        } catch (_) {
+          window.prompt(tt.t("copy.prompt"), webUrl);
+        }
+      });
+
+      if (isInApp) {
+        // Show the visual instructions — do NOT auto-redirect; tg:// is
+        // blocked / silently swallowed by TikTok / IG / FB in-app browsers.
+        instructions.style.display = "";
+        autoOpen.classList.remove("show");
+      } else {
+        // Real browser → hide instructions and jump to Telegram instantly.
+        instructions.style.display = "none";
+        autoOpen.classList.add("show");
+
+        openBtn.addEventListener("click", function (e) {
+          e.preventDefault();
+          window.location.href = tgUrl;
+        });
+
+        // 1) try the native deep link
+        window.location.href = tgUrl;
+
+        // 2) fallback to the universal https://t.me link if tg:// silently
+        //    failed (e.g. desktop browser, no Telegram installed). The
+        //    visibility check ensures we DON'T fire when the deep link
+        //    succeeded — in that case the tab is backgrounded and the
+        //    visibilityState becomes "hidden".
+        // setTimeout(function () {
+        //   if (document.visibilityState !== "hidden") {
+        //     window.location.replace(webUrl);
+        //   }
+        // }, 2000);
+      }
+    })();
+  </script>
+</body>
+
+</html>

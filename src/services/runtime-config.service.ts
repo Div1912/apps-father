@@ -11,7 +11,7 @@ export interface RuntimeConfig {
 }
 
 const DEFAULTS: RuntimeConfig = {
-  minTopup: 10,
+  minTopup: 2,
   markupMultiplier: 5,
   askMultiplier: 10,
   maxAgentIterations: 60,

@@ -50,9 +50,9 @@ export class DeployService {
         await bot.api.setMyDescription(app.botDescription);
       }
 
-      if (app.botCommands && app.botCommands.length > 0) {
-        await bot.api.setMyCommands(app.botCommands);
-      }
+      // if (app.botCommands && app.botCommands.length > 0) {
+      //   await bot.api.setMyCommands(app.botCommands);
+      // }
 
       const appUrl = `${config.baseUrl}/app/${projectId}/`;
       await bot.api.setChatMenuButton({

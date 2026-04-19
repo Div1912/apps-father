@@ -1,5 +1,55 @@
 [
   {
+    "version": "2.2.0",
+    "date": "2026-04-14",
+    "title": "Reliability, Growth & apps-father.com",
+    "image": "assets/updates/1.png",
+    "sections": [
+      {
+        "label": "Reliability & Errors",
+        "items": [
+          "Update process now catches AI errors and shows a friendly stop message instead of getting stuck",
+          "Stuck progress card is automatically removed when an error occurs, so you can continue right away",
+          "Fixed bug where deposits weren't being credited to balance",
+          "Fixed bot commands not responding after build"
+        ]
+      },
+      {
+        "label": "Bot & App Quality",
+        "items": [
+          "AI now configures bot commands menu (setMyCommands) on every new app for a polished UX",
+          "New \"Bot Management\" skill — AI knows the right way to wire commands, /start deep links, callbacks and webhooks for 100% reliability",
+          "Confirmation dialog before purchasing a paid Feature — no more accidental charges",
+          "Upgraded model to Opus 4.7 for higher build quality on Best & The Best tiers"
+        ]
+      },
+      {
+        "label": "Authentication & Security",
+        "items": [
+          "Web launch /start — open the Mini App from a browser via Telegram Login",
+          "Added account-stealing protection: stricter init-data validation everywhere"
+        ]
+      },
+      {
+        "label": "Growth & Analytics",
+        "items": [
+          "Telegram Mini Apps Analytics integrated for proper funnel tracking",
+          "Retention pushes — users who haven't finished onboarding receive 3 smart reminders (registered → bot created → plan ready), each fires once per user, fully localized",
+          "Partner referral links now point directly to the Mini App with /start attribution preserved"
+        ]
+      },
+      {
+        "label": "apps-father.com",
+        "items": [
+          "Launched the official website at apps-father.com — fully translated EN/RU with auto language detection",
+          "Mobile-optimized landing nav with a single Start button",
+          "All site CTAs forward the ?startapp source tag into Telegram for accurate attribution",
+          "Google Ads conversion tracking on every Telegram CTA click"
+        ]
+      }
+    ]
+  },
+  {
     "version": "2.1.0",
     "date": "2026-04-14",
     "title": "Quality of Life & Partners",

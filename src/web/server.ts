@@ -34,6 +34,7 @@ import { Decimal } from "@prisma/client/runtime/library";
 import { t, Lang } from "../bot/i18n";
 import { notifyProcessDone } from "../services/notify.service";
 import { signDesktopToken, verifyDesktopToken } from "./desktop-auth";
+import { sendBotWelcome } from "../services/welcome.service";
 
 let expressApp: express.Application | null = null;
 let httpServer: http.Server | null = null;
@@ -47,6 +48,21 @@ export function createWebServer() {
   app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
   app.use("/assets", express.static(path.join(__dirname, "..", "assets")));
+
+  // ── Landing page (apps-father.com) ──
+  // Static marketing site served at the root. Files live in /landing at the
+  // repo root; deployed to the server and shipped as part of `pm2` builds.
+  const landingDir = path.join(__dirname, "..", "..", "landing");
+  app.get("/", (_req, res, next) => {
+    const indexPath = path.join(landingDir, "index.html");
+    if (fs.existsSync(indexPath)) {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.sendFile(indexPath);
+    } else {
+      next();
+    }
+  });
+  app.use(express.static(landingDir, { index: false, extensions: ["html"] }));
 
   app.get("/health", (_req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
@@ -81,24 +97,145 @@ export function createWebServer() {
     return { valid: false };
   }
 
+  // ── Attribution middleware ──
+  // Reads X-Apps-Father-Start-Param off every Mini App / Desktop API request,
+  // parses it, resolves the partner tag if applicable, and stashes the result
+  // on req.attribution. Routes then call getOrCreateUserFromReq(req, auth) so
+  // the very first request that creates the user row carries the source.
+  //
+  // Why this exists: the frontend sends X-Apps-Father-Start-Param on EVERY
+  // call (see mini_app/app.js apiHeaders()). Previously only /api/init and
+  // /web-auth knew about the source. If reportInit() early-exited (no
+  // initData) or another endpoint won the create race, the user row landed
+  // with utmSource = NULL — and the admin notification fired before the
+  // back-fill could happen. With this middleware, source attribution is
+  // ambient: every call site that does getOrCreateUser carries it for free.
+  async function attachAttribution(
+    req: express.Request,
+    _res: express.Response,
+    next: express.NextFunction,
+  ) {
+    try {
+      const raw = ((req.headers["x-apps-father-start-param"] || "") as string).trim();
+      if (!raw) { next(); return; }
+      // Same sanitization as the client (see getStartParam in mini_app/app.js).
+      const cleaned = raw.replace(/[^A-Za-z0-9_|-]/g, "").slice(0, 64);
+      if (!cleaned) { next(); return; }
+      const parsed = parseStartParam(cleaned);
+      let source: string | null = parsed.source;
+      let referrerId: string | null = parsed.referrerId;
+      let referredBy: number | undefined = referrerId ? Number(referrerId) : undefined;
+      // Partner-tag resolution mirrors /api/init and /web-auth so this
+      // middleware is the single source of truth for tag → referrer.
+      if (!referredBy && source && !source.startsWith("v_")) {
+        try {
+          const partner = await prisma.user.findUnique({ where: { partnerTag: source } });
+          if (partner && partner.isPartner) {
+            referredBy = Number(partner.telegramId);
+            referrerId = String(partner.telegramId);
+          }
+        } catch {
+          // Best-effort: attribution failures must never block the request.
+        }
+      }
+      (req as any).attribution = { source, referrerId, referredBy, raw: cleaned };
+    } catch {
+      // Swallow — attribution is purely a side-channel.
+    }
+    next();
+  }
+  app.use("/telegram-mini-app/api", attachAttribution);
+
+  // Helper: any handler that needs to materialize the authenticated user
+  // should call this instead of projectService.getOrCreateUser directly. It
+  // forwards req.attribution (set by attachAttribution above) so source /
+  // referrer land on the very first row-creating call.
+  function getOrCreateUserFromReq(
+    req: express.Request,
+    auth: { telegramId?: number; username?: string; firstName?: string },
+  ) {
+    const attr = ((req as any).attribution || {}) as {
+      source?: string | null;
+      referredBy?: number;
+    };
+    return projectService.getOrCreateUser(
+      auth.telegramId!,
+      auth.username,
+      auth.firstName,
+      attr.referredBy,
+      attr.source ?? null,
+    );
+  }
+
   // ── Desktop config (public, no auth) ──
   app.get("/telegram-mini-app/api/desktop-config", (_req, res) => {
     const botId = config.botToken.split(":")[0];
     res.json({ botId });
   });
 
+  // ── Collaboration check (public, no auth) ──
+  // Allows partners / external integrations to verify a Telegram user's
+  // funnel state without needing initData. The {user-id} is the user's
+  // Telegram ID. Always returns 200; if the user doesn't exist we return
+  // registered=false with zeroed metrics so callers don't need to special
+  // case 404.
+  app.get("/collaboration-check/:userId", async (req, res) => {
+    try {
+      const tgIdRaw = req.params.userId;
+      if (!/^\d+$/.test(tgIdRaw)) {
+        res.status(400).json({ error: "userId must be a numeric Telegram ID" });
+        return;
+      }
+      const tgId = BigInt(tgIdRaw);
+
+      const user = await prisma.user.findUnique({
+        where: { telegramId: tgId },
+        select: { id: true },
+      });
+
+      if (!user) {
+        res.json({ registered: false, app_created: false, deposit_amount: 0 });
+        return;
+      }
+
+      const [builtAppCount, depositAgg] = await Promise.all([
+        prisma.project.count({
+          where: { userId: user.id, status: { in: ["deployed", "released"] } },
+        }),
+        prisma.payment.aggregate({
+          _sum: { amountUsd: true },
+          where: { userId: user.id, status: "confirmed" },
+        }),
+      ]);
+
+      res.json({
+        registered: true,
+        app_created: builtAppCount > 0,
+        deposit_amount: Number(depositAgg._sum.amountUsd || 0),
+      });
+    } catch (err: any) {
+      console.error("[CollaborationCheck] Error:", err);
+      res.status(500).json({ error: err.message || "Internal error" });
+    }
+  });
+
   // ── Desktop Web Auth (Telegram Login Widget) ──
   app.post("/telegram-mini-app/api/web-auth", async (req, res) => {
     try {
-      const { id, first_name, username, photo_url, auth_date, hash } = req.body;
+      const { id, first_name, username, photo_url, auth_date, hash, startParam } = req.body;
       if (!id || !hash || !auth_date) { res.status(400).json({ error: "Missing fields" }); return; }
 
       const now = Math.floor(Date.now() / 1000);
       if (now - Number(auth_date) > 86400) { res.status(401).json({ error: "Auth data expired" }); return; }
 
+      // startParam is passed in by the desktop login form so it can carry
+      // attribution (utm_source / referrer / partner-tag) — it's NOT part
+      // of Telegram's signed payload, so we must EXCLUDE it from the hash
+      // check to avoid breaking auth. Everything else stays in.
       const checkData: Record<string, string> = {};
       for (const key of Object.keys(req.body).sort()) {
-        if (key !== "hash") checkData[key] = String(req.body[key]);
+        if (key === "hash" || key === "startParam") continue;
+        checkData[key] = String(req.body[key]);
       }
       const dataCheckString = Object.entries(checkData).map(([k, v]) => `${k}=${v}`).join("\n");
       const secretKey = crypto.createHash("sha256").update(config.botToken).digest();
@@ -106,7 +243,59 @@ export function createWebServer() {
 
       if (computedHash !== hash) { res.status(401).json({ error: "Invalid hash" }); return; }
 
-      const { user } = await projectService.getOrCreateUser(Number(id), username, first_name);
+      // Mirror the /api/init attribution flow: parse the start param,
+      // resolve referrer / partner tag / plain source, and forward to
+      // getOrCreateUser. Without this every desktop-Login user is Direct.
+      const parsed = parseStartParam(typeof startParam === "string" ? startParam : null);
+      let { source, referrerId } = parsed;
+      let referredBy = referrerId ? Number(referrerId) : undefined;
+      let partnerBonus: number | null = null;
+      let partnerTag: string | null = null;
+      if (!referredBy && source && !source.startsWith("v_")) {
+        try {
+          const partner = await prisma.user.findUnique({ where: { partnerTag: source } });
+          if (partner && partner.isPartner) {
+            referredBy = Number(partner.telegramId);
+            referrerId = String(partner.telegramId);
+            partnerTag = source;
+            if (partner.partnerReferralBonus && Number(partner.partnerReferralBonus) > 0) {
+              partnerBonus = Number(partner.partnerReferralBonus);
+            }
+          }
+        } catch (err) {
+          console.error("[Web Auth] Partner tag lookup error:", err);
+        }
+      }
+
+      const { user, isNew, attributedNow } = await projectService.getOrCreateUser(
+        Number(id),
+        username,
+        first_name,
+        referredBy,
+        source,
+      );
+
+      if ((isNew || attributedNow) && partnerBonus && user.referredBy && Number(user.balance) <= 0.2) {
+        try {
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { balance: { increment: new Decimal(partnerBonus.toFixed(4)) } },
+          });
+          console.log(`[Web Auth] Partner bonus $${partnerBonus.toFixed(2)} credited to user ${user.id} via tag ${partnerTag}`);
+        } catch (err) {
+          console.error("[Web Auth] Partner bonus credit error:", err);
+        }
+      }
+
+      if (isNew || attributedNow) {
+        void trackEvent(Number(id), "user_registered", {
+          source,
+          referrer_id: referrerId,
+          telegram_id: Number(id),
+          channel: "web_login",
+        });
+      }
+
       const token = signDesktopToken({ telegramId: Number(id), username, firstName: first_name });
 
       res.json({ token, user: { id: user.id, telegramId: Number(id), username, firstName: first_name, photoUrl: photo_url } });
@@ -123,10 +312,34 @@ export function createWebServer() {
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
 
       const { startParam } = req.body as { startParam?: string };
-      const { source, referrerId } = parseStartParam(startParam);
-      const referredBy = referrerId ? Number(referrerId) : undefined;
+      const parsed = parseStartParam(startParam);
+      let { source, referrerId } = parsed;
+      let referredBy = referrerId ? Number(referrerId) : undefined;
 
-      const { user, isNew } = await projectService.getOrCreateUser(
+      // Resolve partner tag → referrer telegramId. Non-numeric startParam
+      // could be either a generic UTM source or a partner tag. We try the
+      // partner table first; if it matches an active partner we use them as
+      // the referrer (and remember the partner bonus). Otherwise we keep it
+      // as a plain source label for attribution.
+      let partnerBonus: number | null = null;
+      let partnerTag: string | null = null;
+      if (!referredBy && source && !source.startsWith("v_")) {
+        try {
+          const partner = await prisma.user.findUnique({ where: { partnerTag: source } });
+          if (partner && partner.isPartner) {
+            referredBy = Number(partner.telegramId);
+            referrerId = String(partner.telegramId);
+            partnerTag = source;
+            if (partner.partnerReferralBonus && Number(partner.partnerReferralBonus) > 0) {
+              partnerBonus = Number(partner.partnerReferralBonus);
+            }
+          }
+        } catch (err) {
+          console.error("[MiniApp Init] Partner tag lookup error:", err);
+        }
+      }
+
+      const { user, isNew, attributedNow } = await projectService.getOrCreateUser(
         auth.telegramId!,
         auth.username,
         auth.firstName,
@@ -134,14 +347,48 @@ export function createWebServer() {
         source
       );
 
-      // Fire server-side analytics events (identify happens on the frontend
-      // for accurate device/IP/location attribution)
-      if (isNew) {
+      // One-line diagnostic so we can tail logs and see attribution land in
+      // real time as ad campaigns deliver. raw=the literal startParam from
+      // the client, src=parsed source, ref=resolved referrer id (if any),
+      // isNew=row created on this call, attr=source written on this call
+      // (either via create or back-fill on race-loser).
+      console.log(
+        `[MiniApp Init] tg=${auth.telegramId} raw=${JSON.stringify(startParam || null)} src=${JSON.stringify(source)} ref=${referrerId || null} isNew=${isNew} attr=${attributedNow}`
+      );
+
+      if (isNew || attributedNow) {
+        // Credit partner referral bonus once (only if user still has the
+        // starter balance). attributedNow covers the race-loser case where
+        // /api/projects won the create and stored NULL source — we now
+        // backfilled it and need to honor the partner bonus too.
+        if (partnerBonus && user.referredBy && Number(user.balance) <= 0.2) {
+          try {
+            await prisma.user.update({
+              where: { id: user.id },
+              data: { balance: { increment: new Decimal(partnerBonus.toFixed(4)) } },
+            });
+            console.log(`[MiniApp Init] Partner bonus $${partnerBonus.toFixed(2)} credited to user ${user.id} via tag ${partnerTag}`);
+          } catch (err) {
+            console.error("[MiniApp Init] Partner bonus credit error:", err);
+          }
+        }
+
         void trackEvent(auth.telegramId!, "user_registered", {
           source,
           referrer_id: referrerId,
           telegram_id: auth.telegramId,
+          backfilled: attributedNow && !isNew ? true : undefined,
         });
+      }
+
+      if (isNew) {
+        // The user opened the Mini App without going through /start in the
+        // bot — fire the welcome message to their bot chat so they see the
+        // standard Apps Father onboarding card too. Only on true first
+        // creation; we don't want to spam users whose row existed but was
+        // simply backfilled.
+        const lang = (user.language as Lang) || "en";
+        void sendBotWelcome(auth.telegramId!, lang, startParam || null);
       }
 
       res.json({ ok: true, isNew, utmSource: user.utmSource });
@@ -156,7 +403,7 @@ export function createWebServer() {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
 
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const projects = await projectService.getProjectsByUser(user.id);
 
       const result = await Promise.all(projects.map(async (p: any) => {
@@ -271,7 +518,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const result = await projectService.buySlot(user.id);
 
       void trackEvent(auth.telegramId!, "purchase", {
@@ -291,34 +538,44 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const { amount, method } = req.body;
       const amountUsd = parseFloat(amount);
-      if (isNaN(amountUsd) || amountUsd < 10) {
-        res.status(400).json({ error: "Minimum top-up is $10" });
+      if (isNaN(amountUsd) || amountUsd < 2) {
+        res.status(400).json({ error: "Minimum top-up is $2" });
         return;
       }
 
       let invoiceUrl: string;
+      let paymentId: number | undefined;
       if (method === "cryptobot") {
         const result = await billingService.createCryptoBotInvoice(user.id, amountUsd);
         invoiceUrl = result.invoiceUrl;
+        paymentId = result.paymentId;
       } else if (method === "stars") {
         const STAR_RATE = 0.013;
         const rawStars = Math.ceil(amountUsd / STAR_RATE);
         const stars = Math.floor(rawStars / 10) * 10;
         const result = await billingService.createStarsInvoice(user.id, amountUsd, stars);
         invoiceUrl = result.invoiceUrl;
+        paymentId = result.paymentId;
       } else if (method === "ton") {
         const result = await billingService.createTonPayment(user.id, amountUsd);
         res.json({ ok: true, ton: true, paymentId: result.paymentId, walletAddress: result.walletAddress, amountNano: result.amountNano });
         return;
       } else {
+        // "Other Crypto" (NowPayments) — provider charges high fees on small
+        // invoices, so require at least $15 to keep the deposit worthwhile.
+        if (amountUsd < 15) {
+          res.status(400).json({ error: "Other Crypto requires a minimum of $15. Please use TON, Stars or Crypto Bot for smaller amounts." });
+          return;
+        }
         const result = await billingService.createTopUp(user.id, amountUsd);
         invoiceUrl = result.invoiceUrl;
+        paymentId = (result as any).paymentId;
       }
 
-      res.json({ ok: true, invoiceUrl });
+      res.json({ ok: true, invoiceUrl, paymentId });
     } catch (err: any) {
       console.error("[MiniApp API] Topup error:", err);
       res.status(400).json({ error: err.message || "Failed to create payment" });
@@ -339,12 +596,37 @@ export function createWebServer() {
     }
   });
 
+  // Generic payment status check — used by the Mini App as a fallback poller
+  // for Stars / CryptoBot when the upstream callback doesn't reach the user.
+  app.get("/telegram-mini-app/api/payment-status", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const paymentId = parseInt(String(req.query.paymentId || ""));
+      if (!paymentId) { res.status(400).json({ error: "Missing paymentId" }); return; }
+
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
+      if (!payment) { res.status(404).json({ error: "Not found" }); return; }
+      if (payment.userId !== user.id) { res.status(403).json({ error: "Forbidden" }); return; }
+
+      res.json({
+        status: payment.status,
+        amountUsd: Number(payment.amountUsd),
+        confirmedAt: payment.confirmedAt,
+      });
+    } catch (err) {
+      console.error("[MiniApp API] payment-status error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   app.get("/telegram-mini-app/api/token/:projectId", async (req, res) => {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
 
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const project = await projectService.getProject(req.params.projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
       if (!project.botTokenEncrypted) { res.status(404).json({ error: "No token" }); return; }
@@ -361,9 +643,20 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
-      const balance = await billingService.getUserBalance(user.id);
-      res.json({ balance });
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const [balance, paymentCount, fullUser] = await Promise.all([
+        billingService.getUserBalance(user.id),
+        prisma.payment.count({ where: { userId: user.id, status: "confirmed" } }),
+        prisma.user.findUnique({ where: { id: user.id }, select: { firstDepositBonusGiven: true } }),
+      ]);
+      const firstDepositBonusEligible = paymentCount === 0 && !fullUser?.firstDepositBonusGiven;
+      res.json({
+        balance,
+        paymentCount,
+        firstDepositBonusEligible,
+        firstDepositBonusUsd: 10,
+        minTopupUsd: 2,
+      });
     } catch (err) {
       console.error("[MiniApp API] Balance error:", err);
       res.status(500).json({ error: "Internal server error" });
@@ -376,7 +669,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       if (!user.isPartner) { res.json({ isPartner: false }); return; }
 
       const referrals = await prisma.user.findMany({
@@ -412,7 +705,7 @@ export function createWebServer() {
         partnerTag: user.partnerTag,
         partnerBalance: Number(user.partnerBalance),
         totalEarned,
-        inviteLink: user.partnerTag ? `https://t.me/apps_father_bot?start=${user.partnerTag}` : null,
+        inviteLink: user.partnerTag ? `https://t.me/apps_father_bot/app?startapp=${user.partnerTag}` : null,
         referrals: referralDetails,
       });
     } catch (err) {
@@ -425,7 +718,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       if (!user.isPartner) { res.status(403).json({ error: "Not a partner" }); return; }
 
       const { amount } = req.body;
@@ -455,7 +748,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       if (!user.isPartner) { res.status(403).json({ error: "Not a partner" }); return; }
 
       const { amount, address } = req.body;
@@ -512,7 +805,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const project = await projectService.getProject(req.params.projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
@@ -532,7 +825,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const lang = (user.language as Lang) || "en";
       const project = await projectService.getProject(req.params.projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -742,12 +1035,34 @@ export function createWebServer() {
             }
             console.error("[Chat API] Agent error:", err);
             await projectService.updateProjectStatus(projectId, "error");
+
+            const rawMsg = String(err?.message || err || "");
+            const lower = rawMsg.toLowerCase();
+            const isUpstream =
+              lower.includes("overloaded") ||
+              lower.includes("credit balance") ||
+              lower.includes("rate_limit") ||
+              lower.includes("rate limit") ||
+              lower.includes("service unavailable") ||
+              /\b5\d\d\b/.test(rawMsg) ||
+              lower.includes("anthropic api");
+
+            const friendlyContent = isUpstream
+              ? t(lang, "sys_update_service_unavailable")
+              : `${t(lang, "sys_update_failed")}: ${rawMsg || "Unknown error"}`;
+
+            if (progressMsgId) {
+              chatService.removeMessage(projectId, progressMsgId);
+              broadcastToProject(projectId, { type: "remove_messages", projectId, messageIds: [progressMsgId] });
+            }
+
             const errMsg = chatService.addMessage(projectId, {
               role: "assistant",
               type: "error",
-              content: `${t(lang, "sys_update_failed")}: ${err.message || "Unknown error"}`,
+              content: friendlyContent,
             });
             broadcastToProject(projectId, { type: "message", message: errMsg });
+            broadcastToProject(projectId, { type: "status", projectId, status: "error", messageId: errMsg.id });
             processingProjects.delete(projectId);
           }
         })();
@@ -982,7 +1297,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const suggestLang = (user.language as Lang) || "en";
       const project = await projectService.getProject(req.params.projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -999,7 +1314,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const planLang = (user.language as Lang) || "en";
       const projectId = req.params.projectId;
       const project = await projectService.getProject(projectId);
@@ -1048,7 +1363,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const buildLang = (user.language as Lang) || "en";
       const projectId = req.params.projectId;
       const project = await projectService.getProject(projectId);
@@ -1216,7 +1531,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const editPlanLang = (user.language as Lang) || "en";
       const projectId = req.params.projectId;
       const project = await projectService.getProject(projectId);
@@ -1258,7 +1573,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const project = await projectService.getProject(req.params.projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
@@ -1275,7 +1590,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const projectId = req.params.projectId;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1313,7 +1628,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const project = await projectService.getProject(req.params.projectId as string);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
@@ -1344,7 +1659,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1369,7 +1684,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1388,7 +1703,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1411,7 +1726,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1432,7 +1747,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1456,7 +1771,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1479,7 +1794,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1508,7 +1823,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1539,7 +1854,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1628,7 +1943,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1656,7 +1971,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1689,7 +2004,7 @@ export function createWebServer() {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await projectService.getOrCreateUser(auth.telegramId!, auth.username, auth.firstName);
+      const { user } = await getOrCreateUserFromReq(req, auth);
       const projectId = req.params.projectId as string;
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
@@ -1771,6 +2086,17 @@ export function createWebServer() {
   app.get("/telegram-mini-app/api/admin/stats/sources", async (req, res) => {
     if (!adminGuard(req, res)) return;
     try {
+      // Optional date range filter on user.created_at. Both bounds are
+      // optional ISO timestamps. Invalid values are silently ignored so
+      // bad input never breaks the admin dashboard.
+      const parseIso = (raw: unknown): Date | null => {
+        if (typeof raw !== "string" || !raw) return null;
+        const d = new Date(raw);
+        return isNaN(d.getTime()) ? null : d;
+      };
+      const fromDate = parseIso(req.query.from);
+      const toDate = parseIso(req.query.to);
+
       // One pass: user-level aggregate (cheap on admin scale)
       const userAgg = await prisma.$queryRawUnsafe<Array<{
         id: number;
@@ -1802,7 +2128,9 @@ export function createWebServer() {
             WHERE pm.user_id = u.id AND pm.status = 'confirmed'
           ), 0) AS revenue
         FROM users u
-      `);
+        WHERE ($1::timestamptz IS NULL OR u.created_at >= $1::timestamptz)
+          AND ($2::timestamptz IS NULL OR u.created_at <  $2::timestamptz)
+      `, fromDate, toDate);
 
       type Metrics = {
         users: number; createdBot: number; createdPlan: number; createdApp: number;
@@ -1923,6 +2251,10 @@ export function createWebServer() {
       }
 
       res.json({
+        range: {
+          from: fromDate ? fromDate.toISOString() : null,
+          to: toDate ? toDate.toISOString() : null,
+        },
         all: { source: "All", ...finalizeMetrics(allMetrics) },
         organic: { source: "Organic", ...finalizeMetrics(organicMetrics) },
         sources,
@@ -2038,6 +2370,122 @@ export function createWebServer() {
       } else { res.status(400).json({ error: "action must be 'set' or 'add'" }); return; }
       res.json({ balance: Number(updated.balance) });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Wipe user-attached data (payments, conversations, usage logs, withdrawals,
+  // voucher redemptions) and reset user profile fields to defaults — but KEEP
+  // the User row and KEEP all Projects (apps continue to function under the
+  // anonymized user). Used from the Admin → User View "Wipe User Data" button.
+  app.delete("/telegram-mini-app/api/admin/users/:id/data", async (req, res) => {
+    if (!adminGuard(req, res)) return;
+    try {
+      const userId = parseInt(req.params.id);
+      const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, telegramId: true } });
+      if (!user) { res.status(404).json({ error: "User not found" }); return; }
+
+      const result = await prisma.$transaction(async (tx) => {
+        const [payments, conversations, usageLogs, withdrawals, voucherRedemptions] = await Promise.all([
+          tx.payment.deleteMany({ where: { userId } }),
+          tx.conversation.deleteMany({ where: { userId } }),
+          tx.usageLog.deleteMany({ where: { userId } }),
+          tx.withdrawal.deleteMany({ where: { userId } }),
+          tx.voucherRedemption.deleteMany({ where: { userId } }),
+        ]);
+
+        await tx.user.update({
+          where: { id: userId },
+          data: {
+            username: null,
+            firstName: null,
+            balance: new Decimal(0),
+            partnerBalance: new Decimal(0),
+            isPartner: false,
+            partnerPercent: null,
+            partnerTag: null,
+            partnerReferralBonus: null,
+            firstDepositBonusGiven: false,
+            utmSource: null,
+            referredBy: null,
+            language: "en",
+          },
+        });
+
+        return {
+          payments: payments.count,
+          conversations: conversations.count,
+          usageLogs: usageLogs.count,
+          withdrawals: withdrawals.count,
+          voucherRedemptions: voucherRedemptions.count,
+        };
+      });
+
+      console.log(`[Admin] Wiped data for user ${userId} (tg=${user.telegramId}):`, result);
+      res.json({ ok: true, deleted: result });
+    } catch (err: any) {
+      console.error("[Admin] Wipe user data error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // FULL RESET — deletes everything for this user (projects + bots managed by
+  // us, all attached records, and the User row itself). After this the user
+  // is registered fresh on next /api/init, so source/referrer/partner-tag
+  // attribution can be tested end-to-end.
+  // Intended ONLY for internal testing, not for production user management.
+  app.delete("/telegram-mini-app/api/admin/users/:id/full", async (req, res) => {
+    if (!adminGuard(req, res)) return;
+    try {
+      const userId = parseInt(req.params.id);
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, telegramId: true, projects: { select: { id: true } } },
+      });
+      if (!user) { res.status(404).json({ error: "User not found" }); return; }
+
+      const projectIds = user.projects.map((p) => p.id);
+
+      const result = await prisma.$transaction(async (tx) => {
+        // First clear records that reference projects (FK constraints).
+        let assets = { count: 0 };
+        let versions = { count: 0 };
+        if (projectIds.length) {
+          [assets, versions] = await Promise.all([
+            tx.asset.deleteMany({ where: { projectId: { in: projectIds } } }),
+            tx.version.deleteMany({ where: { projectId: { in: projectIds } } }),
+          ]);
+        }
+
+        // User-attached records (these cover both project-bound and not,
+        // since both conversation.userId and usageLog.userId are required).
+        const [payments, conversations, usageLogs, withdrawals, voucherRedemptions] = await Promise.all([
+          tx.payment.deleteMany({ where: { userId } }),
+          tx.conversation.deleteMany({ where: { userId } }),
+          tx.usageLog.deleteMany({ where: { userId } }),
+          tx.withdrawal.deleteMany({ where: { userId } }),
+          tx.voucherRedemption.deleteMany({ where: { userId } }),
+        ]);
+
+        const projects = await tx.project.deleteMany({ where: { userId } });
+        await tx.user.delete({ where: { id: userId } });
+
+        return {
+          assets: assets.count,
+          versions: versions.count,
+          payments: payments.count,
+          conversations: conversations.count,
+          usageLogs: usageLogs.count,
+          withdrawals: withdrawals.count,
+          voucherRedemptions: voucherRedemptions.count,
+          projects: projects.count,
+        };
+      });
+
+      console.log(`[Admin] FULL RESET for user ${userId} (tg=${user.telegramId}):`, result);
+      res.json({ ok: true, deleted: result });
+    } catch (err: any) {
+      console.error("[Admin] Full reset error:", err);
+      res.status(500).json({ error: err.message });
+    }
   });
 
   app.get("/telegram-mini-app/api/admin/projects", async (req, res) => {
@@ -2156,8 +2604,10 @@ export function createWebServer() {
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
-  // Serve index.html with OpenPanel clientId injected as data attribute
-  app.get("/telegram-mini-app/", (req, res) => {
+  // Serve index.html with OpenPanel clientId injected as data attribute.
+  // Match both `/telegram-mini-app` and `/telegram-mini-app/` because some
+  // clients/cache-busters request the URL without a trailing slash.
+  const serveMiniAppIndex = (_req: any, res: any) => {
     const indexPath = path.join(__dirname, "..", "..", "mini_app", "index.html");
     let html = fs.readFileSync(indexPath, "utf8");
     html = html.replace(
@@ -2166,7 +2616,9 @@ export function createWebServer() {
     );
     res.setHeader("Content-Type", "text/html");
     res.send(html);
-  });
+  };
+  app.get("/telegram-mini-app", serveMiniAppIndex);
+  app.get("/telegram-mini-app/", serveMiniAppIndex);
   app.use("/telegram-mini-app", express.static(path.join(__dirname, "..", "..", "mini_app")));
 
   app.use("/app", appRoutes);

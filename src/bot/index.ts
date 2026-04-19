@@ -26,16 +26,13 @@ export function createBot(): Bot<BotContext> {
     return startCommand(ctx);
   });
 
-  registerCallbackHandlers(bot);
-  registerManagedBotHandlers(bot);
-
-  bot.on("message", (ctx) => {
-    if (ctx.chat.type !== "private") return;
-    return startCommand(ctx);
-  });
-
+  // IMPORTANT: payment-related handlers must be registered BEFORE the generic
+  // `bot.on("message")` catch-all, otherwise grammy will short-circuit at the
+  // first matching handler that doesn't call next() and Stars payments will
+  // never reach handleStarsPayment.
   bot.on("pre_checkout_query" as any, async (ctx: any) => {
     try {
+      console.log(`[Bot] pre_checkout_query: user=${ctx.from?.id}, payload=${ctx.preCheckoutQuery?.invoice_payload}`);
       await ctx.answerPreCheckoutQuery(true);
     } catch (err) {
       console.error("[Bot] pre_checkout_query error:", err);
@@ -50,10 +47,22 @@ export function createBot(): Bot<BotContext> {
       const payload = JSON.parse(payment.invoice_payload);
       if (payload.type === "topup" && payload.paymentId) {
         await billingService.handleStarsPayment(payload.paymentId);
+      } else {
+        console.warn(`[Bot] Stars payment with unknown payload:`, payload);
       }
     } catch (err) {
       console.error("[Bot] successful_payment error:", err);
     }
+  });
+
+  registerCallbackHandlers(bot);
+  registerManagedBotHandlers(bot);
+
+  bot.on("message", (ctx) => {
+    if (ctx.chat.type !== "private") return;
+    // Don't treat service messages (like successful_payment) as a /start trigger
+    if ((ctx.message as any).successful_payment) return;
+    return startCommand(ctx);
   });
 
   bot.catch((err: any) => {

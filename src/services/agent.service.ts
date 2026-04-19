@@ -192,6 +192,35 @@ RULES FOR BACKEND (routes.js):
 9. Do NOT add auth/initData verification — handled by server middleware
 10. You CAN require npm packages — install them first with shell("npm install <pkg>")
 
+🚨 BOT WEBHOOK — ABSOLUTE RULE (NO EXCEPTIONS):
+The ONLY accepted route path for forwarding Telegram bot updates into routes.js is:
+
+    router.post("/bot-webhook", async (req, res) => { ... })
+
+The platform uses Express router matching against the literal path "/bot-webhook".
+Anything else SILENTLY breaks update delivery — the route will never fire, but
+no error is thrown anywhere because the platform just decides "this project has
+no custom webhook" and falls back to the default "Tap the button" reply.
+
+❌ NEVER write any of these — they all silently break:
+   router.post("/webhook", ...)            ← legacy fallback only, do not use in new code
+   router.post("/bot/webhook", ...)        ← will not match
+   router.post("/api/bot-webhook", ...)    ← will not match
+   router.post("/telegram-webhook", ...)   ← will not match
+   router.post("/tg-webhook", ...)         ← will not match
+   router.post("/bot_webhook", ...)        ← underscore breaks the match
+   app.post("/bot-webhook", ...)           ← must be router.post — 'app' is not in scope
+
+✅ ALWAYS write EXACTLY:
+   router.post("/bot-webhook", async (req, res) => {
+     res.json({ ok: true });   // respond 200 BEFORE any work — Telegram retries on slow responses
+     try { /* handle update */ } catch (err) { console.error("[bot-webhook]", err); }
+   });
+
+If you need bot-side behavior (commands, /start <param>, callbacks, push) →
+load_skill('bot-management') and copy the canonical template VERBATIM. Do NOT
+invent your own path naming.
+
 DATABASE KEY DESIGN (CRITICAL):
 - Store each user as a separate key: db.set('user:' + telegramId, userData)
 - Read one user: db.get('user:' + telegramId) — instant O(1) lookup
@@ -211,22 +240,24 @@ TELEGRAM STARS PAYMENTS:
 
 REFERRAL SYSTEM (when user asks for referrals/invite system):
 1. Referral link format: const refLink = 'https://t.me/' + botUsername + '?start=' + userId;
-2. Share via Telegram: 
+2. Share via Telegram:
    const shareText = encodeURIComponent('Your share text here derived from app description');
    const shareUrl = 'https://t.me/share/url?url=' + encodeURIComponent(refLink) + '&text=' + shareText;
    Telegram.WebApp.openTelegramLink(shareUrl);
-3. Backend must handle the start parameter in the bot webhook to track referrals:
-   - The bot webhook receives updates with /start {referrerId} — the start param is the referrer's userId
-   - In the webhook handler (routes.js doesn't handle bot webhooks — this is handled by the platform automatically)
-   - Instead, handle referral tracking via API: when a NEW user opens the app for the first time, frontend sends their startParam to the backend
-   - Frontend: const startParam = Telegram.WebApp.initDataUnsafe?.start_param; if (startParam) apiCall('/api/{projectId}/register', { method:'POST', body: JSON.stringify({ referrerId: startParam }) })
-   - Backend route POST /register: check if user is new, if yes and referrerId exists, credit the referrer with the bonus
-4. Store referral data per-user: db.set('user:' + oderId, { ...userData, referredBy: referrerId, referrals: [] })
+3. Two complementary tracking paths — implement BOTH for reliable attribution:
+   a) Mini App path (when user clicks the share link and opens the Mini App directly):
+      const startParam = Telegram.WebApp.initDataUnsafe?.start_param;
+      if (startParam) apiCall('/api/{projectId}/register', { method:'POST', body: JSON.stringify({ referrerId: startParam }) });
+   b) Bot path (when user lands on the bot first via /start <referrerId>):
+      Define POST /bot-webhook in routes.js (see bot-management skill) and persist
+      msg.text.split(' ')[1] as the referrer on the new user's record.
+   Both paths write to the SAME user record — the second one is a no-op for already-attributed users.
+4. Store referral data per-user: db.set('user:' + userId, { ...userData, referredBy: referrerId, referrals: [] })
 5. Update referrer's data: push new userId to referrer's referrals array, add bonus to referrer's balance
 6. Let the user configure the bonus amount — store it in db as a config or use a default
 7. Show referral stats: total referrals count, earned bonuses
 8. Copy link button: navigator.clipboard.writeText(refLink) with a "Copied!" toast feedback
-9. NEVER use bot API webhooks directly in routes.js — use the frontend start_param approach described above
+9. If the project includes /bot-webhook → load_skill('bot-management') for the canonical pattern.
 
 IMPORTANT - ROUTES HOT-RELOAD:
 Backend routes.js is reloaded on EVERY API request. You do NOT need to restart anything after editing routes.js. Changes take effect immediately on the next http_request test.
@@ -340,14 +371,16 @@ DEBUGGING RULES:
 WORKFLOW FOR NEW APP:
 1. list_files + read existing files (parallel calls to understand current state)
 2. Decide: does this app need real-time? (chat, games, live updates → YES → load_skill('websocket'))
-3. Plan ALL files mentally: decide endpoints, db keys, WS message types, frontend API calls BEFORE writing any code
-4. Write backend/routes.js FIRST — REST endpoints + module.exports.ws handler if real-time needed
-5. Write frontend files (index.html, styles.css, app.js) — endpoint names and WS message types MUST match routes.js exactly
-6. shell("npm install <pkg>") if external packages needed
-7. telegram_api to configure bot (setMyDescription, setMyCommands, setChatMenuButton) — ONLY on first build
-8. VERIFY: grep app.js for all apiCall/fetch URLs, then test each with http_request
-9. fetch_url to read API docs when you need to learn an unfamiliar external API
-9. Call done() ONLY after verifying all endpoints work
+3. Decide: does this app need custom bot behavior? (custom commands, /start <param> deep links, callback buttons, push notifications, command menu → YES → load_skill('bot-management'))
+4. Plan ALL files mentally: decide endpoints, db keys, WS message types, frontend API calls BEFORE writing any code
+5. Write backend/routes.js FIRST — REST endpoints + module.exports.ws handler if real-time needed + router.post("/bot-webhook", ...) (EXACT path, no variants) if custom bot behavior needed
+6. Write frontend files (index.html, styles.css, app.js) — endpoint names and WS message types MUST match routes.js exactly
+7. shell("npm install <pkg>") if external packages needed
+8. telegram_api to configure bot (setMyDescription, setMyShortDescription, setChatMenuButton, setMyCommands) — ONLY on first build
+9. If you set up /bot-webhook or commands: telegram_api("getWebhookInfo", {}) to verify webhook is healthy (no last_error_message)
+10. VERIFY: grep app.js for all apiCall/fetch URLs, then test each with http_request
+11. fetch_url to read API docs when you need to learn an unfamiliar external API
+12. Call done() ONLY after verifying all endpoints work
 
 WORKFLOW FOR UPDATE:
 1. READ THE PROJECT CONTEXT in your prompt FIRST. It contains:
@@ -364,6 +397,20 @@ WORKFLOW FOR UPDATE:
 6. Run syntax check: shell("node -e \"new Function(require('fs').readFileSync('backend/routes.js','utf8'))\"") BEFORE deploy.
 7. Call done().
 IMPORTANT: Do NOT call telegram_api(setMyDescription) during updates — only set bot description on first build.
+
+BOT-SIDE UPDATES (commands, /start params, callbacks, push):
+- If the user wants to add/change bot commands, /start <param> handling, callback buttons,
+  push notifications, or anything that runs INSIDE the bot (not in the Mini App) →
+  load_skill('bot-management') BEFORE writing code. Pattern depends on what's needed:
+  pure menu config (setMyCommands) is one tool call; actual command replies need a
+  route in routes.js with the EXACT path: router.post("/bot-webhook", ...). Any other
+  path (/webhook, /bot/webhook, /tg-webhook, etc.) silently breaks — see the
+  "BOT WEBHOOK — ABSOLUTE RULE" block above.
+- BEFORE you finish, grep routes.js for the literal string "/bot-webhook" to confirm
+  the path is correct. If you find "/webhook" or any other variant in a router.post
+  intended for Telegram updates, RENAME it to "/bot-webhook" immediately.
+- After adding/changing /bot-webhook or commands, ALWAYS run telegram_api("getWebhookInfo", {})
+  and confirm result.last_error_message is null. If not null, read server_logs and fix.
 
 AFTER WRITING CODE — DO NOT RE-READ:
 - After a successful edit_file or write_file, the confirmation ("OK: Replaced 1 occurrence" / "OK: Written N lines") proves the change was applied. Do NOT re-read the same file to "verify" your edit.
@@ -404,7 +451,7 @@ PARALLEL TOOL CALLS — USE AGGRESSIVELY:
 - Write related files together: write_file(index.html) + write_file(styles.css) in ONE turn
 - Initialize multiple db keys: db(set, 'users', []) + db(set, 'settings', {}) in ONE turn
 - Test multiple endpoints: http_request(GET /user) + http_request(GET /leaderboard) in ONE turn
-- Configure bot: telegram_api(setMyDescription) + telegram_api(setMyCommands) + telegram_api(setChatMenuButton) in ONE turn
+- Configure bot: telegram_api(setMyDescription) + telegram_api(setChatMenuButton) in ONE turn
 - NEVER make 1 tool call when you could make 2-5 independent calls in the same turn
 - check_todo calls are FREE — always batch them with other tool calls, never alone
 
@@ -702,8 +749,8 @@ export interface AgentResult {
 export const QUALITY_TIERS: Record<number, { model: string; thinking: number; maxIterations: number }> = {
   1: { model: "claude-sonnet-4-6", thinking: 2000, maxIterations: 100 },
   2: { model: "claude-sonnet-4-6", thinking: 4000, maxIterations: 140 },
-  3: { model: "claude-opus-4-6", thinking: 2000, maxIterations: 100 },
-  4: { model: "claude-opus-4-6", thinking: 4000, maxIterations: 140 },
+  3: { model: "claude-opus-4-7", thinking: 2000, maxIterations: 100 },
+  4: { model: "claude-opus-4-7", thinking: 4000, maxIterations: 140 },
 };
 
 export class AgentService {

@@ -3,12 +3,19 @@
 <head>
   <meta charset="UTF-8">
   <title>Apps Father</title>
+  <!--
+    Anchor every relative URL to /telegram-mini-app/ regardless of how the
+    page was opened. Some clients/cache-busters launch us as
+    `/telegram-mini-app?r=1` (no trailing slash) which breaks relative
+    asset paths and causes a white screen with strict-MIME errors.
+  -->
+  <base href="/telegram-mini-app/">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="format-detection" content="telephone=no">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <link href="bootstrap.min.css" rel="stylesheet">
   <link href="bootstrap-extra.css" rel="stylesheet">
-  <link href="styles.css?r=86" rel="stylesheet">
+  <link href="styles.css?r=103" rel="stylesheet">
   <script>
     window.op=window.op||function(){var n=[];return new Proxy(function(){arguments.length&&n.push([].slice.call(arguments))},{get:function(t,r){return"q"===r?n:function(){n.push([r].concat([].slice.call(arguments)))}} ,has:function(t,r){return"q"===r}}) }();
     window.op('init', {
@@ -22,12 +29,25 @@
       },
     });
   </script>
-  <script src="https://openpanel.dev/op1.js" defer async></script>
+  <!--
+    All external scripts are `defer` so the body renders immediately even if
+    a CDN is slow or unreachable. Defer preserves source order and runs
+    everything before DOMContentLoaded, so app.js can still rely on
+    Telegram.WebApp / lottie / pako / TON_CONNECT_UI / TonWeb being ready.
+  -->
+  <script src="https://openpanel.dev/op1.js" defer></script>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
   <script src="https://unpkg.com/@tonconnect/ui@2.0.9/dist/tonconnect-ui.min.js"></script>
   <script src="https://unpkg.com/tonweb@0.0.66/dist/tonweb.js"></script>
+  <!-- Telegram Analytics — independent, can stay async -->
+  <!-- <script
+    async
+    src="https://tganalytics.xyz/index.js"
+    onload="initAnalytics && initAnalytics()"
+    type="text/javascript"
+  ></script> -->
 </head>
 <body class="emoji_image">
 
@@ -40,12 +60,13 @@
       <main class="tm-main">
         <section class="tm-main-intro">
           <img src="apps-father-avatar.png?r=1" class="tm-main-intro-picture" style="
-              box-shadow: 0px 16px 60px 60px #1cafe659;
+              box-shadow: 0px 16px 60px 60px #1aa6fe52;
               border-radius: 50%;
           ">
           <h1 class="tm-main-intro-header" style="
           position: relative;
           overflow: visible;
+          margin-left: -12px;
       ">Apps Father<span style="
           font-weight: 300;
           font-size: 10pt;
@@ -141,21 +162,31 @@
           <p class="tm-main-intro-text" style="max-width:312px;" id="topup-balance-text"></p>
         </section>
 
+        <section class="tm-section" id="topup-bonus-section" style="padding-bottom:0; display:none;">
+          <div class="topup-bonus-banner" id="topup-bonus-banner">
+            <div class="topup-bonus-icon">🎁</div>
+            <div class="topup-bonus-content">
+              <div class="topup-bonus-title">Get +$10 FREE on your first deposit</div>
+              <div class="topup-bonus-sub">Auto-credited the moment your first payment is confirmed</div>
+            </div>
+          </div>
+        </section>
+
         <section class="tm-section">
           <div class="tm-section-header" style="position:relative;">
             <h2 class="tm-section-header-text" data-i18n="topup_amount">Amount</h2>
             <div class="topup-amounts" id="topup-amounts">
+              <button class="topup-amount-btn" data-amount="5">$5</button>
               <button class="topup-amount-btn" data-amount="10">$10</button>
-              <button class="topup-amount-btn" data-amount="25">$25</button>
-              <button class="topup-amount-btn active" data-amount="50">$50</button>
-              <button class="topup-amount-btn" data-amount="100">$100</button>
+              <button class="topup-amount-btn" data-amount="50">$50</button>
+              <button class="topup-amount-btn active" data-amount="250">$250</button>
             </div>
           </div>
           <div class="topup-input-wrap">
             <span class="topup-input-prefix">$</span>
-            <input type="number" class="topup-input" id="topup-input" value="50" min="10" step="1">
+            <input type="number" class="topup-input" id="topup-input" value="50" min="2" step="1">
           </div>
-          <p class="help-text" data-i18n="topup_min">Minimum top-up is $10</p>
+          <p class="help-text" data-i18n="topup_min">Minimum top-up is $2</p>
         </section>
 
         <section class="tm-section">
@@ -796,7 +827,15 @@
     </div>
   </div>
 
-  <script src="i18n.js?r=6"></script>
-  <script src="app.js?r=94"></script>
+  <script src="i18n.js?r=9" defer></script>
+  <script src="app.js?r=110" defer></script>
+  <script>
+      function initAnalytics() {
+        window.telegramAnalytics.init({
+          token: 'eyJhcHBfbmFtZSI6ImFwcHNfZmF0aGVyIiwiYXBwX3VybCI6Imh0dHBzOi8vdC5tZS9hcHBzX2ZhdGhlciIsImFwcF9kb21haW4iOiJodHRwczovL2FwcHMtZmF0aGVyLmNvbS90ZWxlZ3JhbS1taW5pLWFwcCJ9!obnnT9dZ3vjZw8AprJ8A1v7TV8BLhsrS7FKhOBjT0tI=',
+          appName: 'apps_father',
+        });
+      }
+  </script>
 </body>
 </html>

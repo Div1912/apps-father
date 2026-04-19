@@ -13,7 +13,7 @@ export const MODEL_PRICING: Record<string, { input: number; output: number; cach
     cache_write: 3.75 / 1_000_000,
     cache_read: 0.30 / 1_000_000,
   },
-  "claude-opus-4-6": {
+  "claude-opus-4-7": {
     input: 5.00 / 1_000_000,
     output: 25.00 / 1_000_000,
     cache_write: 6.25 / 1_000_000,
@@ -398,9 +398,10 @@ export class BillingService {
         body: JSON.stringify({ chat_id: user.telegramId.toString(), text, parse_mode: "HTML" }),
       }).catch(() => {});
 
-      notifyDeposit(Number(user.telegramId), user.username ?? undefined, amountUsd, newBalance);
+      notifyDeposit(Number(user.telegramId), user.username ?? undefined, amountUsd, newBalance, "ton");
       void trackEvent(Number(user.telegramId), "payment", { amount: amountUsd, method: "ton" });
 
+      await this.creditFirstDepositBonus(user.id, paymentId);
       await this.creditReferralBonus(user, amountUsd);
     }
   }
@@ -441,9 +442,10 @@ export class BillingService {
         }),
       }).catch(() => {});
 
-      notifyDeposit(Number(user.telegramId), user.username ?? undefined, Number(payment.amountUsd), newBalance);
+      notifyDeposit(Number(user.telegramId), user.username ?? undefined, Number(payment.amountUsd), newBalance, "stars");
       void trackEvent(Number(user.telegramId), "payment", { amount: Number(payment.amountUsd), method: "stars" });
 
+      await this.creditFirstDepositBonus(user.id, paymentId);
       await this.creditReferralBonus(user, Number(payment.amountUsd));
     }
   }
@@ -522,9 +524,10 @@ export class BillingService {
             }),
           });
 
-          notifyDeposit(Number(user.telegramId), user.username ?? undefined, Number(payment.amountUsd), newBalance);
+          notifyDeposit(Number(user.telegramId), user.username ?? undefined, Number(payment.amountUsd), newBalance, "nowpayments");
           void trackEvent(Number(user.telegramId), "payment", { amount: Number(payment.amountUsd), method: "nowpayments" });
 
+          await this.creditFirstDepositBonus(user.id, paymentId);
           await this.creditReferralBonus(user, Number(payment.amountUsd));
         }
       } catch (notifyErr) {
@@ -553,6 +556,51 @@ export class BillingService {
       status: payment.status,
       amountUsd: Number(payment.amountUsd),
     };
+  }
+
+  /**
+   * Credit a one-time +$10 bonus on the user's very first confirmed deposit.
+   * Atomic: only triggers if `firstDepositBonusGiven` is still false AND the
+   * confirmed-payments-count equals 1 (i.e. the payment we just confirmed).
+   */
+  async creditFirstDepositBonus(userId: number, justConfirmedPaymentId: number): Promise<void> {
+    const FIRST_DEPOSIT_BONUS_USD = 10;
+    try {
+      // Count confirmed payments that are NOT the one we just confirmed
+      const otherConfirmed = await prisma.payment.count({
+        where: { userId, status: "confirmed", id: { not: justConfirmedPaymentId } },
+      });
+      if (otherConfirmed > 0) return;
+
+      // Atomic: flag toggles only if currently false; this prevents double-credit.
+      const updated = await prisma.user.updateMany({
+        where: { id: userId, firstDepositBonusGiven: false },
+        data: {
+          firstDepositBonusGiven: true,
+          balance: { increment: new Decimal(FIRST_DEPOSIT_BONUS_USD.toFixed(4)) },
+        },
+      });
+      if (updated.count === 0) return;
+
+      const user = await prisma.user.findUnique({ where: { id: userId } });
+      if (!user) return;
+      const newBalance = Number(user.balance);
+
+      const text =
+        `<b><tg-emoji emoji-id="5384541907051357217">🎁</tg-emoji> First-deposit bonus!</b>\n\n` +
+        `<b><tg-emoji emoji-id="5377851954321989517">💲</tg-emoji> +$${FIRST_DEPOSIT_BONUS_USD.toFixed(2)}</b> bonus credited to your balance.\n\n` +
+        `<blockquote>New balance: <b>$${newBalance.toFixed(2)}</b></blockquote>`;
+
+      await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: user.telegramId.toString(), text, parse_mode: "HTML" }),
+      }).catch(() => {});
+
+      console.log(`[Billing] First-deposit bonus +$${FIRST_DEPOSIT_BONUS_USD} credited to user ${userId}`);
+    } catch (err) {
+      console.error("[Billing] Failed to credit first-deposit bonus:", err);
+    }
   }
 
   async creditReferralBonus(user: { referredBy: bigint | null; telegramId: bigint }, amountUsd: number): Promise<void> {

@@ -19,6 +19,11 @@ ssh root@204.168.219.20 "mkdir -p /opt/apps-father/mini_app"
 scp -r mini_app/* root@204.168.219.20:/opt/apps-father/mini_app/
 Write-Host "Mini App OK" -ForegroundColor Green
 
+Write-Host "=== Uploading landing ===" -ForegroundColor Cyan
+ssh root@204.168.219.20 "mkdir -p /opt/apps-father/landing/samples"
+scp -r landing/* root@204.168.219.20:/opt/apps-father/landing/
+Write-Host "Landing OK" -ForegroundColor Green
+
 Write-Host "=== Syncing package.json & deps ===" -ForegroundColor Cyan
 scp package.json root@204.168.219.20:/opt/apps-father/package.json
 ssh root@204.168.219.20 "cd /opt/apps-father && npm install --omit=dev --no-audit --no-fund 2>&1 | tail -3"
@@ -45,6 +50,14 @@ $withdrawSql | Out-File -Encoding utf8 -FilePath tmp_wd.sql
 scp tmp_wd.sql root@204.168.219.20:/tmp/tmp_wd.sql
 ssh root@204.168.219.20 "docker cp /tmp/tmp_wd.sql apps_father_db:/tmp/tmp_wd.sql; docker exec apps_father_db psql -U apps_father -d apps_father -f /tmp/tmp_wd.sql"
 Remove-Item tmp_wd.sql -ErrorAction SilentlyContinue
+$retentionSql = "CREATE TABLE IF NOT EXISTS retention_pushes (id SERIAL PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, scenario TEXT NOT NULL, sent_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(user_id, scenario));"
+$retentionSql | Out-File -Encoding utf8 -FilePath tmp_ret.sql
+scp tmp_ret.sql root@204.168.219.20:/tmp/tmp_ret.sql
+ssh root@204.168.219.20 "docker cp /tmp/tmp_ret.sql apps_father_db:/tmp/tmp_ret.sql; docker exec apps_father_db psql -U apps_father -d apps_father -f /tmp/tmp_ret.sql"
+ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_father -c 'CREATE INDEX IF NOT EXISTS retention_pushes_user_id_idx ON retention_pushes(user_id);'"
+Remove-Item tmp_ret.sql -ErrorAction SilentlyContinue
+ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_father -c 'ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_notified_at TIMESTAMPTZ;'"
+ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_father -c 'UPDATE users SET admin_notified_at = created_at WHERE admin_notified_at IS NULL;'"
 Write-Host "Migration OK" -ForegroundColor Green
 
 Write-Host "=== Syncing skills ===" -ForegroundColor Cyan

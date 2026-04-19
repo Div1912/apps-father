@@ -5,24 +5,91 @@ import { notifyNewUser } from "./notify.service";
 
 export class ProjectService {
   async getOrCreateUser(telegramId: number, username?: string, firstName?: string, referredBy?: number, utmSource?: string | null) {
-    const existing = await prisma.user.findUnique({ where: { telegramId: BigInt(telegramId) } });
-    const isNew = !existing;
+    // Atomic create-or-fetch using the unique constraint on telegramId.
+    // This is critical: the Mini App fires several API calls in parallel on
+    // load (/api/init, /api/projects, /api/balance, ...). The previous
+    // findUnique-then-upsert pattern had a race where multiple parallel
+    // calls all saw "not exists", all reported isNew=true, all sent the
+    // admin notification, and the random winner of the create decided
+    // whether utm_source/referred_by were persisted (only /api/init passes
+    // those, so the source data was being lost ~75% of the time).
     const createData: any = { telegramId: BigInt(telegramId), username, firstName, balance: 0.2 };
-    if (isNew && referredBy && referredBy !== telegramId) {
+    if (referredBy && referredBy !== telegramId) {
       createData.referredBy = BigInt(referredBy);
     }
-    if (isNew && utmSource) {
+    if (utmSource) {
       createData.utmSource = utmSource;
     }
-    const user = await prisma.user.upsert({
-      where: { telegramId: BigInt(telegramId) },
-      update: { username, firstName },
-      create: createData,
-    });
-    if (isNew) {
-      notifyNewUser(telegramId, username, firstName, referredBy !== telegramId ? referredBy : undefined);
+
+    let user;
+    let isNew = false;
+    // True iff this call is the one that first persisted utmSource and/or
+    // referredBy for this user (either by creating the row, or by
+    // back-filling NULL columns on an existing row that lost the race).
+    let attributedNow = false;
+
+    try {
+      user = await prisma.user.create({ data: createData });
+      isNew = true;
+      attributedNow = Boolean(createData.utmSource || createData.referredBy);
+    } catch (err: any) {
+      if (err?.code === "P2002") {
+        // Lost the race — another call already created the row.
+        // CRITICAL: back-fill utmSource / referredBy if they're still NULL.
+        // Otherwise, when /api/projects (or any other endpoint) wins the
+        // race-to-create, /api/init's legitimate attribution data is
+        // silently discarded. We only fill, never overwrite — once a user
+        // has been attributed, the original source is sticky.
+        const existing = await prisma.user.findUnique({
+          where: { telegramId: BigInt(telegramId) },
+          select: { utmSource: true, referredBy: true },
+        });
+
+        const updateData: any = { username, firstName };
+        if (utmSource && !existing?.utmSource) {
+          updateData.utmSource = utmSource;
+          attributedNow = true;
+        }
+        if (
+          referredBy &&
+          referredBy !== telegramId &&
+          (existing?.referredBy === null || existing?.referredBy === undefined)
+        ) {
+          updateData.referredBy = BigInt(referredBy);
+          attributedNow = true;
+        }
+
+        user = await prisma.user.update({
+          where: { telegramId: BigInt(telegramId) },
+          data: updateData,
+        });
+      } else {
+        throw err;
+      }
     }
-    return { user, isNew };
+
+    if (isNew) {
+      notifyNewUser(
+        telegramId,
+        username,
+        firstName,
+        referredBy !== telegramId ? referredBy : undefined,
+        utmSource ?? null,
+      );
+    } else if (attributedNow) {
+      // We back-filled the source on an existing user that was created
+      // in the same boot-up window without attribution. Notify admins so
+      // we have the same visibility we'd have on a fresh signup.
+      notifyNewUser(
+        telegramId,
+        username,
+        firstName,
+        referredBy !== telegramId ? referredBy : undefined,
+        utmSource ?? null,
+      );
+    }
+
+    return { user, isNew, attributedNow };
   }
 
   async createProject(userId: number, name: string) {
