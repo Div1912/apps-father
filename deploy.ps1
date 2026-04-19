@@ -58,6 +58,7 @@ ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_
 Remove-Item tmp_ret.sql -ErrorAction SilentlyContinue
 ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_father -c 'ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_notified_at TIMESTAMPTZ;'"
 ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_father -c 'UPDATE users SET admin_notified_at = created_at WHERE admin_notified_at IS NULL;'"
+ssh root@204.168.219.20 "docker exec apps_father_db psql -U apps_father -d apps_father -c 'ALTER TABLE users ADD COLUMN IF NOT EXISTS sub_bonus_claimed_at TIMESTAMPTZ;'"
 Write-Host "Migration OK" -ForegroundColor Green
 
 Write-Host "=== Syncing skills ===" -ForegroundColor Cyan

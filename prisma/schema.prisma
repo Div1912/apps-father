@@ -26,6 +26,11 @@ model User {
   partnerBalance      Decimal  @default(0) @map("partner_balance") @db.Decimal(12, 4)
   firstDepositBonusGiven Boolean @default(false) @map("first_deposit_bonus_given")
   adminNotifiedAt     DateTime? @map("admin_notified_at")
+  // Set the first time the user claims the "follow our channel" bonus
+  // (apps_father). Used as the once-per-user gate — non-null means the
+  // 0.10 USD has already landed on their balance and the modal must not
+  // award them again, even if they unsubscribe and resubscribe later.
+  subBonusClaimedAt   DateTime? @map("sub_bonus_claimed_at")
 
   projects        Project[]
   conversations   Conversation[]

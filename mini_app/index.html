@@ -15,7 +15,7 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <link href="bootstrap.min.css" rel="stylesheet">
   <link href="bootstrap-extra.css" rel="stylesheet">
-  <link href="styles.css?r=103" rel="stylesheet">
+  <link href="styles.css?r=113" rel="stylesheet">
   <script>
     window.op=window.op||function(){var n=[];return new Proxy(function(){arguments.length&&n.push([].slice.call(arguments))},{get:function(t,r){return"q"===r?n:function(){n.push([r].concat([].slice.call(arguments)))}} ,has:function(t,r){return"q"===r}}) }();
     window.op('init', {
@@ -53,6 +53,38 @@
 
   <div id="aj_progress" class="progress-bar" style="width:100%;transition:width .3s linear,box-shadow .2s;position:fixed;z-index:1000;top:0;height:3px;box-shadow:inset 0 0 0 var(--accent-color,#39ade7);"></div>
   <div id="toast-container"></div>
+
+  <!-- ═══ FOLLOW-CHANNEL BONUS MODAL ═══
+       Shown 5 s after the user lands on the main menu (post-onboarding),
+       once per session, only when the server says they're not subscribed
+       AND haven't already claimed the one-time bonus. JS lives in app.js
+       (openSubModal / closeSubModal / claimSubBonus). -->
+  <div id="sub-modal" class="sub-modal-overlay hidden" aria-hidden="true">
+    <div class="sub-modal" role="dialog" aria-labelledby="sub-modal-title">
+      <div class="sub-modal-handle" id="sub-modal-handle"></div>
+      <button class="sub-modal-close" id="sub-modal-close" aria-label="Close">&times;</button>
+      <div class="sub-modal-glow"></div>
+      <div class="sub-modal-icon">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 2 11 13"/>
+          <path d="m22 2-7 20-4-9-9-4 20-7z"/>
+        </svg>
+      </div>
+      <div class="sub-modal-bonus">
+        <span class="sub-modal-bonus-plus">+</span><span class="sub-modal-bonus-val" id="sub-modal-bonus">$0.10</span>
+      </div>
+      <div class="sub-modal-bonus-label" data-i18n="sub_modal_bonus_label">on your balance</div>
+      <h2 class="sub-modal-title" id="sub-modal-title" data-i18n="sub_modal_title">Follow our News</h2>
+      <p class="sub-modal-text" data-i18n="sub_modal_text">Subscribe to our channel to stay up to date with new features, tips and bonuses — and get a small reward for joining.</p>
+      <button class="sub-modal-btn sub-modal-btn-primary" id="sub-modal-subscribe">
+        <span data-i18n="sub_modal_btn_subscribe">Subscribe to channel</span>
+      </button>
+      <button class="sub-modal-btn sub-modal-btn-secondary" id="sub-modal-check">
+        <span data-i18n="sub_modal_btn_check">I subscribed — check</span>
+      </button>
+      <div class="sub-modal-skip" id="sub-modal-skip" data-i18n="sub_modal_skip">Maybe later</div>
+    </div>
+  </div>
 
   <!-- ═══ LIST VIEW ═══ -->
   <div id="view-list" class="view-container">
@@ -384,6 +416,141 @@
   </div>
 
   <!-- ═══ LANGUAGE VIEW ═══ -->
+  <!-- ═══ ONBOARDING VIEW ═══ -->
+  <div id="view-onboarding" class="view-container hidden">
+    <div class="onb-root">
+      <div class="onb-bg-glow">
+        <div class="onb-glow onb-glow1"></div>
+        <div class="onb-glow onb-glow2"></div>
+        <div class="onb-glow onb-glow3"></div>
+      </div>
+      <div class="onb-nav">
+        <div class="onb-dots">
+          <div class="onb-dot active"></div>
+          <div class="onb-dot"></div>
+          <div class="onb-dot"></div>
+          <div class="onb-dot"></div>
+        </div>
+        <div class="onb-skip" id="onb-skip" data-i18n="onb_skip">Skip</div>
+      </div>
+
+      <!-- S1 -->
+      <div class="onb-screen active" id="onb-s1">
+        <div class="onb-body onb-s1-body">
+          <div class="onb-logo-ring">
+            <img class="onb-logo-img" src="apps-father-avatar.png?r=1" alt="Apps Father">
+          </div>
+          <div class="onb-tag" data-i18n="onb_tag">Telegram Mini Apps</div>
+          <div class="onb-big-title"><span data-i18n="onb_s1_title_1">Build apps</span><br><em data-i18n="onb_s1_title_2">just by typing</em></div>
+          <div class="onb-lead" data-i18n="onb_s1_lead" data-i18n-html="1">Describe your idea — AI writes the code,<br>builds the UI and launches the bot.<br><b>No code. No designer.</b></div>
+        </div>
+        <div class="onb-foot"><button class="onb-btn" data-onb-go="2"><span data-i18n="onb_btn_start">Start</span> →</button></div>
+      </div>
+
+      <!-- S2 -->
+      <div class="onb-screen" id="onb-s2">
+        <div class="onb-body onb-s2-body">
+          <div class="onb-s-title"><span data-i18n="onb_s2_title_1">Describe your idea —</span><br><em data-i18n="onb_s2_title_2">AI does it all</em></div>
+          <div class="onb-s-sub" data-i18n="onb_s2_sub" data-i18n-html="1">Write like to a friend. AI understands<br>and creates a ready app from scratch.</div>
+          <div class="onb-chat-wrap">
+            <div class="onb-msg-row right">
+              <div class="onb-bubble onb-bubble-u" data-i18n="onb_s2_msg_user">I want a slot machine with DJM tokens and a leaderboard 🎰</div>
+            </div>
+            <div class="onb-msg-row">
+              <div class="onb-bubble onb-bubble-a">
+                <span data-i18n="onb_s2_msg_ai" data-i18n-html="1">✅ Building right now:<br>· Animated reels<br>· DJM wallet and bets<br>· Online leaderboard</span>
+                <div><div class="onb-tag-pill" data-i18n="onb_s2_pill">⚡ Ready in ~2 min</div></div>
+              </div>
+            </div>
+            <div class="onb-msg-row">
+              <div class="onb-bubble onb-bubble-a" style="padding:9px 12px"><div class="onb-typing-dot"></div><div class="onb-typing-dot"></div><div class="onb-typing-dot"></div></div>
+            </div>
+          </div>
+        </div>
+        <div class="onb-foot"><button class="onb-btn" data-onb-go="3"><span data-i18n="onb_btn_next">Next</span> →</button></div>
+      </div>
+
+      <!-- S3 -->
+      <div class="onb-screen" id="onb-s3">
+        <div class="onb-body onb-s3-body">
+          <div class="onb-s-title"><span data-i18n="onb_s3_title_1">AI builds —</span><br><em data-i18n="onb_s3_title_2">you watch</em></div>
+          <div class="onb-s-sub" data-i18n="onb_s3_sub">Every step in real time</div>
+          <div class="onb-build-card">
+            <div class="onb-build-row done">
+              <div class="onb-b-icon done">✓</div>
+              <div><div class="onb-b-label done" data-i18n="onb_s3_step1">Task analysis</div></div>
+              <div class="onb-build-time">0.2s</div>
+            </div>
+            <div class="onb-build-row done">
+              <div class="onb-b-icon done">✓</div>
+              <div><div class="onb-b-label done" data-i18n="onb_s3_step2">Generate HTML / CSS / JS</div></div>
+              <div class="onb-build-time">18s</div>
+            </div>
+            <div class="onb-build-row active">
+              <div class="onb-b-icon spin">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="#818cf8" stroke-width="1.5" stroke-dasharray="4 3"><animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="1.3s" repeatCount="indefinite"/></circle></svg>
+              </div>
+              <div>
+                <div class="onb-b-label active" data-i18n="onb_s3_step3">Telegram Bot API</div>
+                <div class="onb-b-sub" data-i18n="onb_s3_step3_sub">Connecting and configuring...</div>
+              </div>
+            </div>
+            <div class="onb-build-row pending">
+              <div class="onb-b-icon wait">○</div>
+              <div><div class="onb-b-label wait" data-i18n="onb_s3_step4">Deploy and publish</div></div>
+            </div>
+            <div class="onb-cost-row">
+              <div class="onb-cost-label" data-i18n="onb_s3_progress">Progress</div>
+              <div class="onb-prog-outer"><div class="onb-prog-inner"></div></div>
+              <div class="onb-cost-val">$0.84</div>
+            </div>
+          </div>
+        </div>
+        <div class="onb-foot"><button class="onb-btn" data-onb-go="4"><span data-i18n="onb_btn_next">Next</span> →</button></div>
+      </div>
+
+      <!-- S4 -->
+      <div class="onb-screen" id="onb-s4">
+        <div class="onb-body onb-s4-body">
+          <div class="onb-s-title"><span data-i18n="onb_s4_title_1">Ready to create</span><br><em data-i18n="onb_s4_title_2">your first app?</em></div>
+          <div class="onb-s-sub" data-i18n="onb_s4_sub">Four steps to your first earnings</div>
+          <div class="onb-steps-wrap">
+            <div class="onb-step-card">
+              <div class="onb-step-num">1</div>
+              <div>
+                <div class="onb-step-title" data-i18n="onb_s4_step1_title">Tap “Create App”</div>
+                <div class="onb-step-desc" data-i18n="onb_s4_step1_desc">One button — and you're already in</div>
+              </div>
+            </div>
+            <div class="onb-step-card">
+              <div class="onb-step-num">2</div>
+              <div>
+                <div class="onb-step-title" data-i18n="onb_s4_step2_title">Describe your idea to AI</div>
+                <div class="onb-step-desc" data-i18n="onb_s4_step2_desc">In words — no code, no tech skills</div>
+              </div>
+            </div>
+            <div class="onb-step-card">
+              <div class="onb-step-num">3</div>
+              <div>
+                <div class="onb-step-title" data-i18n="onb_s4_step3_title">Top up your balance</div>
+                <div class="onb-step-desc" data-i18n="onb_s4_step3_desc">Get a bonus and a ready app as a gift</div>
+                <div class="onb-bonus-tag" data-i18n="onb_s4_step3_bonus">🎁 Bonus for new users</div>
+              </div>
+            </div>
+            <div class="onb-step-card">
+              <div class="onb-step-num">4</div>
+              <div>
+                <div class="onb-step-title" data-i18n="onb_s4_step4_title">Start earning</div>
+                <div class="onb-step-desc" data-i18n="onb_s4_step4_desc">Launch, monetize and grow with us</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="onb-foot"><button class="onb-btn" id="onb-finish"><span data-i18n="onb_btn_finish">Begin</span></button></div>
+      </div>
+    </div>
+  </div>
+
   <div id="view-language" class="view-container hidden">
     <div>
       <main class="tm-main">
@@ -827,8 +994,8 @@
     </div>
   </div>
 
-  <script src="i18n.js?r=9" defer></script>
-  <script src="app.js?r=110" defer></script>
+  <script src="i18n.js?r=121" defer></script>
+  <script src="app.js?r=124" defer></script>
   <script>
       function initAnalytics() {
         window.telegramAnalytics.init({

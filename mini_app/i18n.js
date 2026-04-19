@@ -76,6 +76,55 @@ const I18N = {
     lang_title: "Language",
     lang_subtitle: "Select your preferred language",
 
+    // Onboarding
+    onb_skip: "Skip",
+    onb_tag: "Telegram Mini Apps",
+    onb_s1_title_1: "Build apps",
+    onb_s1_title_2: "just by typing",
+    onb_s1_lead: "Describe your idea — AI writes the code,<br>builds the UI and launches the bot.<br><b>No code. No designer.</b>",
+    onb_btn_start: "Start",
+    onb_btn_next: "Next",
+    onb_btn_finish: "Begin",
+    onb_s2_title_1: "Describe your idea —",
+    onb_s2_title_2: "AI does it all",
+    onb_s2_sub: "Write like to a friend. AI understands<br>and creates a ready app from scratch.",
+    onb_s2_msg_user: "I want a game with a coins and a leaderboard",
+    onb_s2_msg_ai: "Okay, let me build it for you:<br>✅ <b>Creating a bot...</b><br>- Designing the app<br>- Creating leadeboard<br>- Releasing the app...",
+    onb_s2_pill: "⚡ Ready in ~2 min",
+    onb_s3_title_1: "AI builds —",
+    onb_s3_title_2: "you watch",
+    onb_s3_sub: "Every step in real time",
+    onb_s3_step1: "Task analysis",
+    onb_s3_step2: "Generate HTML / CSS / JS",
+    onb_s3_step3: "Telegram Bot API",
+    onb_s3_step3_sub: "Connecting and configuring...",
+    onb_s3_step4: "Deploy and publish",
+    onb_s3_progress: "Progress",
+    onb_s4_title_1: "Ready to create",
+    onb_s4_title_2: "your first app?",
+    onb_s4_sub: "Four steps to your first earnings",
+    onb_s4_step1_title: "Tap “Create App”",
+    onb_s4_step1_desc: "One button — and you're already in",
+    onb_s4_step2_title: "Describe your idea to AI",
+    onb_s4_step2_desc: "In words — no code, no tech skills",
+    onb_s4_step3_title: "Top up your balance",
+    onb_s4_step3_desc: "Get a bonus and a ready app as a gift",
+    onb_s4_step3_bonus: "🎁 Bonus for new users",
+    onb_s4_step4_title: "Start earning",
+    onb_s4_step4_desc: "Launch, monetize and grow with us",
+
+    // Follow-channel bonus modal
+    sub_modal_title: "Follow our News",
+    sub_modal_text: "Subscribe to our channel to stay up to date with new features, tips and bonuses — and get a small reward for joining.",
+    sub_modal_bonus_label: "on your balance",
+    sub_modal_btn_subscribe: "Subscribe to channel",
+    sub_modal_btn_check: "I subscribed — check",
+    sub_modal_skip: "Maybe later",
+    sub_modal_toast_not_yet: "We can't see you in the channel yet — make sure you tapped “Join”.",
+    sub_modal_toast_claimed: "Thanks! +$0.10 added to your balance.",
+    sub_modal_toast_already: "You've already received this bonus.",
+    sub_modal_toast_error: "Something went wrong. Please try again.",
+
     // Detail view
     detail_app: "App",
     detail_dev: "Development",
@@ -270,6 +319,55 @@ const I18N = {
     lang_title: "Язык",
     lang_subtitle: "Выберите предпочтительный язык",
 
+    // Onboarding
+    onb_skip: "Пропустить",
+    onb_tag: "Telegram Mini Apps",
+    onb_s1_title_1: "Создавай приложения",
+    onb_s1_title_2: "просто словами",
+    onb_s1_lead: "Напиши идею — AI сам напишет код,<br>соберёт интерфейс и запустит бота.<br><b>Без кода. Без дизайнера.</b>",
+    onb_btn_start: "Начать",
+    onb_btn_next: "Дальше",
+    onb_btn_finish: "Начать",
+    onb_s2_title_1: "Опиши идею —",
+    onb_s2_title_2: "AI всё сделает",
+    onb_s2_sub: "Пиши как другу. AI поймёт и создаст<br>готовое приложение с нуля.",
+    onb_s2_msg_user: "Хочу игру с монетами и таблицей лидеров",
+    onb_s2_msg_ai: "Хорошо, сейчас всё сделаю:<br>✅ <b>Создаю бота...</b><br>- Проектирую приложение<br>- Создаю таблицу лидеров<br>- Выпускаю приложение...",
+    onb_s2_pill: "⚡ Готово через ~2 мин",
+    onb_s3_title_1: "AI строит —",
+    onb_s3_title_2: "ты наблюдаешь",
+    onb_s3_sub: "Каждый шаг в реальном времени",
+    onb_s3_step1: "Анализ задачи",
+    onb_s3_step2: "Генерация HTML / CSS / JS",
+    onb_s3_step3: "Telegram Bot API",
+    onb_s3_step3_sub: "Подключение и настройка...",
+    onb_s3_step4: "Деплой и публикация",
+    onb_s3_progress: "Прогресс",
+    onb_s4_title_1: "Готов создать",
+    onb_s4_title_2: "первое приложение?",
+    onb_s4_sub: "Четыре шага до первого заработка",
+    onb_s4_step1_title: "Нажми «Создать приложение»",
+    onb_s4_step1_desc: "Одна кнопка — и ты уже в деле",
+    onb_s4_step2_title: "Опиши AI свою идею",
+    onb_s4_step2_desc: "Текстом — без кода и технических знаний",
+    onb_s4_step3_title: "Пополни счёт",
+    onb_s4_step3_desc: "Получи бонус и готовое приложение в подарок",
+    onb_s4_step3_bonus: "🎁 Бонус для новых",
+    onb_s4_step4_title: "Начинай зарабатывать",
+    onb_s4_step4_desc: "Запускай, монетизируй и расти с нами",
+
+    // Follow-channel bonus modal
+    sub_modal_title: "Подпишись на наш канал",
+    sub_modal_text: "Подпишись на канал, чтобы быть в курсе новых функций, советов и бонусов — и получи небольшую награду за подписку.",
+    sub_modal_bonus_label: "на твой баланс",
+    sub_modal_btn_subscribe: "Подписаться на канал",
+    sub_modal_btn_check: "Я подписался — проверить",
+    sub_modal_skip: "Может позже",
+    sub_modal_toast_not_yet: "Мы пока не видим тебя в канале — убедись, что нажал «Подписаться».",
+    sub_modal_toast_claimed: "Спасибо! +$0.10 зачислено на баланс.",
+    sub_modal_toast_already: "Этот бонус уже получен.",
+    sub_modal_toast_error: "Что-то пошло не так. Попробуй ещё раз.",
+
     detail_app: "Приложение",
     detail_dev: "Разработка",
     detail_monetization: "Монетизация",
@@ -453,6 +551,55 @@ const I18N = {
     lang_title: "Мова",
     lang_subtitle: "Оберіть бажану мову",
 
+    // Onboarding
+    onb_skip: "Пропустити",
+    onb_tag: "Telegram Mini Apps",
+    onb_s1_title_1: "Створюй застосунки",
+    onb_s1_title_2: "просто словами",
+    onb_s1_lead: "Напиши ідею — AI сам напише код,<br>збере інтерфейс і запустить бота.<br><b>Без коду. Без дизайнера.</b>",
+    onb_btn_start: "Почати",
+    onb_btn_next: "Далі",
+    onb_btn_finish: "Почати",
+    onb_s2_title_1: "Опиши ідею —",
+    onb_s2_title_2: "AI зробить усе",
+    onb_s2_sub: "Пиши як другу. AI зрозуміє та створить<br>готовий застосунок з нуля.",
+    onb_s2_msg_user: "Хочу гру з монетами і таблицею лідерів",
+    onb_s2_msg_ai: "Добре, зараз усе зроблю:<br>✅ <b>Створюю бота...</b><br>- Проєктую застосунок<br>- Створюю таблицю лідерів<br>- Випускаю застосунок...",
+    onb_s2_pill: "⚡ Готово за ~2 хв",
+    onb_s3_title_1: "AI будує —",
+    onb_s3_title_2: "ти спостерігаєш",
+    onb_s3_sub: "Кожен крок у реальному часі",
+    onb_s3_step1: "Аналіз задачі",
+    onb_s3_step2: "Генерація HTML / CSS / JS",
+    onb_s3_step3: "Telegram Bot API",
+    onb_s3_step3_sub: "Підключення та налаштування...",
+    onb_s3_step4: "Деплой та публікація",
+    onb_s3_progress: "Прогрес",
+    onb_s4_title_1: "Готовий створити",
+    onb_s4_title_2: "перший застосунок?",
+    onb_s4_sub: "Чотири кроки до першого заробітку",
+    onb_s4_step1_title: "Натисни «Створити застосунок»",
+    onb_s4_step1_desc: "Одна кнопка — і ти вже в справі",
+    onb_s4_step2_title: "Опиши AI свою ідею",
+    onb_s4_step2_desc: "Текстом — без коду та технічних знань",
+    onb_s4_step3_title: "Поповни рахунок",
+    onb_s4_step3_desc: "Отримай бонус і готовий застосунок у подарунок",
+    onb_s4_step3_bonus: "🎁 Бонус для нових",
+    onb_s4_step4_title: "Починай заробляти",
+    onb_s4_step4_desc: "Запускай, монетизуй та зростай з нами",
+
+    // Follow-channel bonus modal
+    sub_modal_title: "Підпишись на наш канал",
+    sub_modal_text: "Підпишись на канал, щоб бути в курсі нових функцій, порад і бонусів — і отримай невелику винагороду за підписку.",
+    sub_modal_bonus_label: "на твій баланс",
+    sub_modal_btn_subscribe: "Підписатися на канал",
+    sub_modal_btn_check: "Я підписався — перевірити",
+    sub_modal_skip: "Можливо пізніше",
+    sub_modal_toast_not_yet: "Ми поки не бачимо тебе в каналі — переконайся, що натиснув «Підписатися».",
+    sub_modal_toast_claimed: "Дякуємо! +$0.10 зараховано на баланс.",
+    sub_modal_toast_already: "Цей бонус уже отримано.",
+    sub_modal_toast_error: "Щось пішло не так. Спробуй ще раз.",
+
     detail_app: "Додаток",
     detail_dev: "Розробка",
     detail_monetization: "Монетизація",
@@ -603,8 +750,30 @@ function applyLang() {
     const val = t(key);
     if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
       el.placeholder = val;
+    } else if (el.dataset.i18nHtml === '1') {
+      // Translation strings with this opt-in flag are authored in i18n.js
+      // (a trusted, repo-owned source) and may contain markup like <br>
+      // and <b>. They never touch user input, so innerHTML is safe here.
+      el.innerHTML = val;
     } else {
       el.textContent = val;
     }
   });
+}
+
+// Map a Telegram language_code (BCP-47-ish, e.g. "ru", "uk", "en-US")
+// to one of the supported app languages: 'en' | 'ru' | 'ua'.
+// Used on first launch to auto-pick the user's language before they've
+// ever opened the Language screen.
+function detectTelegramLang() {
+  try {
+    const code = String(window.Telegram?.WebApp?.initDataUnsafe?.user?.language_code || '')
+      .toLowerCase()
+      .split('-')[0];
+    if (code === 'ru') return 'ru';
+    if (code === 'uk') return 'ua';
+    return 'en';
+  } catch (_) {
+    return 'en';
+  }
 }

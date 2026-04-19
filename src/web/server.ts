@@ -663,6 +663,115 @@ export function createWebServer() {
     }
   });
 
+  // ── Channel-subscription bonus ──
+  // Encourages users to follow @apps_father by giving them a small
+  // one-time balance credit when they actually do. Two endpoints:
+  //
+  //   GET  /sub-status  → cheap "should we show the modal?" check
+  //   POST /sub-claim   → server-authoritative claim (atomic, idempotent)
+  //
+  // Bonus is gated by users.sub_bonus_claimed_at (set at most once per
+  // user, ever). Subscription itself is verified via Bot API getChatMember
+  // — we trust Telegram, never the client.
+  const SUB_CHANNEL_ID = -1003766261308;
+  const SUB_CHANNEL_LINK = "https://t.me/apps_father";
+  const SUB_BONUS_USD = 0.10;
+
+  async function isUserInSubChannel(telegramId: number): Promise<boolean> {
+    try {
+      const r = await fetch(
+        `https://api.telegram.org/bot${config.botToken}/getChatMember?chat_id=${SUB_CHANNEL_ID}&user_id=${telegramId}`,
+      );
+      const d = (await r.json()) as { ok: boolean; result?: { status?: string } };
+      if (!d.ok || !d.result?.status) return false;
+      // member / administrator / creator all count as "subscribed".
+      // "left" / "kicked" / "restricted" do not.
+      const s = d.result.status;
+      return s === "member" || s === "administrator" || s === "creator";
+    } catch (err) {
+      console.warn("[SubBonus] getChatMember failed:", err);
+      return false;
+    }
+  }
+
+  app.get("/telegram-mini-app/api/sub-status", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+
+      const fresh = await prisma.user.findUnique({
+        where: { id: user.id },
+        select: { subBonusClaimedAt: true },
+      });
+      const eligible = !fresh?.subBonusClaimedAt;
+
+      // Skip the network call when there's no carrot left to dangle.
+      // Frontend will use this to suppress the modal.
+      const subscribed = eligible
+        ? await isUserInSubChannel(Number(user.telegramId))
+        : true;
+
+      res.json({
+        subscribed,
+        eligible,
+        channelLink: SUB_CHANNEL_LINK,
+        bonusUsd: SUB_BONUS_USD,
+      });
+    } catch (err) {
+      console.error("[MiniApp API] sub-status error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.post("/telegram-mini-app/api/sub-claim", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+
+      const subscribed = await isUserInSubChannel(Number(user.telegramId));
+      if (!subscribed) {
+        res.json({
+          ok: true,
+          subscribed: false,
+          claimed: false,
+          alreadyClaimed: false,
+          channelLink: SUB_CHANNEL_LINK,
+        });
+        return;
+      }
+
+      // Atomic claim: only awards the bonus if subBonusClaimedAt is still
+      // NULL. Race-safe — two parallel POSTs from the same user can never
+      // double-credit, because updateMany returns count=0 the second time.
+      const claim = await prisma.user.updateMany({
+        where: { id: user.id, subBonusClaimedAt: null },
+        data: {
+          subBonusClaimedAt: new Date(),
+          balance: { increment: new Decimal(SUB_BONUS_USD.toFixed(4)) },
+        },
+      });
+
+      const fresh = await prisma.user.findUnique({
+        where: { id: user.id },
+        select: { balance: true },
+      });
+
+      res.json({
+        ok: true,
+        subscribed: true,
+        claimed: claim.count > 0,
+        alreadyClaimed: claim.count === 0,
+        balance: Number(fresh?.balance ?? 0),
+        bonusUsd: SUB_BONUS_USD,
+      });
+    } catch (err) {
+      console.error("[MiniApp API] sub-claim error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // ── Partner API ──
 
   app.get("/telegram-mini-app/api/partner", async (req, res) => {

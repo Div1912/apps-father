@@ -3267,6 +3267,7 @@ function openAdmin() {
     menuRowAction('Apps', 'af-icon-apps', 'adm-open-apps') +
     menuRowAction('Vouchers', 'af-icon-vouchers', 'adm-open-vouchers') +
     menuRowAction('Configuration', 'af-icon-config', 'adm-open-config') +
+    menuRowAction('Onboarding (preview)', 'af-icon-help', 'adm-open-onboarding') +
     `<a class="tm-row tm-row-link" id="adm-open-desktop"><span class="tm-icon af-icon-open"></span><span>Desktop Version</span></a>`;
   rows.querySelector('[data-action="adm-open-dashboard"]')?.addEventListener('click', openAdmDashboard);
   rows.querySelector('[data-action="adm-open-sources"]')?.addEventListener('click', openAdmSources);
@@ -3275,6 +3276,7 @@ function openAdmin() {
   rows.querySelector('[data-action="adm-open-apps"]')?.addEventListener('click', openAdmApps);
   rows.querySelector('[data-action="adm-open-vouchers"]')?.addEventListener('click', openAdmVouchers);
   rows.querySelector('[data-action="adm-open-config"]')?.addEventListener('click', openAdmConfig);
+  rows.querySelector('[data-action="adm-open-onboarding"]')?.addEventListener('click', openOnboarding);
   rows.querySelector('#adm-open-desktop')?.addEventListener('click', () => {
     tg?.openLink(`${location.origin}/telegram-mini-app/desktop.html`);
   });
@@ -4087,6 +4089,7 @@ function showView(view) {
   document.getElementById('view-slots-full').classList.toggle('hidden', view !== 'slots-full');
   document.getElementById('view-topup').classList.toggle('hidden', view !== 'topup');
   document.getElementById('view-language').classList.toggle('hidden', view !== 'language');
+  document.getElementById('view-onboarding').classList.toggle('hidden', view !== 'onboarding');
 
   const headerDropdown = document.getElementById('chat-header-dropdown');
   if (headerDropdown) headerDropdown.classList.add('hidden');
@@ -4178,7 +4181,7 @@ async function loadSamples() {
       const avatar = s.avatarUrl
         ? `<img class="tm-row-pic" src="${s.avatarUrl}" alt="">`
         : `<div class="tm-row-pic-placeholder">${s.name.charAt(0)}</div>`;
-      html += `<a class="tm-row tm-row-link sample-row" data-id="${s.id}" data-name="${esc(s.name)}">
+      html += `<a class="tm-row tm-row-link sample-row" data-id="${s.id}" data-name="${esc(s.name)}" data-bot="${esc(s.botUsername || '')}">
         ${avatar}
         <div class="tm-row-text">
           <div class="tm-row-value">${esc(s.name)}</div>
@@ -4188,7 +4191,7 @@ async function loadSamples() {
     }
     list.innerHTML = html;
     list.querySelectorAll('.sample-row').forEach(row => {
-      row.addEventListener('click', () => openSamplePreview(row.dataset.id, row.dataset.name));
+      row.addEventListener('click', () => openSampleBot(row.dataset.bot, row.dataset.name));
     });
     samplesLoaded = true;
   } catch (err) {
@@ -4196,26 +4199,27 @@ async function loadSamples() {
   }
 }
 
-function openSamplePreview(projectId, name) {
-  const hash = location.hash || '';
-  const tgData = hash.includes('tgWebAppData') ? hash : '';
-  const url = `${location.origin}/app/${projectId}/${tgData}`;
-
-  let overlay = document.getElementById('test-preview-overlay');
-  if (overlay) overlay.remove();
-
-  overlay = document.createElement('div');
-  overlay.id = 'test-preview-overlay';
-  overlay.className = 'test-preview-overlay';
-  overlay.innerHTML = `
-    <div class="test-preview-header">
-      <button class="test-preview-back" onclick="closeTestPreview()">← Back</button>
-      <span class="test-preview-title">${esc(name || 'Sample')}</span>
-      <span class="test-preview-badge" style="background:#34c759">SAMPLE</span>
-    </div>
-    <iframe class="test-preview-iframe" src="${url}"></iframe>
-  `;
-  document.body.appendChild(overlay);
+// Opens a sample by deep-linking the user into the sample's bot itself
+// (real chat → real Mini App), instead of embedding our /app/<id> route
+// in an iframe inside this Mini App. The latter caused two problems:
+//   1. nested Mini App rendering in some clients (white screen / loops),
+//   2. broken auth — initData of *this* app is not valid for the sample.
+// `tg.openLink` with `try_instant_view: true` lets Telegram render the
+// link inline if it can, otherwise it falls through to the regular
+// in-client browser. For t.me/<bot> links Telegram resolves them as
+// bot deep-links automatically.
+function openSampleBot(botUsername, _name) {
+  if (!botUsername) return;
+  const link = `https://t.me/${botUsername}`;
+  try {
+    if (tg && typeof tg.openLink === 'function') {
+      tg.openLink(link, { try_instant_view: true });
+      return;
+    }
+  } catch (_) {}
+  // Fallback for environments where Telegram WebApp isn't available
+  // (desktop dev preview, accidental browser open).
+  // window.open(link, '_blank');
 }
 
 function getChatPlaceholder(mode) {
@@ -4406,6 +4410,260 @@ function openLanguage() {
   showView('language');
 }
 
+// ─── Onboarding flow ──────────────────────────────────────────
+// 4-screen welcome carousel. Wired up only when the user explicitly
+// opens it (currently from Admin → "Onboarding (test)"). Once the
+// product owner is happy with it, a single line in init() can flip
+// it on for first-run users (see `af_onboarding_seen` flag).
+
+let onbCurrent = 1;
+let onbWired = false;
+
+function onbGo(n) {
+  if (n === onbCurrent) return;
+  const prev = document.getElementById('onb-s' + onbCurrent);
+  const next = document.getElementById('onb-s' + n);
+  if (!prev || !next) return;
+
+  prev.style.opacity = '0';
+  prev.style.transform = 'translateX(-30px)';
+  prev.style.pointerEvents = 'none';
+
+  setTimeout(() => {
+    prev.classList.remove('active');
+    prev.style.transform = '';
+    onbCurrent = n;
+    next.style.opacity = '0';
+    next.style.transform = 'translateX(30px)';
+    next.classList.add('active');
+    requestAnimationFrame(() => {
+      next.style.opacity = '1';
+      next.style.transform = 'translateX(0)';
+      next.style.pointerEvents = 'all';
+    });
+    document.querySelectorAll('#view-onboarding .onb-dot').forEach((d, i) => {
+      d.classList.toggle('active', i === onbCurrent - 1);
+    });
+    const skip = document.getElementById('onb-skip');
+    if (skip) skip.style.visibility = onbCurrent === 4 ? 'hidden' : 'visible';
+  }, 300);
+}
+
+function onbReset() {
+  onbCurrent = 1;
+  document.querySelectorAll('#view-onboarding .onb-screen').forEach((el, i) => {
+    el.classList.toggle('active', i === 0);
+    el.style.opacity = '';
+    el.style.transform = '';
+    el.style.pointerEvents = '';
+  });
+  document.querySelectorAll('#view-onboarding .onb-dot').forEach((d, i) => {
+    d.classList.toggle('active', i === 0);
+  });
+  const skip = document.getElementById('onb-skip');
+  if (skip) skip.style.visibility = 'visible';
+}
+
+function onbFinish() {
+  try { localStorage.setItem('af_onboarding_seen', '1'); } catch (_) {}
+  showView('list');
+  // The 5-second timer for the follow-channel modal starts only AFTER
+  // the user lands on the main menu — we never want to interrupt the
+  // onboarding flow with another modal on top.
+  scheduleSubModalCheck();
+}
+
+// ─── Follow-channel bonus modal ───────────────────────────────
+// 5 seconds after the user lands on the main menu (post-onboarding,
+// or immediately on cold-start if onboarding was already seen) we ask
+// the backend whether they're subscribed to @apps_father AND still
+// eligible for the one-time $0.10 bonus. If both → show modal. The
+// modal will fire at most once per session (sessionStorage flag) and
+// is fully easy-close: X / "Maybe later" / backdrop / ESC.
+
+const SUB_MODAL_DELAY_MS = 5_000;
+const SUB_MODAL_SESSION_KEY = 'af_sub_modal_shown_session';
+let subModalScheduled = false;
+let subModalWired = false;
+
+function openSubModal(channelLink, bonusUsd) {
+  const overlay = document.getElementById('sub-modal');
+  if (!overlay) return;
+
+  if (typeof bonusUsd === 'number' && !isNaN(bonusUsd)) {
+    const valEl = document.getElementById('sub-modal-bonus');
+    if (valEl) valEl.textContent = '$' + bonusUsd.toFixed(2);
+  }
+
+  if (!subModalWired) {
+    subModalWired = true;
+    document.getElementById('sub-modal-close')?.addEventListener('click', closeSubModal);
+    document.getElementById('sub-modal-skip')?.addEventListener('click', closeSubModal);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) closeSubModal();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !overlay.classList.contains('hidden')) closeSubModal();
+    });
+
+    document.getElementById('sub-modal-subscribe')?.addEventListener('click', () => {
+      const link = overlay.dataset.channelLink || 'https://t.me/apps_father';
+      try {
+        if (tg && typeof tg.openTelegramLink === 'function') {
+          tg.openTelegramLink(link);
+        } else {
+          window.open(link, '_blank');
+        }
+      } catch (_) {
+        window.open(link, '_blank');
+      }
+    });
+
+    document.getElementById('sub-modal-check')?.addEventListener('click', claimSubBonus);
+
+    // Swipe-down to dismiss on the drag handle
+    const sheet = overlay.querySelector('.sub-modal');
+    const handle = document.getElementById('sub-modal-handle');
+    if (sheet && handle) {
+      let startY = 0, dy = 0, dragging = false;
+      const onStart = (e) => {
+        dragging = true;
+        startY = (e.touches ? e.touches[0].clientY : e.clientY);
+        dy = 0;
+        sheet.style.transition = 'none';
+      };
+      const onMove = (e) => {
+        if (!dragging) return;
+        const y = (e.touches ? e.touches[0].clientY : e.clientY);
+        dy = Math.max(0, y - startY);
+        sheet.style.transform = `translateY(${dy}px)`;
+      };
+      const onEnd = () => {
+        if (!dragging) return;
+        dragging = false;
+        sheet.style.transition = '';
+        if (dy > 80) {
+          closeSubModal();
+        } else {
+          sheet.style.transform = '';
+        }
+      };
+      handle.addEventListener('touchstart', onStart, { passive: true });
+      handle.addEventListener('touchmove', onMove, { passive: true });
+      handle.addEventListener('touchend', onEnd);
+      handle.addEventListener('mousedown', onStart);
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onEnd);
+    }
+  }
+
+  overlay.dataset.channelLink = channelLink || 'https://t.me/apps_father';
+  overlay.classList.remove('hidden');
+  overlay.setAttribute('aria-hidden', 'false');
+  try { sessionStorage.setItem(SUB_MODAL_SESSION_KEY, '1'); } catch (_) {}
+}
+
+function closeSubModal() {
+  const overlay = document.getElementById('sub-modal');
+  if (!overlay || overlay.classList.contains('hidden')) return;
+  overlay.classList.add('closing');
+  const finish = () => {
+    overlay.classList.remove('closing');
+    overlay.classList.add('hidden');
+    overlay.setAttribute('aria-hidden', 'true');
+    const sheet = overlay.querySelector('.sub-modal');
+    if (sheet) sheet.style.transform = '';
+  };
+  setTimeout(finish, 240);
+}
+
+async function claimSubBonus() {
+  const checkBtn = document.getElementById('sub-modal-check');
+  const subBtn = document.getElementById('sub-modal-subscribe');
+  if (checkBtn) checkBtn.disabled = true;
+  if (subBtn) subBtn.disabled = true;
+  try {
+    const res = await fetch(`${API_BASE}/sub-claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.subscribed) {
+      showToast(t('sub_modal_toast_not_yet'), 'error');
+      return;
+    }
+    if (data.claimed) {
+      try { localStorage.setItem('af_sub_claimed', '1'); } catch (_) {}
+      showToast(t('sub_modal_toast_claimed'), 'success');
+      try { loadBalance(); } catch (_) {}
+      closeSubModal();
+      return;
+    }
+    if (data.alreadyClaimed) {
+      try { localStorage.setItem('af_sub_claimed', '1'); } catch (_) {}
+      showToast(t('sub_modal_toast_already'), 'info');
+      closeSubModal();
+      return;
+    }
+    showToast(t('sub_modal_toast_error'), 'error');
+  } catch (err) {
+    console.warn('[SubBonus] claim failed:', err);
+    showToast(t('sub_modal_toast_error'), 'error');
+  } finally {
+    if (checkBtn) checkBtn.disabled = false;
+    if (subBtn) subBtn.disabled = false;
+  }
+}
+
+async function checkAndShowSubModal() {
+  // Fast paths — avoid every unnecessary API hit:
+  //   - already shown this session
+  //   - bonus already claimed on this device (cached locally)
+  try {
+    if (sessionStorage.getItem(SUB_MODAL_SESSION_KEY)) return;
+  } catch (_) {}
+  try {
+    if (localStorage.getItem('af_sub_claimed') === '1') return;
+  } catch (_) {}
+
+  try {
+    const res = await fetch(`${API_BASE}/sub-status`, { headers: apiHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.eligible) {
+      try { localStorage.setItem('af_sub_claimed', '1'); } catch (_) {}
+      return;
+    }
+    if (data.subscribed) return; // Already a member — don't pester.
+    openSubModal(data.channelLink, data.bonusUsd);
+  } catch (err) {
+    console.warn('[SubBonus] status check failed:', err);
+  }
+}
+
+function scheduleSubModalCheck() {
+  if (subModalScheduled) return;
+  subModalScheduled = true;
+  setTimeout(checkAndShowSubModal, SUB_MODAL_DELAY_MS);
+}
+
+function openOnboarding() {
+  onbReset();
+  if (!onbWired) {
+    onbWired = true;
+    document.querySelectorAll('#view-onboarding [data-onb-go]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const n = parseInt(btn.dataset.onbGo, 10);
+        if (!isNaN(n)) onbGo(n);
+      });
+    });
+    document.getElementById('onb-skip')?.addEventListener('click', () => onbGo(4));
+    document.getElementById('onb-finish')?.addEventListener('click', onbFinish);
+  }
+  showView('onboarding');
+}
+
 async function init() {
   document.addEventListener('click', (e) => {
     const t = e.target.closest('button, a, .tm-row, .chat-pill, .topup-amount-btn, .topup-method, .chat-plan-btn, .result-action-btn, .question-opt-btn, .feature-row, .quality-row');
@@ -4472,6 +4730,10 @@ async function init() {
         showView('list');
       } else if (currentView === 'language') {
         showView('list');
+      } else if (currentView === 'onboarding') {
+        // Treat Back the same as the final "Begin" button so people
+        // who hit it early aren't dumped onto a half-shown carousel.
+        onbFinish();
       } else if (currentView === 'admin-user') {
         openAdmUsers();
       } else if (currentView === 'adm-dashboard' || currentView === 'adm-sources' || currentView === 'adm-activities' || currentView === 'adm-users' || currentView === 'adm-apps' || currentView === 'adm-vouchers' || currentView === 'adm-config') {
@@ -4564,7 +4826,43 @@ async function init() {
   document.getElementById('btn-admin')?.addEventListener('click', () => openAdmin());
   document.getElementById('btn-partner')?.addEventListener('click', () => openPartner());
 
+  // Auto-pick the language on first launch from Telegram's locale.
+  // We only do this when the user has never explicitly chosen one
+  // (i.e. nothing in `af_lang`). After that, their choice always wins.
+  // setLang() persists to localStorage AND POSTs to the backend so
+  // server-side language-aware features (notifications, etc.) match.
+  try {
+    if (!localStorage.getItem('af_lang') && typeof detectTelegramLang === 'function') {
+      const detected = detectTelegramLang();
+      // setLang persists to localStorage AND POSTs to the backend so
+      // server-side language-aware features (notifications, etc.) match.
+      // Even when detected === currentLang ('en' default), we call it
+      // once so we don't re-detect on every cold start.
+      if (detected) setLang(detected);
+    }
+  } catch (_) {}
   applyLang();
+
+  // First-run onboarding. The 4-screen carousel is shown exactly once
+  // per device — the "Begin" button (and Back / Skip → Begin) sets
+  // `af_onboarding_seen` in localStorage via onbFinish(), so subsequent
+  // launches skip straight to the app. Admin → "Onboarding (preview)"
+  // can always re-trigger it for testing without resetting the flag.
+  // It's a fixed-position fullscreen overlay (z-index 999), so the
+  // background reportInit/checkAdmin/loadBalance calls keep running
+  // underneath while the user reads the slides.
+  try {
+    if (!localStorage.getItem('af_onboarding_seen')) {
+      openOnboarding();
+    } else {
+      // Returning user: skip onboarding, but kick off the 5-second
+      // follow-channel modal check exactly the same way onbFinish()
+      // would — once per session, only if not subscribed and still
+      // eligible for the one-time bonus.
+      scheduleSubModalCheck();
+    }
+  } catch (_) {}
+
   initTokenActions();
   initChatInput();
   initAutosize();
