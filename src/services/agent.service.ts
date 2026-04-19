@@ -1145,7 +1145,7 @@ FINAL STEPS ORDER: After all work is done â†’ short_summary(user-facing text) â†
 
       const response = await this.callWithRetry({
         model: tierConfig.model,
-        max_tokens: tierConfig.thinking + 8000,
+        max_tokens: tierConfig.thinking + 16000,
         thinking: { type: "enabled", budget_tokens: tierConfig.thinking },
         system: AGENT_SYSTEM_PROMPT,
         tools: TOOLS,
