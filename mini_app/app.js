@@ -4212,10 +4212,7 @@ function openSampleBot(botUsername, _name) {
   if (!botUsername) return;
   const link = `https://t.me/${botUsername}`;
   try {
-    if (tg && typeof tg.openLink === 'function') {
-      tg.openLink(link, { try_instant_view: true });
-      return;
-    }
+    tg.openTelegramLink(link, { try_instant_view: true });
   } catch (_) {}
   // Fallback for environments where Telegram WebApp isn't available
   // (desktop dev preview, accidental browser open).
