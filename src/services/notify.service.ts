@@ -4,17 +4,32 @@ import { prisma } from "../db";
 
 const ADMIN_IDS = ["8784357184", "8796958409"];
 
-// How long we delay the "new user" admin notification after a user row is
-// first persisted. With the X-Apps-Father-Start-Param header now flowing
-// through every Mini App / Desktop API call (see attachAttribution
-// middleware in src/web/server.ts), the FIRST request to create the row
-// already carries the correct source — so the back-fill window collapses
-// to milliseconds in the common case. We still hold the notification for
-// 10 s as cheap insurance: it covers (a) the bot /start cross-session case
-// where the row is created from the bot first and the Mini App carries the
-// source seconds later, and (b) any Telegram client where headers race
-// behind body delivery on slow networks. Cost is purely admin-side latency.
-const ADMIN_NOTIFY_DELAY_MS = 3000;
+// "New user" admin notification timing — TWO-PHASE.
+//
+// Hard problem: a user row may be created by ANY Mini App API call. Slow
+// Android Telegram WebViews routinely take 15-40 s before /api/init
+// finishes (SDK boot + cold-cache JS download + initData parsing), which
+// is when start_param attribution back-fills onto the row. If we notify
+// admins after a flat 3-10 s, we lock in "Source: #organic" forever —
+// the back-fill arrives a few seconds later but the message is already
+// out and cannot be edited.
+//
+// Fix:
+//   • At INITIAL (T+10s) check the row. If utm_source / referredBy is
+//     already there, claim the slot and send with the correct source.
+//   • If still missing at T+10s, do NOT send yet. Schedule a second
+//     check at T+60s. This gives the slow Android boot a full minute to
+//     land /api/init and back-fill the column.
+//   • At FALLBACK (T+60s), claim and send whatever the row has — even
+//     if it's organic. Caps notification latency at 60 s, which is fine
+//     for an admin alert.
+//
+// All concurrent notifyNewUser() calls (race-loser back-fills, parallel
+// API endpoints, etc.) share a single Postgres-atomic claim slot
+// (admin_notified_at IS NULL → set), so however many timers fire across
+// these phases, only ONE caller actually sends.
+const ADMIN_NOTIFY_INITIAL_DELAY_MS = 10_000;
+const ADMIN_NOTIFY_FALLBACK_DELAY_MS = 60_000;
 
 function sendTelegram(chatId: string, text: string, extra?: Record<string, any>): void {
   fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
@@ -30,20 +45,11 @@ function notifyAdmins(text: string): void {
   }
 }
 
-// Fire the "new user" admin notification at most ONCE per Telegram user,
-// regardless of how many parallel calls reach getOrCreateUser. The hint
-// args (username/firstName/referredBy/source) are diagnostic only; the
-// actual notification is built from the freshest DB row at send time so
-// that any /api/init back-fill is already reflected.
-//
-// Concurrency model:
-//   1. Wait ADMIN_NOTIFY_DELAY_MS — gives the in-flight /api/init enough
-//      time to back-fill utm_source / referredBy on the row.
-//   2. Atomically claim the notification slot via UPDATE ... WHERE
-//      admin_notified_at IS NULL — Postgres guarantees only ONE caller
-//      gets count=1, every other concurrent caller gets count=0 and exits.
-//   3. The winner re-reads the user (now with backfilled source) and sends
-//      a single, correctly-attributed message to admins.
+// Fire the "new user" admin notification at most ONCE per Telegram user.
+// The two-phase timing (see constants above) guarantees we wait for slow
+// Android Telegram clients to back-fill utm_source / referredBy before
+// we lock in "#organic". The hint args are unused — the actual content
+// is built from the freshest DB row at send time.
 export function notifyNewUser(
   telegramId: number,
   _username?: string,
@@ -52,19 +58,17 @@ export function notifyNewUser(
   _source?: string | null,
 ): void {
   setTimeout(() => {
-    void sendNewUserNotification(telegramId);
-  }, ADMIN_NOTIFY_DELAY_MS);
+    void trySendNewUserNotification(telegramId, /* isFinal */ false);
+  }, ADMIN_NOTIFY_INITIAL_DELAY_MS);
 }
 
-async function sendNewUserNotification(telegramId: number): Promise<void> {
+async function trySendNewUserNotification(
+  telegramId: number,
+  isFinal: boolean,
+): Promise<void> {
   try {
-    // Atomic claim: at most one parallel call will see count=1.
-    const claim = await prisma.user.updateMany({
-      where: { telegramId: BigInt(telegramId), adminNotifiedAt: null },
-      data: { adminNotifiedAt: new Date() },
-    });
-    if (claim.count === 0) return; // Already notified by a sibling call.
-
+    // Read current state WITHOUT claiming the slot yet — we only want
+    // to claim once we have something worth sending.
     const fresh = await prisma.user.findUnique({
       where: { telegramId: BigInt(telegramId) },
       select: {
@@ -72,38 +76,60 @@ async function sendNewUserNotification(telegramId: number): Promise<void> {
         firstName: true,
         utmSource: true,
         referredBy: true,
+        adminNotifiedAt: true,
       },
     });
     if (!fresh) return;
+    if (fresh.adminNotifiedAt) return; // Already sent by an earlier call.
+
+    const hasAttribution = Boolean(fresh.utmSource || fresh.referredBy);
+
+    // INITIAL pass: if attribution still hasn't landed, defer. Slow
+    // Android Mini App boots routinely take 30-50 s before /api/init
+    // (or any source-bearing call) commits the back-fill. Schedule a
+    // single fallback check at T+60s, then accept whatever the row says.
+    if (!hasAttribution && !isFinal) {
+      setTimeout(
+        () => void trySendNewUserNotification(telegramId, true),
+        ADMIN_NOTIFY_FALLBACK_DELAY_MS - ADMIN_NOTIFY_INITIAL_DELAY_MS,
+      );
+      return;
+    }
+
+    // Atomic claim: only one timer (across all parallel notifyNewUser
+    // calls AND the initial/fallback phases) actually sends.
+    const claim = await prisma.user.updateMany({
+      where: { telegramId: BigInt(telegramId), adminNotifiedAt: null },
+      data: { adminNotifiedAt: new Date() },
+    });
+    if (claim.count === 0) return;
 
     const name = fresh.firstName || "Unknown";
-    const uname = fresh.username ? ` @${fresh.username}` : name;
+    const uname = fresh.username ? `@${fresh.username}` : name;
     const referredBy = fresh.referredBy ? Number(fresh.referredBy) : null;
     const source = fresh.utmSource || null;
 
     let sourceLine: string;
     if (referredBy && source) {
-      sourceLine = 
+      sourceLine =
         `Source: <b>#partnership</b>\n` +
         `Partner: <b>${source}</b> | <b>${referredBy}</b>`;
     } else if (referredBy) {
-      sourceLine = 
+      sourceLine =
         `Source: <b>#referral</b>\n` +
         `Referred by: <b>${referredBy}</b>`;
     } else if (source) {
-      sourceLine = 
-        `Source: <b>#${source}</b>`;
+      sourceLine = `Source: <b>#${source}</b>`;
     } else {
-      sourceLine = 
-        `Source: <b>#organic</b>`;
+      sourceLine = `Source: <b>#organic</b>`;
     }
 
     notifyAdmins(
       `💎 User <b>${uname}</b> | ID: <b>#ID${telegramId}</b>\n` +
-      sourceLine
+      sourceLine,
     );
   } catch (err) {
-    console.error("[Notify] sendNewUserNotification error:", err);
+    console.error("[Notify] trySendNewUserNotification error:", err);
   }
 }
 

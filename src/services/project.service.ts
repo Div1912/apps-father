@@ -69,6 +69,21 @@ export class ProjectService {
     }
 
     if (isNew) {
+      // Diagnostic: emit a WARN line whenever a user row is created
+      // WITHOUT any attribution. This is the actionable signal that some
+      // call-site is reaching getOrCreateUser without source/referrer
+      // (frontend not deployed yet, missing helper somewhere, bot-side
+      // /start without payload, etc.). Grep prod logs for this line —
+      // every hit is a user that will land in #organic stats.
+      if (!utmSource && !referredBy) {
+        console.warn(
+          `[getOrCreateUser] WARN tg=${telegramId} created with NO attribution — will count as #organic until back-fill arrives`,
+        );
+      } else {
+        console.log(
+          `[getOrCreateUser] tg=${telegramId} created src=${JSON.stringify(utmSource ?? null)} ref=${referredBy ?? null}`,
+        );
+      }
       notifyNewUser(
         telegramId,
         username,
@@ -77,9 +92,12 @@ export class ProjectService {
         utmSource ?? null,
       );
     } else if (attributedNow) {
-      // We back-filled the source on an existing user that was created
-      // in the same boot-up window without attribution. Notify admins so
-      // we have the same visibility we'd have on a fresh signup.
+      // Back-fill case: user existed without attribution, this call
+      // landed source/referrer on the row. Both the row itself (for
+      // #sources stats) and the admin notification are now correct.
+      console.log(
+        `[getOrCreateUser] tg=${telegramId} BACKFILLED src=${JSON.stringify(utmSource ?? null)} ref=${referredBy ?? null}`,
+      );
       notifyNewUser(
         telegramId,
         username,
