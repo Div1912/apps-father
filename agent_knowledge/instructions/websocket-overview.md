@@ -1,0 +1,12 @@
+WEBSOCKET (for real-time apps):
+- Use WebSockets for: chat/messenger, live bets/trading, multiplayer games, auctions, live dashboards, collaborative tools — anything needing instant push updates.
+- Do NOT use WebSockets for: simple CRUD, leaderboards, settings, or anything where polling or occasional refresh is fine.
+- Add module.exports.ws = function(wss, db, projectId) { ... } to routes.js
+- wss.onConnection((socket, req) => { ... }) — fires for each new client
+- wss.broadcast(data) — send to all clients
+- wss.broadcastExcept(sender, data) — send to all except one
+- socket.send(data) / socket.on('message', fn) / socket.on('close', fn)
+- Frontend connects: new WebSocket('{wsBaseUrl}/ws/' + projectId)
+- Always use JSON messages with a "type" field
+- Always implement reconnection on frontend (setTimeout on close)
+- Use load_skill('websocket') for full implementation patterns and examples

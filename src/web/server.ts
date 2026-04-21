@@ -27,6 +27,11 @@ import { processingProjects, abortedProjects } from "../bot/processing";
 import { commitService } from "../services/commit.service";
 import { publishReport } from "../services/telegraph.service";
 import { claudeService } from "../services/claude.service";
+import {
+  PREFERENCES_CATALOG,
+  validatePreferences,
+  parseProjectPreferences,
+} from "../services/preferences.catalog";
 import { parseStartParam, trackEvent } from "../services/analytics.service";
 import { prisma } from "../db";
 import { runtimeConfig } from "../services/runtime-config.service";
@@ -1419,6 +1424,54 @@ export function createWebServer() {
     }
   });
 
+  // ── Project preferences (style / theme / header / density / bottom menu) ──
+  // Captured via a full-screen modal in the mini-app immediately after the
+  // user's first prompt and BEFORE `/plan` is allowed to run.
+  app.get("/telegram-mini-app/api/chat/:projectId/preferences", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const projectId = req.params.projectId;
+      const project = await projectService.getProject(projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
+
+      const current = parseProjectPreferences((project as any).preferences ?? null);
+      res.json({ catalog: PREFERENCES_CATALOG, current });
+    } catch (err) {
+      console.error("[Chat API] Get preferences error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.post("/telegram-mini-app/api/chat/:projectId/preferences", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const projectId = req.params.projectId;
+      const project = await projectService.getProject(projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
+
+      const validation = validatePreferences(req.body);
+      if (!validation.ok) {
+        res.status(400).json({ error: "invalid_preferences", details: validation.errors });
+        return;
+      }
+
+      const serialized = JSON.stringify(validation.prefs);
+      await prisma.project.update({
+        where: { id: projectId },
+        data: { preferences: serialized } as any,
+      });
+
+      res.json({ ok: true, current: validation.prefs });
+    } catch (err) {
+      console.error("[Chat API] Save preferences error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   app.post("/telegram-mini-app/api/chat/:projectId/plan", async (req, res) => {
     try {
       const auth = validateAuth(req);
@@ -1432,6 +1485,14 @@ export function createWebServer() {
       const { description } = req.body;
       if (!description?.trim()) { res.status(400).json({ error: "Description required" }); return; }
 
+      // Gate plan generation on the user having picked preferences. The
+      // mini-app reacts to a 412 by opening the preferences modal.
+      const projectPrefs = parseProjectPreferences((project as any).preferences ?? null);
+      if (!(project as any).preferences) {
+        res.status(412).json({ error: "preferences_required" });
+        return;
+      }
+
       if (!(await billingService.hasBalance(user.id))) {
         res.status(402).json({ error: "Insufficient balance" });
         return;
@@ -1441,7 +1502,7 @@ export function createWebServer() {
 
       const assets = await projectService.getProjectAssets(projectId);
       const assetPaths = assets.map((a: any) => a.filePath).filter(Boolean) as string[];
-      const result = await claudeService.generatePlan(description.trim(), assetPaths, planLang);
+      const result = await claudeService.generatePlan(description.trim(), assetPaths, planLang, projectPrefs);
       await projectService.updateProjectPlan(projectId, result.plan);
 
       const usage = await billingService.recordUsage(
@@ -1657,7 +1718,8 @@ export function createWebServer() {
       chatService.addMessage(projectId, { role: "user", type: "text", content: feedback.trim() });
 
       const updatedDescription = `${project.description}\n\nAdditional feedback: ${feedback.trim()}`;
-      const result = await claudeService.generatePlan(updatedDescription, undefined, editPlanLang);
+      const editPrefs = parseProjectPreferences((project as any).preferences ?? null);
+      const result = await claudeService.generatePlan(updatedDescription, undefined, editPlanLang, editPrefs);
       await projectService.updateProjectPlan(projectId, result.plan);
 
       const usage = await billingService.recordUsage(
@@ -1704,27 +1766,39 @@ export function createWebServer() {
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
-      if (!processingProjects.has(projectId)) {
+      const isInFlight = processingProjects.has(projectId);
+
+      // Always recompute dangling messages from chat history so we can clean
+      // up a stuck UI even when there's no in-memory entry (typically left
+      // over from a server restart that interrupted an active build).
+      const history = chatService.getHistory(projectId, undefined, 1000);
+      const danglingIds = history
+        .filter(m => (m.type === "progress" && (m.percent ?? 0) < 100) || m.type === "question")
+        .map(m => m.id);
+
+      if (!isInFlight && danglingIds.length === 0) {
+        // Truly nothing to do — UI is already in sync with server.
         res.json({ ok: false, error: "Not processing" });
         return;
       }
 
-      abortedProjects.add(projectId);
-      console.log(`[Chat API] Abort requested for project ${projectId} by user ${auth.telegramId}`);
+      if (isInFlight) {
+        abortedProjects.add(projectId);
+        console.log(`[Chat API] Abort requested for project ${projectId} by user ${auth.telegramId}`);
+      } else {
+        console.log(`[Chat API] Recovering stuck UI for project ${projectId} (${danglingIds.length} dangling msg(s))`);
+      }
 
-      // Remove progress messages from chat and broadcast removal
-      const history = chatService.getHistory(projectId, undefined, 1000);
-      const progressIds = history.filter(m => m.type === "progress" && (m.percent ?? 0) < 100).map(m => m.id);
-      for (const id of progressIds) {
+      for (const id of danglingIds) {
         chatService.removeMessage(projectId, id);
       }
-      if (progressIds.length > 0) {
-        broadcastToProject(projectId, { type: "remove_messages", projectId, messageIds: progressIds });
+      if (danglingIds.length > 0) {
+        broadcastToProject(projectId, { type: "remove_messages", projectId, messageIds: danglingIds });
       }
 
       broadcastToProject(projectId, { type: "finalizing_done", projectId });
 
-      res.json({ ok: true });
+      res.json({ ok: true, recovered: !isInFlight && danglingIds.length > 0 });
     } catch (err) {
       console.error("[Chat API] Abort error:", err);
       res.status(500).json({ error: "Internal server error" });
@@ -1754,6 +1828,7 @@ export function createWebServer() {
           createdAt: c.createdAt,
           isReleased: project.releaseCommit === parseInt(c.version, 10),
           hasLog: !!commitService.getLogPath(req.params.projectId as string, parseInt(c.version, 10)),
+          hasDetailedLog: !!commitService.getDetailedLogPath(req.params.projectId as string, parseInt(c.version, 10)),
           changelogUrl: resultMsg?.metadata?.changelogUrl || null,
         };
       });
@@ -1826,6 +1901,30 @@ export function createWebServer() {
       fs.createReadStream(logPath).pipe(res);
     } catch (err) {
       console.error("[MiniApp API] Log download error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // Admin-only: download the full detailed Anthropic request/response log for a commit
+  app.get("/telegram-mini-app/api/versions/:projectId/detailed-log/:version", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      if (!isAdminTelegramId(auth.telegramId)) { res.status(403).json({ error: "Admin only" }); return; }
+
+      const projectId = req.params.projectId as string;
+      const project = await projectService.getProject(projectId);
+      if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+
+      const ver = parseInt(req.params.version as string, 10);
+      const detailedPath = commitService.getDetailedLogPath(projectId, ver);
+      if (!detailedPath) { res.status(404).json({ error: "Detailed log not found" }); return; }
+
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="detailed-log-${ver}.json"`);
+      fs.createReadStream(detailedPath).pipe(res);
+    } catch (err) {
+      console.error("[MiniApp API] Detailed log download error:", err);
       res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -2372,6 +2471,121 @@ export function createWebServer() {
       });
     } catch (err: any) {
       console.error("[Admin] Sources stats error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // List of users that registered in the given date range AND match a
+  // specific bucket from the Sources screen. Powers the per-card "Users"
+  // drill-down. Mirrors the filtering logic of /stats/sources so the user
+  // counts always line up.
+  //   kind=all                          -> every user in the range
+  //   kind=organic                      -> no utm_source AND no referred_by
+  //   kind=source  &key=<utm_source>    -> users with that utm_source
+  //   kind=partner &key=<telegramId>    -> users referred by that telegramId
+  //   kind=referrer&key=<telegramId>    -> same shape as partner
+  app.get("/telegram-mini-app/api/admin/stats/sources/users", async (req, res) => {
+    if (!adminGuard(req, res)) return;
+    try {
+      const parseIso = (raw: unknown): Date | null => {
+        if (typeof raw !== "string" || !raw) return null;
+        const d = new Date(raw);
+        return isNaN(d.getTime()) ? null : d;
+      };
+      const fromDate = parseIso(req.query.from);
+      const toDate = parseIso(req.query.to);
+      const kind = String(req.query.kind || "all");
+      const key = typeof req.query.key === "string" ? req.query.key : "";
+
+      const where: any = {};
+      if (fromDate || toDate) {
+        where.createdAt = {};
+        if (fromDate) where.createdAt.gte = fromDate;
+        if (toDate)   where.createdAt.lt  = toDate;
+      }
+
+      if (kind === "organic") {
+        where.AND = [
+          { OR: [{ utmSource: null }, { utmSource: "" }] },
+          { referredBy: null },
+        ];
+      } else if (kind === "source") {
+        if (!key) { res.status(400).json({ error: "key required for kind=source" }); return; }
+        where.utmSource = key;
+      } else if (kind === "partner" || kind === "referrer") {
+        if (!key) { res.status(400).json({ error: "key required for kind=" + kind }); return; }
+        let tgId: bigint;
+        try { tgId = BigInt(key); } catch { res.status(400).json({ error: "key must be a telegramId" }); return; }
+        where.referredBy = tgId;
+      } else if (kind !== "all") {
+        res.status(400).json({ error: "unknown kind: " + kind });
+        return;
+      }
+
+      const users = await prisma.user.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true, telegramId: true, username: true, firstName: true,
+          balance: true, createdAt: true, utmSource: true, referredBy: true,
+          _count: { select: { projects: true } },
+        },
+      });
+
+      // Funnel + revenue per user (matches /stats/sources columns so the
+      // drill-down feels consistent with the parent card).
+      const userIds = users.map(u => u.id);
+      let funnels = new Map<number, { hasBot: boolean; hasPlan: boolean; hasApp: boolean; revenue: number }>();
+      if (userIds.length > 0) {
+        const rows = await prisma.$queryRawUnsafe<Array<{
+          id: number; has_bot: boolean; has_plan: boolean; has_app: boolean; revenue: any;
+        }>>(`
+          SELECT
+            u.id,
+            EXISTS (SELECT 1 FROM projects p WHERE p.user_id = u.id AND p.bot_username IS NOT NULL) AS has_bot,
+            EXISTS (SELECT 1 FROM projects p WHERE p.user_id = u.id AND p.plan IS NOT NULL)        AS has_plan,
+            EXISTS (SELECT 1 FROM projects p WHERE p.user_id = u.id AND p.status IN ('deployed','released')) AS has_app,
+            COALESCE((SELECT SUM(pm.amount_usd) FROM payments pm WHERE pm.user_id = u.id AND pm.status = 'confirmed'), 0) AS revenue
+          FROM users u
+          WHERE u.id = ANY($1::int[])
+        `, userIds);
+        for (const r of rows) {
+          funnels.set(r.id, {
+            hasBot: r.has_bot, hasPlan: r.has_plan, hasApp: r.has_app,
+            revenue: Number(r.revenue),
+          });
+        }
+      }
+
+      res.json({
+        range: {
+          from: fromDate ? fromDate.toISOString() : null,
+          to:   toDate   ? toDate.toISOString()   : null,
+        },
+        kind,
+        key,
+        count: users.length,
+        users: users.map(u => {
+          const f = funnels.get(u.id);
+          return {
+            id: u.id,
+            telegramId: u.telegramId.toString(),
+            username: u.username,
+            firstName: u.firstName,
+            balance: Number(u.balance),
+            projectCount: u._count.projects,
+            createdAt: u.createdAt,
+            utmSource: u.utmSource,
+            referredBy: u.referredBy?.toString() || null,
+            hasBot: f?.hasBot ?? false,
+            hasPlan: f?.hasPlan ?? false,
+            hasApp: f?.hasApp ?? false,
+            revenue: f?.revenue ?? 0,
+          };
+        }),
+      });
+    } catch (err: any) {
+      console.error("[Admin] Sources users error:", err);
       res.status(500).json({ error: err.message });
     }
   });

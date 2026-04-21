@@ -1,3 +1,9 @@
+import { installConsoleTagger } from "./services/console-tagger.service";
+
+// Install before any other import that might log, so per-project AsyncLocalStorage
+// tagging is in place before any user-app code runs.
+installConsoleTagger();
+
 import { config } from "./config";
 import { connectDatabase, prisma } from "./db";
 import { createBot } from "./bot";
@@ -6,6 +12,7 @@ import { botRunnerService } from "./services/bot-runner.service";
 import { webhookCallback } from "grammy";
 import { processingProjects } from "./bot/processing";
 import { commitService } from "./services/commit.service";
+import { chatService } from "./services/chat.service";
 import { startRetentionScheduler } from "./services/retention.service";
 
 async function recoverStuckProjects() {
@@ -16,6 +23,17 @@ async function recoverStuckProjects() {
     console.log(`[Recovery] Project "${p.name}" (${p.id}): building -> ${newStatus}`);
   }
   if (stuck.length > 0) console.log(`[Recovery] Recovered ${stuck.length} stuck project(s)`);
+
+  // Heal chat histories whose last message is a dangling `progress` / `question`
+  // (server died before the agent could write a `result`/`error`/`answer`).
+  // Runs across all projects, not just the ones flipped above, so we also catch
+  // any orphans from prior restarts where the DB was already healed.
+  const healed = chatService.recoverDanglingProgress(
+    "Build interrupted by server restart. Please retry."
+  );
+  if (healed.length > 0) {
+    console.log(`[Recovery] Healed dangling progress in ${healed.length} chat history(ies)`);
+  }
 }
 
 async function main() {

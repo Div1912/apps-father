@@ -443,7 +443,11 @@ function createNewApp() {
     if (icon) { icon.className = 'loader'; icon.style.cssText = 'width:20px;height:20px;margin-right:4px'; }
   }
   const prevCount = projects.length;
-  tg?.openTelegramLink('https://t.me/newbot/apps_father_bot/username_bot');
+  if (location.host = "dev.apps-father.com") {
+    tg?.openTelegramLink('https://t.me/newbot/apps_father_dev_bot/username_bot');
+  } else {
+    tg?.openTelegramLink('https://t.me/newbot/apps_father_bot/username_bot');
+  }
   startCreatePolling(prevCount);
 }
 
@@ -612,6 +616,27 @@ function updateOtherCryptoLock() {
   }
 }
 
+// Compact red "Insufficient balance" card — shown to users who have already
+// deposited at least once. The big conversion-focused "Almost there!" CTA is
+// only useful as a first-purchase nudge; returning users have already crossed
+// that line and just need a quick top-up shortcut.
+function renderInsufficientCard(balance) {
+  const ctaText = t('chat_topup_cta') || t('chat_topup_btn') || 'Top Up Balance';
+  const title = t('chat_insufficient') || 'Insufficient Balance';
+  return `
+    <div class="balance-insufficient-row">
+      <div class="balance-insufficient-text">
+        <div class="balance-insufficient-title">${esc(title)}</div>
+        <div class="balance-insufficient-sub">${esc(t('chat_your_balance') || 'Your balance')}: <b>$${Number(balance).toFixed(2)}</b></div>
+      </div>
+      <button class="balance-cta-btn balance-cta-btn--compact">
+        <span>${esc(ctaText)}</span>
+        <span class="balance-cta-arrow">→</span>
+      </button>
+    </div>
+  `;
+}
+
 function renderBalanceErrorCard(balance) {
   const eligible = firstDepositBonusEligible;
   const ctaText = eligible
@@ -649,6 +674,23 @@ function renderBalanceErrorCard(balance) {
       <span class="balance-cta-arrow">→</span>
     </button>
   `;
+}
+
+// Picks which balance card to render. Returning depositors (paymentCount > 0)
+// get the compact red "insufficient balance" card; first-timers get the big
+// conversion-focused "Almost there!" card with bonus CTA.
+function renderBalancePromptCard(el, balance) {
+  const isReturningDepositor = (typeof userPaymentCount === 'number') && userPaymentCount > 0;
+  if (isReturningDepositor) {
+    el.classList.remove('chat-bubble--balance-error');
+    el.classList.add('chat-bubble--insufficient');
+    el.innerHTML = renderInsufficientCard(balance);
+  } else {
+    el.classList.remove('chat-bubble--insufficient');
+    el.classList.add('chat-bubble--balance-error');
+    el.innerHTML = renderBalanceErrorCard(balance);
+  }
+  el.querySelector('.balance-cta-btn')?.addEventListener('click', () => openTopup('chat'));
 }
 
 async function loadTopupBalance() {
@@ -1338,12 +1380,14 @@ function handleWSMessage(data) {
 
   if (data.type === 'status') {
     if (data.status === 'done') {
-      setTyping(false);
-      setHeaderWorking(false);
-      if (isPlanningMode) enterPlanningMode(false);
-      // Update the progress bubble to result state
       const el = document.getElementById(`msg-${data.messageId}`);
-      if (el) {
+      const isProgressBubble = el && el.classList.contains('chat-bubble--progress');
+      const swap = () => {
+        setTyping(false);
+        setHeaderWorking(false);
+        if (isPlanningMode) enterPlanningMode(false);
+        progressBubbleState.delete(data.messageId);
+        if (!el) return;
         el.className = 'chat-bubble chat-bubble--result';
         let html = `<div class="chat-result-header">${t('chat_update_completed') || 'Update Completed'}</div>`;
         html += `<div class="chat-bubble-content">${formatContent(data.summary || '')}</div>`;
@@ -1361,14 +1405,55 @@ function handleWSMessage(data) {
           <button class="result-action-btn result-action-release" onclick="releaseLatest()">${t('chat_release_update')}</button>
         </div>`;
         if (typeof data.costUsd === 'number') {
-          html += `<div class="chat-progress-cost">Cost: $${data.costUsd.toFixed(4)}${typeof data.balance === 'number' ? ` · Balance: $${data.balance.toFixed(2)}` : ''}</div>`;
+          html += `<div class="chat-progress-cost">${t('chat_cost')}: $${data.costUsd.toFixed(4)}${typeof data.balance === 'number' ? ` · ${t('chat_balance')}: $${data.balance.toFixed(2)}` : ''}</div>`;
         }
         el.innerHTML = html;
         scrollToBottom();
+      };
+
+      if (isProgressBubble) {
+        animateProgressToComplete(data.messageId, () => swap());
+      } else {
+        swap();
       }
     }
     return;
   }
+}
+
+// Smoothly drives the progress bubble from its current % up to 100%, ticks
+// every checklist item, hides the Stop button, then invokes `done` after a
+// 2-second total completion window so the user sees the bar fill before the
+// result card replaces it.
+function animateProgressToComplete(messageId, done) {
+  const el = document.getElementById(`msg-${messageId}`);
+  let st = progressBubbleState.get(messageId);
+  if (!el || !st) {
+    setTimeout(done, 2000);
+    return;
+  }
+
+  st.completing = true;
+  if (Array.isArray(st.checklist)) {
+    st.checklist = st.checklist.map(item => ({ ...item, done: true }));
+  }
+  const startPct = computeProgressPct(st.createdAtMs, st.firstSeenMs);
+  const startTs = performance.now();
+  const fillDurationMs = 1600;
+
+  const step = (now) => {
+    const elapsed = now - startTs;
+    const k = Math.min(1, elapsed / fillDurationMs);
+    const eased = 1 - Math.pow(1 - k, 3);
+    st.overridePct = startPct + (100 - startPct) * eased;
+    paintProgressBubble(el, st);
+    if (k < 1 && el.isConnected && el.classList.contains('chat-bubble--progress')) {
+      requestAnimationFrame(step);
+    }
+  };
+  requestAnimationFrame(step);
+
+  setTimeout(done, 2000);
 }
 
 async function loadChatHistory(projectId) {
@@ -1439,17 +1524,18 @@ function appendMessage(msg, animate = true) {
     html += `<div class="chat-bubble-content">${esc(msg.content)}</div>`;
     el.innerHTML = html;
   } else if (msg.type === 'balance_error') {
-    el.className = 'chat-bubble chat-bubble--balance-error';
+    el.className = 'chat-bubble';
     const bal = Number(msg.metadata?.balance ?? userBalance ?? 0);
-    el.innerHTML = renderBalanceErrorCard(bal);
-    el.querySelector('.balance-cta-btn')?.addEventListener('click', () => openTopup('chat'));
+    renderBalancePromptCard(el, bal);
     if (isProcessing) {
       setProcessing(false);
       setInputDisabled(false);
       setTyping(false);
       setHeaderWorking(false);
     }
-    // Refresh eligibility flag in the background so the CTA reflects latest state
+    // Refresh eligibility + payment count in the background so the card
+    // reflects the latest state (e.g. user just made their first deposit
+    // in another tab).
     fetch(`${API_BASE}/balance`, { headers: apiHeaders() })
       .then(r => r.ok ? r.json() : null)
       .then(d => {
@@ -1458,10 +1544,7 @@ function appendMessage(msg, animate = true) {
         userPaymentCount = d.paymentCount ?? 0;
         firstDepositBonusEligible = !!d.firstDepositBonusEligible;
         const fresh = el.parentElement?.querySelector(`#${el.id}`);
-        if (fresh) {
-          fresh.innerHTML = renderBalanceErrorCard(Number(d.balance));
-          fresh.querySelector('.balance-cta-btn')?.addEventListener('click', () => openTopup('chat'));
-        }
+        if (fresh) renderBalancePromptCard(fresh, Number(d.balance));
       })
       .catch(() => {});
   } else if (msg.content === 'preparing_next_update' || msg.metadata?.preparing) {
@@ -1606,6 +1689,95 @@ function appendMessage(msg, animate = true) {
   }
 }
 
+// Per-bubble cached state so the dynamic progress timer can re-render without
+// re-receiving the message body. Keyed by message id.
+const progressBubbleState = new Map();
+let progressTimer = null;
+
+// Formula per product spec: y = 1 - e^(-x/100) where x is elapsed seconds.
+// Result is in [0, 1). We render in percent and cap at 99 so the bar never
+// claims to be done until the server actually flips the message to `result`.
+//
+// Dual anchor (server + client) so the bar never stalls:
+//   - serverElapsed = now - createdAtMs ........ resumes correctly after reload
+//   - clientElapsed = now - firstSeenMs ........ immune to client clock skew
+// We take the MAX. If the device clock is behind the server (very common on
+// mobile — Telegram users in airplane mode, NTP not synced, etc.), the server
+// anchor would clamp to 0 for tens of seconds; the client anchor keeps moving
+// from the moment the bubble appears so the user always sees progress.
+function computeProgressPct(createdAtMs, firstSeenMs) {
+  const now = Date.now();
+  const serverElapsedSec = createdAtMs && !isNaN(createdAtMs)
+    ? Math.max(0, (now - createdAtMs) / 1000)
+    : 0;
+  const clientElapsedSec = firstSeenMs && !isNaN(firstSeenMs)
+    ? Math.max(0, (now - firstSeenMs) / 1000)
+    : 0;
+  const elapsedSec = Math.max(serverElapsedSec, clientElapsedSec);
+  if (elapsedSec <= 0) return 0;
+  const y = 1 - Math.exp(-elapsedSec / 100);
+  return Math.min(99, Math.max(0, y * 100));
+}
+
+function ensureProgressTimer() {
+  if (progressTimer) return;
+  progressTimer = setInterval(() => {
+    if (progressBubbleState.size === 0) {
+      clearInterval(progressTimer);
+      progressTimer = null;
+      return;
+    }
+    for (const [id, st] of progressBubbleState) {
+      const el = document.getElementById(`msg-${id}`);
+      if (!el || !el.classList.contains('chat-bubble--progress')) {
+        progressBubbleState.delete(id);
+        continue;
+      }
+      paintProgressBubble(el, st);
+    }
+  }, 1000);
+}
+
+function removeEmoji(str) {
+  return str
+    .replace(/\p{Extended_Pictographic}/gu, '') // emojis
+    .replace(/\p{Emoji_Component}/gu, '')        // skin tones, ZWJ, variation selectors, flag letters
+    .replace(/\s+/g, ' ')                        // clean up double spaces left behind
+    .trim();
+}
+
+function paintProgressBubble(el, st) {
+  const pct = (typeof st.overridePct === 'number') ? st.overridePct : computeProgressPct(st.createdAtMs, st.firstSeenMs);
+  const pctRounded = Math.floor(pct);
+  let html = `<div class="chat-progress-text"><span class="loader"></span> ${t('chat_working')} <b>${pctRounded}%</b></div>`;
+  html += `<div class="chat-progress-bar"><div class="chat-progress-fill" style="width:${pct}%"></div></div>`;
+
+  if (st.checklist && st.checklist.length > 0) {
+    html += renderChecklist(st.checklist);
+  }
+
+  if (st.statusText) {
+    html += `<div class="chat-progress-status">${removeEmoji(esc(st.statusText))}</div>`;
+  }
+
+  if (typeof st.costUsd === 'number' && st.costUsd > 0) {
+    html += `<div class="chat-progress-cost">${t('chat_cost')}: $${st.costUsd.toFixed(4)}${typeof st.balance === 'number' ? ` · ${t('chat_balance')}: $${st.balance.toFixed(2)}` : ''}</div>`;
+  }
+
+  if (!st.completing) {
+    html += `<button class="chat-abort-btn" onclick="abortProcess()">${t('chat_stop_update')}</button>`;
+  }
+
+  el.innerHTML = html;
+  setHeaderWorking(true, pctRounded);
+}
+
+function parseUtc(s) {
+  if (!s) return 0;
+  const t = Date.parse(s);
+  return isNaN(t) ? 0 : t;
+}
+
 function renderProgressBubble(msg) {
   const inner = document.getElementById('chat-messages-inner');
   let el = document.getElementById(`msg-${msg.id}`);
@@ -1618,29 +1790,32 @@ function renderProgressBubble(msg) {
   }
   el.className = 'chat-bubble chat-bubble--progress';
 
-  const pct = msg.percent || 0;
-  let html = `<div class="chat-progress-text"><span class="loader"></span> Working... <b>${pct}%</b></div>`;
-  html += `<div class="chat-progress-bar"><div class="chat-progress-fill" style="width:${pct}%"></div></div>`;
+  // Prefer createdAtUtc (server-issued ISO string); fall back to local
+  // `timestamp` (ms) which has been on the message forever; finally fall back
+  // to "now" so the bar at least starts animating from this moment.
+  const createdAtMs = parseUtc(msg.createdAtUtc) || (msg.timestamp ? Number(msg.timestamp) : 0) || Date.now();
 
-  if (msg.checklist && msg.checklist.length > 0) {
-    html += renderChecklist(msg.checklist);
-  }
+  // Preserve any pre-existing client anchor so re-renders don't reset the
+  // skew-immune timer (otherwise the bar would visually restart on every
+  // websocket update for the same bubble).
+  const prev = progressBubbleState.get(msg.id);
+  const firstSeenMs = (prev && prev.firstSeenMs) ? prev.firstSeenMs : Date.now();
 
-  if (msg.content && msg.content !== 'Starting...') {
-    html += `<div class="chat-progress-status">${esc(msg.content)}</div>`;
-  }
+  const st = {
+    createdAtMs,
+    firstSeenMs,
+    checklist: msg.checklist || null,
+    statusText: (msg.content && msg.content !== 'Starting...') ? msg.content : null,
+    costUsd: typeof msg.costUsd === 'number' ? msg.costUsd : null,
+    balance: typeof msg.balance === 'number' ? msg.balance : null,
+  };
+  progressBubbleState.set(msg.id, st);
+  paintProgressBubble(el, st);
+  ensureProgressTimer();
 
-  if (typeof msg.costUsd === 'number' && msg.costUsd > 0) {
-    html += `<div class="chat-progress-cost">Cost: $${msg.costUsd.toFixed(4)}${typeof msg.balance === 'number' ? ` · Balance: $${msg.balance.toFixed(2)}` : ''}</div>`;
-  }
-
-  html += `<button class="chat-abort-btn" onclick="abortProcess()">Stop Update</button>`;
-
-  el.innerHTML = html;
   setProcessing(true);
   setInputDisabled(true);
   setTyping(false);
-  setHeaderWorking(true, pct);
   if (isNew) scrollToBottom();
 }
 
@@ -1648,26 +1823,21 @@ function updateProgressBubble(data) {
   const el = document.getElementById(`msg-${data.messageId}`);
   if (!el) return;
 
-  const pct = data.percent || 0;
-  let html = `<div class="chat-progress-text"><span class="loader"></span> Working... <b>${pct}%</b></div>`;
-  html += `<div class="chat-progress-bar"><div class="chat-progress-fill" style="width:${pct}%"></div></div>`;
-
-  if (data.checklist && data.checklist.length > 0) {
-    html += renderChecklist(data.checklist);
+  let st = progressBubbleState.get(data.messageId);
+  if (!st) {
+    // First WS update we've seen for this bubble (history-loaded bubble or
+    // refreshed page). Anchor to its own DOM-attached start time if possible,
+    // otherwise to now.
+    st = { createdAtMs: Date.now(), firstSeenMs: Date.now(), checklist: null, statusText: null, costUsd: null, balance: null };
+    progressBubbleState.set(data.messageId, st);
   }
+  if (data.checklist && data.checklist.length > 0) st.checklist = data.checklist;
+  if (data.message) st.statusText = data.message;
+  if (typeof data.costUsd === 'number') st.costUsd = data.costUsd;
+  if (typeof data.balance === 'number') st.balance = data.balance;
 
-  if (data.message) {
-    html += `<div class="chat-progress-status">${esc(data.message)}</div>`;
-  }
-
-  if (typeof data.costUsd === 'number' && data.costUsd > 0) {
-    html += `<div class="chat-progress-cost">Cost: $${data.costUsd.toFixed(4)}${typeof data.balance === 'number' ? ` · Balance: $${data.balance.toFixed(2)}` : ''}</div>`;
-  }
-
-  html += `<button class="chat-abort-btn" onclick="abortProcess()">Stop Update</button>`;
-
-  el.innerHTML = html;
-  setHeaderWorking(true, pct);
+  paintProgressBubble(el, st);
+  ensureProgressTimer();
 }
 
 function renderChecklist(items) {
@@ -1855,11 +2025,45 @@ async function sendAnswer(answer) {
   }
 }
 
-async function sendPlanRequest(description) {
+async function sendPlanRequest(description, opts = {}) {
   const welcome = document.getElementById('chat-welcome');
   welcome.classList.add('hidden');
 
-  appendMessage({ role: 'user', type: 'text', content: description, id: 'plan-user-' + Date.now(), timestamp: Date.now() });
+  // Optimistically render the user's prompt only on the first attempt — when
+  // we retry after the preferences modal saves we keep the existing bubble.
+  // We track the bubble id so a Back-out from the prefs modal can remove
+  // it and restore the chat to its pre-prompt "plan-ready" state.
+  let userBubbleId = opts.userBubbleId || null;
+  if (!opts.skipUserBubble) {
+    userBubbleId = 'plan-user-' + Date.now();
+    appendMessage({ role: 'user', type: 'text', content: description, id: userBubbleId, timestamp: Date.now() });
+  }
+
+  // Before hitting /plan, make sure preferences exist. The server also
+  // enforces this with a 412 — this client check just avoids the round-trip.
+  if (!opts.skipPrefsCheck) {
+    try {
+      const prefsRes = await fetch(`${API_BASE}/chat/${chatProjectId}/preferences`, {
+        headers: { ...apiHeaders() },
+      });
+      if (prefsRes.ok) {
+        const prefsData = await prefsRes.json();
+        if (!prefsData.current) {
+          openPreferencesModal({
+            initial: null,
+            catalog: prefsData.catalog,
+            userBubbleId,
+            description,
+            onSaved: () => sendPlanRequest(description, { skipUserBubble: true, skipPrefsCheck: true, userBubbleId }),
+          });
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn('[prefs] pre-flight check failed, will rely on 412:', err);
+    }
+  }
+
   setTyping(true);
   setInputDisabled(true);
 
@@ -1874,6 +2078,17 @@ async function sendPlanRequest(description) {
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
+      if (res.status === 412 && err.error === 'preferences_required') {
+        // Server says we still don't have prefs — open the modal then retry.
+        setInputDisabled(false);
+        openPreferencesModal({
+          initial: null,
+          userBubbleId,
+          description,
+          onSaved: () => sendPlanRequest(description, { skipUserBubble: true, skipPrefsCheck: true, userBubbleId }),
+        });
+        return;
+      }
       if (res.status === 402) {
         appendMessage({ role: 'system', type: 'balance_error', content: 'Insufficient balance', id: 'plan-err-' + Date.now(), timestamp: Date.now(), metadata: { balance: 0 } });
       } else {
@@ -1895,6 +2110,1149 @@ async function sendPlanRequest(description) {
     setInputDisabled(false);
     appendMessage({ role: 'system', type: 'error', content: 'Network error: ' + err.message, id: 'plan-err-' + Date.now(), timestamp: Date.now() });
   }
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Preferences modal — full-screen pre-plan questionnaire.
+// Opens after the user's first prompt and BEFORE /plan can run.
+// Captures Style + Theme + Header + Density + Bottom-menu and persists
+// them on the project. The agent rules baked into each option become
+// hard constraints in the planner + build prompts.
+// ═════════════════════════════════════════════════════════════════════
+
+// `prefModalState` shape:
+//   { catalog, selection, onSaved, projectId, stepIndex, totalSteps,
+//     userBubbleId, description }
+//
+// `userBubbleId` is the optimistic chat bubble that was rendered for the
+// user's prompt that triggered the modal. Pressing Telegram BackButton
+// while the modal is open removes it and reverts the chat to the pre-prompt
+// "plan-ready" state.
+let prefModalState = null;
+let prefModalCatalogCache = null;
+const PREF_AUTO_ADVANCE_MS = 280;
+const PREF_AUTO_VALUE = '__auto__';
+
+async function loadPreferencesCatalog(projectId) {
+  if (prefModalCatalogCache) return prefModalCatalogCache;
+  const res = await fetch(`${API_BASE}/chat/${projectId}/preferences`, { headers: { ...apiHeaders() } });
+  if (!res.ok) throw new Error(`prefs fetch failed: ${res.status}`);
+  const data = await res.json();
+  prefModalCatalogCache = data;
+  return data;
+}
+
+async function openPreferencesModal({ initial, catalog, onSaved, userBubbleId, description } = {}) {
+  if (!chatProjectId) return;
+  const modal = document.getElementById('preferences-modal');
+  if (!modal) {
+    console.warn('[prefs] modal element missing');
+    return;
+  }
+
+  let payload;
+  if (catalog) {
+    payload = { catalog, current: initial };
+  } else {
+    try {
+      payload = await loadPreferencesCatalog(chatProjectId);
+    } catch (err) {
+      console.error('[prefs] failed to load catalog', err);
+      return;
+    }
+  }
+
+  // Default everything to AUTO so the user explicitly opts INTO opinions
+  // for the categories that matter to them, instead of the modal silently
+  // pre-picking some style they didn't ask for.
+  const selection = { ...(initial || payload.current || {}) };
+  for (const cat of payload.catalog) {
+    if (selection[cat.id] == null) selection[cat.id] = PREF_AUTO_VALUE;
+  }
+
+  prefModalState = {
+    catalog: payload.catalog,
+    selection,
+    onSaved,
+    projectId: chatProjectId,
+    stepIndex: 0,
+    userBubbleId: userBubbleId || null,
+    description: description || '',
+  };
+
+  renderPreferencesModal();
+  bindPrefModalChrome();
+  goToPrefStep(0, { animate: false });
+
+  modal.classList.remove('hidden');
+  modal.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('pref-modal-open');
+  applyPrefModalChromeColors();
+}
+
+function closePreferencesModal() {
+  const modal = document.getElementById('preferences-modal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  modal.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('pref-modal-open');
+  prefModalState = null;
+  restoreChromeColors();
+}
+
+/**
+ * Cancel the prefs modal (Telegram BackButton from step 0). Removes the
+ * optimistically-rendered user bubble that triggered the prompt, restores
+ * the chat input to a clean plan-ready state, and closes the modal without
+ * persisting anything.
+ */
+function cancelPreferencesModal() {
+  if (!prefModalState) return;
+  const { userBubbleId } = prefModalState;
+  closePreferencesModal();
+  if (userBubbleId) {
+    const bubbleEl = document.getElementById('msg-' + userBubbleId);
+    if (bubbleEl) bubbleEl.remove();
+  }
+  // If the chat is now empty, bring back the welcome screen.
+  const inner = document.getElementById('chat-messages-inner');
+  if (inner && inner.children.length === 0) {
+    const welcome = document.getElementById('chat-welcome');
+    if (welcome) welcome.classList.remove('hidden');
+  }
+  setInputDisabled(false);
+}
+
+const PREF_MODAL_CHROME = '#0F1011';
+const DEFAULT_CHROME = '#000000';
+
+function applyPrefModalChromeColors() {
+  if (!tg) return;
+  try { tg.setHeaderColor(PREF_MODAL_CHROME); } catch {}
+  try { tg.setBackgroundColor(PREF_MODAL_CHROME); } catch {}
+  try { if (typeof tg.setBottomBarColor === 'function') tg.setBottomBarColor(PREF_MODAL_CHROME); } catch {}
+}
+
+function restoreChromeColors() {
+  if (!tg) return;
+  try { tg.setHeaderColor(DEFAULT_CHROME); } catch {}
+  try { tg.setBackgroundColor(DEFAULT_CHROME); } catch {}
+  try { if (typeof tg.setBottomBarColor === 'function') tg.setBottomBarColor(DEFAULT_CHROME); } catch {}
+}
+
+function renderPreferencesModal() {
+  if (!prefModalState) return;
+  const stepsEl = document.getElementById('pref-steps');
+  const progressEl = document.getElementById('pref-modal-progress');
+  if (!stepsEl) return;
+
+  stepsEl.innerHTML = '';
+  if (progressEl) progressEl.innerHTML = '';
+
+  const total = prefModalState.catalog.length;
+  prefModalState.catalog.forEach((cat, idx) => {
+    const catLabel = prefCategoryLabel(cat);
+    const catPrompt = prefCategoryPrompt(cat);
+
+    const step = document.createElement('section');
+    step.className = 'pref-step';
+    step.dataset.cat = cat.id;
+    step.dataset.idx = String(idx);
+    step.setAttribute('aria-hidden', 'true');
+
+    const isAuto = prefModalState.selection[cat.id] === PREF_AUTO_VALUE;
+    step.innerHTML = `
+      <div class="pref-step-header">
+        <span class="pref-step-eyebrow">${escapeHtml(catLabel)}</span>
+        <h2 class="pref-step-title">${escapeHtml(catPrompt)}</h2>
+      </div>
+      <button type="button" class="pref-auto-btn ${isAuto ? 'selected' : ''}" data-cat="${cat.id}">
+        <span class="pref-auto-btn-icon" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/><circle cx="12" cy="12" r="3"/></svg>
+        </span>
+        <span class="pref-auto-btn-text">
+          <span class="pref-auto-btn-title">${escapeHtml(t('pref_modal_auto'))}</span>
+          <span class="pref-auto-btn-sub">${escapeHtml(t('pref_modal_auto_desc'))}</span>
+        </span>
+        <span class="pref-auto-btn-check" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>
+        </span>
+      </button>
+      <div class="pref-step-grid"></div>
+    `;
+
+    const grid = step.querySelector('.pref-step-grid');
+    grid.classList.add(`pref-step-grid--${cat.id}`);
+
+    const autoBtn = step.querySelector('.pref-auto-btn');
+    autoBtn.addEventListener('click', () => onPrefAutoPick(cat.id, step, idx));
+
+    for (const opt of cat.options) {
+      const optLabel = prefOptionLabel(cat.id, opt);
+      const optDesc = prefOptionDesc(cat.id, opt);
+
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'pref-card';
+      card.dataset.cat = cat.id;
+      card.dataset.opt = opt.id;
+      if (prefModalState.selection[cat.id] === opt.id) card.classList.add('selected');
+
+      card.innerHTML = `
+        <div class="pref-card-preview">${renderPreferencePreview({ ...opt, label: optLabel })}</div>
+        <div class="pref-card-meta">
+          <div class="pref-card-label">${escapeHtml(optLabel)}</div>
+          <div class="pref-card-desc">${escapeHtml(optDesc)}</div>
+        </div>
+        <div class="pref-card-check" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>
+        </div>
+      `;
+
+      card.addEventListener('click', () => onPrefCardPick(cat.id, opt.id, card, step, idx));
+      grid.appendChild(card);
+    }
+    stepsEl.appendChild(step);
+
+    if (progressEl) {
+      const dot = document.createElement('span');
+      dot.className = 'pref-progress-dot';
+      dot.dataset.idx = String(idx);
+      dot.addEventListener('click', () => goToPrefStep(idx));
+      progressEl.appendChild(dot);
+    }
+  });
+
+  // Total step count for the X/N badge.
+  prefModalState.totalSteps = total;
+
+  // Translate the static modal chrome (submit / back labels).
+  const submitBtn = document.getElementById('pref-modal-submit');
+  if (submitBtn && !submitBtn.classList.contains('busy')) {
+    submitBtn.textContent = t('pref_modal_submit');
+  }
+  const backBtn = document.getElementById('pref-modal-back');
+  if (backBtn) backBtn.setAttribute('aria-label', t('pref_modal_back'));
+}
+
+// ── i18n lookups for catalog entries ────────────────────────────────
+// Catalog ships with English labels/descriptions baked in; the mini-app
+// looks for a matching i18n key first and falls back to the catalog
+// string so adding a new option doesn't require touching i18n.js.
+function prefCategoryLabel(cat) {
+  const key = `pref_cat_${cat.id}_label`;
+  const v = t(key);
+  return v === key ? (cat.label || cat.id) : v;
+}
+function prefCategoryPrompt(cat) {
+  const key = `pref_cat_${cat.id}_prompt`;
+  const v = t(key);
+  return v === key ? (cat.prompt || cat.label || '') : v;
+}
+function prefOptionLabel(catId, opt) {
+  const key = `pref_opt_${catId}_${opt.id}_label`;
+  const v = t(key);
+  return v === key ? (opt.label || opt.id) : v;
+}
+function prefOptionDesc(catId, opt) {
+  const key = `pref_opt_${catId}_${opt.id}_desc`;
+  const v = t(key);
+  return v === key ? (opt.description || '') : v;
+}
+
+function bindPrefModalChrome() {
+  const submitBtn = document.getElementById('pref-modal-submit');
+  if (submitBtn && !submitBtn.dataset.bound) {
+    submitBtn.dataset.bound = '1';
+    submitBtn.addEventListener('click', submitPreferences);
+  }
+  const backBtn = document.getElementById('pref-modal-back');
+  if (backBtn && !backBtn.dataset.bound) {
+    backBtn.dataset.bound = '1';
+    backBtn.addEventListener('click', () => {
+      if (!prefModalState) return;
+      goToPrefStep(prefModalState.stepIndex - 1);
+    });
+  }
+}
+
+function onPrefCardPick(catId, optId, cardEl, stepEl, stepIdx) {
+  if (!prefModalState) return;
+  prefModalState.selection[catId] = optId;
+  stepEl.querySelectorAll('.pref-card').forEach((el) => el.classList.remove('selected'));
+  cardEl.classList.add('selected');
+  const autoBtn = stepEl.querySelector('.pref-auto-btn');
+  if (autoBtn) autoBtn.classList.remove('selected');
+
+  scheduleAutoAdvance(stepIdx);
+}
+
+function onPrefAutoPick(catId, stepEl, stepIdx) {
+  if (!prefModalState) return;
+  prefModalState.selection[catId] = PREF_AUTO_VALUE;
+  stepEl.querySelectorAll('.pref-card').forEach((el) => el.classList.remove('selected'));
+  const autoBtn = stepEl.querySelector('.pref-auto-btn');
+  if (autoBtn) autoBtn.classList.add('selected');
+
+  scheduleAutoAdvance(stepIdx);
+}
+
+function scheduleAutoAdvance(stepIdx) {
+  const isLast = stepIdx >= prefModalState.totalSteps - 1;
+  if (isLast) {
+    // Last step: highlight the submit button instead of auto-submitting so
+    // users still get a chance to review/back out.
+    const submitBtn = document.getElementById('pref-modal-submit');
+    if (submitBtn) submitBtn.classList.add('ready');
+    return;
+  }
+
+  setTimeout(() => {
+    if (!prefModalState) return;
+    if (prefModalState.stepIndex !== stepIdx) return; // user already navigated
+    goToPrefStep(stepIdx + 1);
+  }, PREF_AUTO_ADVANCE_MS);
+}
+
+function goToPrefStep(idx, { animate = true } = {}) {
+  if (!prefModalState) return;
+  const total = prefModalState.totalSteps || prefModalState.catalog.length;
+  const clamped = Math.max(0, Math.min(total - 1, idx));
+  prefModalState.stepIndex = clamped;
+
+  const stepsEl = document.getElementById('pref-steps');
+  if (stepsEl) {
+    stepsEl.querySelectorAll('.pref-step').forEach((el) => {
+      const i = Number(el.dataset.idx);
+      const isActive = i === clamped;
+      const isBefore = i < clamped;
+      if (!animate) el.classList.add('no-anim');
+      el.classList.toggle('active', isActive);
+      el.classList.toggle('before', isBefore);
+      el.setAttribute('aria-hidden', isActive ? 'false' : 'true');
+      // Land at the top of every step so the header/prompt is always visible.
+      if (isActive) el.scrollTop = 0;
+      if (!animate) {
+        // Force reflow so removing `no-anim` doesn't restart the just-set transform.
+        void el.offsetWidth;
+        el.classList.remove('no-anim');
+      }
+    });
+  }
+
+  const progressEl = document.getElementById('pref-modal-progress');
+  if (progressEl) {
+    progressEl.querySelectorAll('.pref-progress-dot').forEach((el) => {
+      const i = Number(el.dataset.idx);
+      el.classList.toggle('done', i < clamped);
+      el.classList.toggle('active', i === clamped);
+    });
+  }
+
+  const counterEl = document.getElementById('pref-modal-step-counter');
+  if (counterEl) counterEl.textContent = `${clamped + 1}/${total}`;
+
+  const backBtn = document.getElementById('pref-modal-back');
+  if (backBtn) backBtn.classList.toggle('hidden', clamped === 0);
+
+  const submitBtn = document.getElementById('pref-modal-submit');
+  if (submitBtn) {
+    const isLast = clamped === total - 1;
+    submitBtn.classList.toggle('hidden', !isLast);
+    submitBtn.classList.remove('ready');
+  }
+}
+
+function renderPreferencePreview(opt) {
+  const spec = opt.preview || {};
+  switch (spec.kind) {
+    case 'style':
+      return renderStylePreviewCard(opt);
+    case 'theme':
+      return renderThemePreviewCard(opt);
+    case 'header':
+      return renderHeaderPreviewCard(opt);
+    case 'density':
+      return renderDensityPreviewCard(opt);
+    case 'bottomMenu':
+      return renderBottomMenuPreviewCard(opt);
+    default:
+      return `<div class="pref-preview-fallback">${escapeHtml(opt.label)}</div>`;
+  }
+}
+
+// Each preview is a tiny, fully-rendered phone mockup so the option's
+// look — fonts, palette, geometry, motion — is on display, not described.
+// All variables come straight from the catalog spec so there's a single
+// source of truth.
+
+function styleCssVars(p) {
+  return `
+    --pp-bg:${p.bg};
+    --pp-surface:${p.surface};
+    --pp-text:${p.text};
+    --pp-muted:${p.textMuted};
+    --pp-primary:${p.primary};
+    --pp-primary-text:${p.primaryText};
+    --pp-accent:${p.accent};
+    --pp-border:${p.border};
+    --pp-radius:${p.radius}px;
+    --pp-shadow:${p.shadow};
+    --pp-display:'${p.displayFont}', system-ui, sans-serif;
+    --pp-body:'${p.bodyFont}', system-ui, sans-serif;
+  `;
+}
+
+function renderStylePreviewCard(opt) {
+  const p = opt.preview;
+  const previewByStyle = {
+    basic: stylePreviewGeneric(p, opt.label),
+    neon: stylePreviewNeon(p, opt.label),
+    crypto: stylePreviewCrypto(p, opt.label),
+    minimal: stylePreviewMinimal(p, opt.label),
+    playful: stylePreviewPlayful(p, opt.label),
+    nature: stylePreviewNature(p, opt.label),
+    corporate: stylePreviewCorporate(p, opt.label),
+    paper: stylePreviewPaper(p, opt.label),
+    aurora: stylePreviewAurora(p, opt.label),
+    brutalist: stylePreviewBrutalist(p, opt.label),
+    liquid: stylePreviewLiquid(p, opt.label),
+    titanium: stylePreviewTitanium(p, opt.label),
+    signal: stylePreviewSignal(p, opt.label),
+    holo: stylePreviewHolo(p, opt.label),
+  };
+  return `<div class="pp pp-style" data-style="${opt.id}" style="${styleCssVars(p)}">${previewByStyle[opt.id] || stylePreviewGeneric(p, opt.label)}</div>`;
+}
+
+function ppNotch() {
+  return `<div class="pp-notch"></div>`;
+}
+
+function stylePreviewGeneric(p, label) {
+  return `
+    ${ppNotch()}
+    <div class="pp-screen">
+      <div class="pp-h">
+        <span class="pp-h-title">${escapeHtml(label)}</span>
+        <span class="pp-h-icon"></span>
+      </div>
+      <div class="pp-card pp-card-hero">
+        <div class="pp-card-eyebrow">Balance</div>
+        <div class="pp-card-amount">$12,480</div>
+      </div>
+      <div class="pp-row">
+        <div class="pp-row-dot"></div>
+        <div class="pp-row-lines"><i></i><i class="short"></i></div>
+      </div>
+      <div class="pp-cta">Continue</div>
+      <div class="pp-tabs">
+        <span></span><span></span><span class="on"></span><span></span>
+      </div>
+    </div>
+  `;
+}
+
+function stylePreviewNeon(p, label) {
+  return `
+    ${ppNotch()}
+    <div class="pp-screen pp-glass">
+      <div class="pp-glow"></div>
+      <div class="pp-h">
+        <span class="pp-h-title">${escapeHtml(label.toUpperCase())}</span>
+        <span class="pp-h-icon"></span>
+      </div>
+      <div class="pp-card pp-card-hero pp-card-glow">
+        <div class="pp-card-eyebrow">PORTFOLIO</div>
+        <div class="pp-card-amount">$24.8K</div>
+        <div class="pp-spark"></div>
+      </div>
+      <div class="pp-cta pp-cta-glow">LAUNCH</div>
+      <div class="pp-tabs">
+        <span></span><span class="on"></span><span></span><span></span>
+      </div>
+    </div>
+  `;
+}
+
+function stylePreviewCrypto(p, label) {
+  return `
+    ${ppNotch()}
+    <div class="pp-screen">
+      <div class="pp-h">
+        <span class="pp-h-title">${escapeHtml(label)}</span>
+        <span class="pp-h-pill">+2.4%</span>
+      </div>
+      <div class="pp-card pp-card-hero">
+        <div class="pp-card-eyebrow">USDT · TON</div>
+        <div class="pp-card-amount pp-mono">$8,124.50</div>
+      </div>
+      <div class="pp-row pp-row-mono">
+        <span class="pp-mono">0x9f...4e</span>
+        <span class="pp-mono pp-up">+0.42</span>
+      </div>
+      <div class="pp-row pp-row-mono">
+        <span class="pp-mono">0xab...19</span>
+        <span class="pp-mono pp-down">-0.18</span>
+      </div>
+      <div class="pp-cta">Trade</div>
+    </div>
+  `;
+}
+
+function stylePreviewMinimal(p, label) {
+  return `
+    ${ppNotch()}
+    <div class="pp-screen">
+      <div class="pp-h pp-h-thin">
+        <span class="pp-h-overline">EDITORIAL</span>
+      </div>
+      <div class="pp-card pp-card-hero pp-card-flat">
+        <div class="pp-card-amount pp-serif">${escapeHtml(label)}</div>
+        <div class="pp-card-eyebrow">Quiet, considered, calm.</div>
+      </div>
+      <div class="pp-rule"></div>
+      <div class="pp-row pp-row-flat"><i></i><i class="short"></i></div>
+      <div class="pp-cta pp-cta-square">Read</div>
+    </div>
+  `;
+}
+
+function stylePreviewPlayful(p, label) {
+  return `
+    ${ppNotch()}
+    <div class="pp-screen">
+      <div class="pp-h">
+        <span class="pp-h-emoji">✨</span>
+        <span class="pp-h-title">${escapeHtml(label)}</span>
+      </div>
+      <div class="pp-card pp-card-hero pp-card-gradient">
+        <div class="pp-card-eyebrow">Streak</div>
+        <div class="pp-card-amount">7 🔥</div>
+      </div>
+      <div class="pp-cta pp-cta-pill">Let's go!</div>
+      <div class="pp-tabs">
+        <span class="on"></span><span></span><span></span><span></span>
+      </div>
+    </div>
+  `;
+}
+
+function stylePreviewNature(p, label) {
+  return `
+    ${ppNotch()}
+    <div class="pp-screen pp-nature">
+      <div class="pp-h pp-h-nature">
+        <span class="pp-h-emoji">🌿</span>
+        <span class="pp-h-title">Eco</span>
+      </div>
+      <div class="pp-nature-hero">
+        <div class="pp-nature-hero-num">247</div>
+        <div class="pp-nature-hero-lbl">kg CO₂<br/>saved</div>
+      </div>
+      <div class="pp-nature-row"><span class="pp-nature-dot"></span><span>Transport</span><span class="pp-nature-val">−84</span></div>
+      <div class="pp-nature-row"><span class="pp-nature-dot"></span><span>Food</span><span class="pp-nature-val">−112</span></div>
+      <div class="pp-cta pp-cta-pill">Log impact</div>
+    </div>
+  `;
+}
+
+function stylePreviewCorporate(p, label) {
+  return `
+    ${ppNotch()}
+    <div class="pp-screen pp-corp">
+      <div class="pp-corp-h">
+        <div class="pp-corp-logo">AF</div>
+        <span class="pp-corp-title">Analytics</span>
+      </div>
+      <div class="pp-corp-section">OVERVIEW · Q2</div>
+      <div class="pp-corp-kpis">
+        <div class="pp-corp-kpi"><b>$48K</b><span>Revenue</span><i>▲ 12%</i></div>
+        <div class="pp-corp-kpi"><b>1,284</b><span>Users</span><i>▲ 8%</i></div>
+        <div class="pp-corp-kpi"><b>94%</b><span>Retention</span><i>▲ 3%</i></div>
+      </div>
+      <div class="pp-corp-list">
+        <div class="pp-corp-li">Invoice #4821<span class="pp-corp-badge">Pending</span></div>
+        <div class="pp-corp-li">Report exported<span class="pp-corp-badge">PDF</span></div>
+      </div>
+      <div class="pp-cta pp-cta-square">Export Report</div>
+    </div>
+  `;
+}
+
+function stylePreviewPaper(p, label) {
+  return `
+    ${ppNotch()}
+    <div class="pp-screen pp-paper">
+      <div class="pp-paper-noise"></div>
+      <div class="pp-paper-h">
+        <div>
+          <div class="pp-paper-issue">Invoice · #0042</div>
+          <div class="pp-paper-title">Order<br/>Summary</div>
+        </div>
+        <div class="pp-paper-stamp">Confirmed</div>
+      </div>
+      <div class="pp-paper-item"><span>Pro Plan</span><span class="pp-paper-price">$29.00</span></div>
+      <div class="pp-paper-item"><span>Workspace ×3</span><span class="pp-paper-price">$9.00</span></div>
+      <div class="pp-paper-item"><span>API Access</span><span class="pp-paper-price">$12.00</span></div>
+      <div class="pp-paper-total"><span>Total</span><span>$50.00</span></div>
+      <div class="pp-cta pp-cta-square">Pay Now</div>
+      <div class="pp-paper-bar">||||||  042-2025  ||||||</div>
+    </div>
+  `;
+}
+
+function stylePreviewAurora(p, label) {
+  return `
+    ${ppNotch()}
+    <div class="pp-screen pp-aurora">
+      <div class="pp-aurora-bg"></div>
+      <div class="pp-h">
+        <span class="pp-aurora-dot"></span>
+        <span class="pp-h-title">Pulse</span>
+        <span class="pp-aurora-badge">Live</span>
+      </div>
+      <div class="pp-card pp-card-hero pp-aurora-glass">
+        <div class="pp-card-eyebrow">EARNINGS</div>
+        <div class="pp-card-amount pp-aurora-grad">$12,480</div>
+        <div class="pp-card-sub">↑ 24% vs last month</div>
+      </div>
+      <div class="pp-aurora-mini">
+        <div class="pp-aurora-mini-c"><b>2,841</b><span>Users</span></div>
+        <div class="pp-aurora-mini-c"><b>48K</b><span>Sessions</span></div>
+        <div class="pp-aurora-mini-c"><b>1.4%</b><span>Churn</span></div>
+      </div>
+      <div class="pp-cta pp-aurora-cta">View Analytics</div>
+    </div>
+  `;
+}
+
+function stylePreviewBrutalist(p, label) {
+  return `
+    ${ppNotch()}
+    <div class="pp-screen pp-brut">
+      <div class="pp-brut-h">
+        <span class="pp-brut-title">APPS<i>.</i>FATHER</span>
+        <span class="pp-brut-num">#042</span>
+      </div>
+      <div class="pp-brut-ticker">BTC ▲2.4 · ETH ▼0.8 · SOL ▲11</div>
+      <div class="pp-brut-big">$48K</div>
+      <div class="pp-brut-big-lbl">MONTHLY REVENUE</div>
+      <div class="pp-brut-grid">
+        <div class="pp-brut-cell"><b>1,284</b><span>USERS</span></div>
+        <div class="pp-brut-cell pp-brut-hl"><b>94%</b><span>RETENTION</span></div>
+        <div class="pp-brut-cell"><b>+31%</b><span>GROWTH</span></div>
+        <div class="pp-brut-cell"><b>12ms</b><span>RESPONSE</span></div>
+      </div>
+      <div class="pp-cta pp-brut-cta">→ CONNECT NOW</div>
+    </div>
+  `;
+}
+
+function stylePreviewLiquid(p, label) {
+  return `
+    ${ppNotch()}
+    <div class="pp-screen pp-liq">
+      <div class="pp-liq-blob pp-liq-blob-1"></div>
+      <div class="pp-liq-blob pp-liq-blob-2"></div>
+      <div class="pp-h">
+        <span class="pp-h-title">Hydra</span>
+        <span class="pp-liq-tag">Live sync</span>
+      </div>
+      <div class="pp-liq-ring">
+        <div class="pp-liq-ring-inner">
+          <b>84%</b>
+          <span>HEALTH</span>
+        </div>
+      </div>
+      <div class="pp-liq-pills">
+        <span class="pp-liq-pill on">Network</span>
+        <span class="pp-liq-pill">Storage</span>
+        <span class="pp-liq-pill">Memory</span>
+      </div>
+      <div class="pp-cta pp-liq-cta">View Dashboard</div>
+    </div>
+  `;
+}
+
+function stylePreviewTitanium(p, label) {
+  return `
+    ${ppNotch()}
+    <div class="pp-screen pp-mag">
+      <div class="pp-mag-metal"></div>
+      <div class="pp-h">
+        <span class="pp-mag-icon"><i></i></span>
+        <span class="pp-h-title">Titanium</span>
+        <span class="pp-mag-live"><i></i>LIVE</span>
+      </div>
+      <div class="pp-mag-hero">
+        <div class="pp-card-eyebrow">TOTAL BALANCE</div>
+        <div class="pp-mag-amount">$284,500</div>
+        <div class="pp-mag-change">↑ $3,200 today · +1.14%</div>
+      </div>
+      <div class="pp-mag-divider"></div>
+      <div class="pp-mag-stats">
+        <div><b>14.2%</b><span>YTD</span></div>
+        <div><b>$2.1K</b><span>Dividends</span></div>
+        <div><b>0.82</b><span>Beta</span></div>
+      </div>
+      <div class="pp-cta pp-mag-cta">View Portfolio</div>
+    </div>
+  `;
+}
+
+function stylePreviewSignal(p, label) {
+  return `
+    ${ppNotch()}
+    <div class="pp-screen pp-sig">
+      <div class="pp-sig-scan"></div>
+      <div class="pp-sig-h">
+        <span class="pp-sig-prompt">root@af:~$</span>
+        <span class="pp-sig-clock">14:32</span>
+      </div>
+      <div class="pp-sig-line"><i>→</i> fetch --stats revenue</div>
+      <div class="pp-sig-big">
+        <b>$48,200</b>
+        <span>MONTHLY REVENUE</span>
+      </div>
+      <div class="pp-sig-line"><i>→</i> ping nodes --all</div>
+      <div class="pp-sig-line">  node-01 <em class="pp-sig-ok">OK</em> <i>3ms</i></div>
+      <div class="pp-sig-line">  node-02 <em class="pp-sig-ok">OK</em> <i>7ms</i></div>
+      <div class="pp-sig-line">  node-03 <em class="pp-sig-warn">WARN</em> <i>142ms</i></div>
+      <div class="pp-sig-bar"><div class="pp-sig-bar-fill" style="width:78%"></div></div>
+      <div class="pp-sig-cur"><i>→</i><span class="pp-sig-cursor"></span></div>
+    </div>
+  `;
+}
+
+function stylePreviewHolo(p, label) {
+  return `
+    ${ppNotch()}
+    <div class="pp-screen pp-holo">
+      <div class="pp-holo-grid"></div>
+      <div class="pp-holo-glow"></div>
+      <div class="pp-h pp-holo-h">
+        <span class="pp-holo-hex"><i></i></span>
+        <span class="pp-h-title">Nexus · Core</span>
+        <span class="pp-holo-corner"><i></i><i></i><i></i></span>
+      </div>
+      <div class="pp-card pp-holo-3d">
+        <div class="pp-card-eyebrow">NETWORK VALUE</div>
+        <div class="pp-card-amount pp-holo-grad">$2.48M</div>
+        <div class="pp-card-sub">↑ 24.8% · 2,841 nodes</div>
+      </div>
+      <div class="pp-holo-mini">
+        <div><b>14.2%</b><span>APY</span></div>
+        <div><b>99.98%</b><span>Uptime</span></div>
+        <div><b>3ms</b><span>Latency</span></div>
+      </div>
+      <div class="pp-holo-scan"></div>
+      <div class="pp-cta pp-holo-cta">Access Dashboard</div>
+    </div>
+  `;
+}
+
+function renderThemePreviewCard(opt) {
+  const mode = opt.preview.mode;
+  return `
+    <div class="pp pp-theme" data-mode="${mode}">
+      ${ppNotch()}
+      <div class="pp-theme-grid">
+        <div class="pp-theme-half pp-theme-light">
+          <div class="pp-theme-h"></div>
+          <div class="pp-theme-card"></div>
+          <div class="pp-theme-card sm"></div>
+          <div class="pp-theme-tag">Light</div>
+        </div>
+        <div class="pp-theme-half pp-theme-dark">
+          <div class="pp-theme-h"></div>
+          <div class="pp-theme-card"></div>
+          <div class="pp-theme-card sm"></div>
+          <div class="pp-theme-tag">Dark</div>
+        </div>
+      </div>
+      ${mode === 'auto' ? '<div class="pp-theme-auto-badge">AUTO</div>' : ''}
+    </div>
+  `;
+}
+
+function renderHeaderPreviewCard(opt) {
+  const layout = opt.preview.layout;
+  let header = '';
+  if (layout === 'minimal') {
+    header = `
+      <div class="pp-h pp-h-thin">
+        <span class="pp-h-title">Inbox</span>
+        <span class="pp-h-icon-sm"></span>
+      </div>
+    `;
+  } else if (layout === 'branded') {
+    header = `
+      <div class="pp-h pp-h-branded">
+        <span class="pp-h-logo"></span>
+        <span class="pp-h-title">App</span>
+        <span class="pp-h-icon"></span>
+      </div>
+    `;
+  } else {
+    header = `
+      <div class="pp-h-large">
+        <span class="pp-h-overline">SECTION</span>
+        <span class="pp-h-bigtitle">Discover</span>
+      </div>
+    `;
+  }
+  return `
+    <div class="pp pp-header">
+      ${ppNotch()}
+      <div class="pp-screen">
+        ${header}
+        <div class="pp-card pp-card-flat"><i></i><i class="short"></i></div>
+        <div class="pp-card pp-card-flat"><i></i><i class="short"></i></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderDensityPreviewCard(opt) {
+  const isCompact = opt.id === 'compact';
+  const rows = isCompact ? 6 : 3;
+  let body = '';
+  for (let i = 0; i < rows; i++) {
+    body += `
+      <div class="pp-d-row ${isCompact ? 'compact' : 'comfy'}">
+        <div class="pp-d-avatar"></div>
+        <div class="pp-d-text"><i></i><i class="short"></i></div>
+      </div>
+    `;
+  }
+  return `
+    <div class="pp pp-density" data-density="${opt.id}">
+      ${ppNotch()}
+      <div class="pp-screen">
+        <div class="pp-h pp-h-thin"><span class="pp-h-title">${isCompact ? 'Compact' : 'Comfortable'}</span></div>
+        <div class="pp-d-list">${body}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderBottomMenuPreviewCard(opt) {
+  const layout = opt.preview.layout;
+  const renderers = {
+    tabbar: navPreviewFlat,
+    tabbar_pill: navPreviewPill,
+    tabbar_glass: navPreviewGlass,
+    tabbar_fab: navPreviewFab,
+    floating_cta: navPreviewFloatingCta,
+    action_grid: navPreviewActionGrid,
+    none: navPreviewNone,
+  };
+  const renderer = renderers[layout] || navPreviewFlat;
+  return `
+    <div class="pp pp-nav-card" data-nav="${layout}">
+      ${ppNotch()}
+      ${renderer()}
+    </div>
+  `;
+}
+
+// ── small SVG primitives reused across the nav previews ─────────────
+const NAV_ICONS = {
+  home: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3 3 10v11h6v-7h6v7h6V10z"/></svg>',
+  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>',
+  heart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8z"/></svg>',
+  user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a8 8 0 0 1 16 0v1"/></svg>',
+  compass: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></svg>',
+  bolt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>',
+  library: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+};
+
+function navStatusBar() {
+  return `
+    <div class="pp-nav-status">
+      <span>9:41</span>
+      <span class="pp-nav-status-icons">
+        <svg width="10" height="6" viewBox="0 0 12 8"><path d="M1 7 L6 2 L11 7" stroke="currentColor" stroke-width="1.3" fill="none"/></svg>
+        <svg width="12" height="6" viewBox="0 0 14 8"><rect x="0.5" y="0.5" width="11" height="7" rx="1.5" stroke="currentColor" fill="none"/><rect x="2" y="2" width="8" height="4" fill="currentColor"/></svg>
+      </span>
+    </div>
+  `;
+}
+
+function navListRow(avatarBg, w1, w2) {
+  const bg = avatarBg || 'linear-gradient(135deg,#3a3a40,#24242a)';
+  return `
+    <div class="pp-nav-row">
+      <div class="pp-nav-avatar" style="background:${bg};"></div>
+      <div class="pp-nav-lines">
+        <div class="pp-nav-line" style="width:${w1}%"></div>
+        <div class="pp-nav-line short" style="width:${w2}%"></div>
+      </div>
+    </div>
+  `;
+}
+
+function navHomeIndicator() {
+  return `<div class="pp-nav-home-ind"></div>`;
+}
+
+// ── 1. Flat tab bar ─────────────────────────────────────────────────
+function navPreviewFlat() {
+  return `
+    <div class="pp-nav-screen pp-nav-screen-flat">
+      ${navStatusBar()}
+      <div class="pp-nav-header">
+        <span class="pp-nav-title pp-nav-title-serif">Messages</span>
+        <span class="pp-nav-icon-btn">${NAV_ICONS.search}</span>
+      </div>
+      <div class="pp-nav-body">
+        ${navListRow('linear-gradient(135deg,#4da2ff,#2d6bc7)', 60, 80)}
+        ${navListRow('linear-gradient(135deg,#ff8aa8,#c7506e)', 45, 60)}
+        ${navListRow('linear-gradient(135deg,#8affa0,#3cc768)', 60, 45)}
+        ${navListRow(null, 80, 45)}
+      </div>
+      <nav class="pp-nav-flat">
+        <div class="pp-nav-flat-item on" style="color:#4da2ff;">
+          <span class="pp-nav-flat-ico">${NAV_ICONS.home}</span>
+          <span class="pp-nav-flat-lbl">Chats</span>
+        </div>
+        <div class="pp-nav-flat-item">
+          <span class="pp-nav-flat-ico">${NAV_ICONS.search}</span>
+          <span class="pp-nav-flat-lbl">Search</span>
+        </div>
+        <div class="pp-nav-flat-item">
+          <span class="pp-nav-flat-ico">${NAV_ICONS.compass}</span>
+          <span class="pp-nav-flat-lbl">Discover</span>
+        </div>
+        <div class="pp-nav-flat-item">
+          <span class="pp-nav-flat-ico">${NAV_ICONS.bolt}</span>
+          <span class="pp-nav-flat-lbl">Activity</span>
+        </div>
+        <div class="pp-nav-flat-item">
+          <span class="pp-nav-flat-ico">${NAV_ICONS.user}</span>
+          <span class="pp-nav-flat-lbl">Me</span>
+        </div>
+      </nav>
+      ${navHomeIndicator()}
+    </div>
+  `;
+}
+
+// ── 2. Floating pill ────────────────────────────────────────────────
+function navPreviewPill() {
+  return `
+    <div class="pp-nav-screen pp-nav-screen-pill">
+      ${navStatusBar()}
+      <div class="pp-nav-header">
+        <span class="pp-nav-title pp-nav-title-sans">Library</span>
+        <span class="pp-nav-icon-btn pp-nav-icon-btn-purple">${NAV_ICONS.plus}</span>
+      </div>
+      <div class="pp-nav-body pp-nav-body-tight">
+        <div class="pp-nav-tile-grid">
+          <div class="pp-nav-tile" style="background:linear-gradient(135deg,#ff8aa8,#b784ff);"></div>
+          <div class="pp-nav-tile" style="background:linear-gradient(135deg,#6ae3ff,#b784ff);"></div>
+          <div class="pp-nav-tile" style="background:linear-gradient(135deg,#ffb347,#ff6b8a);"></div>
+          <div class="pp-nav-tile" style="background:linear-gradient(135deg,#8aff9e,#6ae3ff);"></div>
+        </div>
+      </div>
+      <nav class="pp-nav-pill">
+        <div class="pp-nav-pill-item on">${NAV_ICONS.home}</div>
+        <div class="pp-nav-pill-item">${NAV_ICONS.search}</div>
+        <div class="pp-nav-pill-item">${NAV_ICONS.library}</div>
+        <div class="pp-nav-pill-item">${NAV_ICONS.user}</div>
+      </nav>
+      ${navHomeIndicator()}
+    </div>
+  `;
+}
+
+// ── 3. Liquid glass ─────────────────────────────────────────────────
+function navPreviewGlass() {
+  return `
+    <div class="pp-nav-screen pp-nav-screen-glass">
+      <div class="pp-nav-glass-blobs"></div>
+      ${navStatusBar()}
+      <div class="pp-nav-header">
+        <span class="pp-nav-title pp-nav-title-serif" style="color:#fff;">Moments</span>
+        <span class="pp-nav-icon-btn pp-nav-icon-btn-glass">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+        </span>
+      </div>
+      <div class="pp-nav-body pp-nav-body-tight">
+        <div class="pp-nav-tile-grid">
+          <div class="pp-nav-glass-tile"></div>
+          <div class="pp-nav-glass-tile"></div>
+          <div class="pp-nav-glass-tile"></div>
+          <div class="pp-nav-glass-tile"></div>
+        </div>
+      </div>
+      <nav class="pp-nav-glass">
+        <span class="pp-nav-glass-shine"></span>
+        <div class="pp-nav-glass-item on">${NAV_ICONS.home}</div>
+        <div class="pp-nav-glass-item">${NAV_ICONS.search}</div>
+        <div class="pp-nav-glass-item">${NAV_ICONS.heart}</div>
+        <div class="pp-nav-glass-item">${NAV_ICONS.user}</div>
+      </nav>
+      ${navHomeIndicator()}
+    </div>
+  `;
+}
+
+// ── 4. Flat + center FAB ────────────────────────────────────────────
+function navPreviewFab() {
+  return `
+    <div class="pp-nav-screen pp-nav-screen-flat">
+      ${navStatusBar()}
+      <div class="pp-nav-header">
+        <span class="pp-nav-title pp-nav-title-sans">Feed</span>
+        <span class="pp-nav-icon-btn pp-nav-icon-btn-pink">${NAV_ICONS.heart}</span>
+      </div>
+      <div class="pp-nav-body">
+        <div class="pp-nav-feed-card">
+          <div class="pp-nav-feed-head">
+            <span class="pp-nav-avatar small" style="background:linear-gradient(135deg,#ff7a7a,#ff4e8a);"></span>
+            <span class="pp-nav-line short" style="width:45%;"></span>
+          </div>
+          <span class="pp-nav-line" style="width:80%;"></span>
+          <span class="pp-nav-line" style="width:60%;"></span>
+        </div>
+        <div class="pp-nav-feed-card">
+          <div class="pp-nav-feed-head">
+            <span class="pp-nav-avatar small" style="background:linear-gradient(135deg,#8affa0,#3cc768);"></span>
+            <span class="pp-nav-line short" style="width:45%;"></span>
+          </div>
+          <span class="pp-nav-line" style="width:80%;"></span>
+          <span class="pp-nav-line" style="width:45%;"></span>
+        </div>
+      </div>
+      <nav class="pp-nav-fab-bar">
+        <div class="pp-nav-flat-item on" style="color:#ff6b8a;">
+          <span class="pp-nav-flat-ico">${NAV_ICONS.home}</span>
+          <span class="pp-nav-flat-lbl">Home</span>
+        </div>
+        <div class="pp-nav-flat-item">
+          <span class="pp-nav-flat-ico">${NAV_ICONS.search}</span>
+          <span class="pp-nav-flat-lbl">Search</span>
+        </div>
+        <div class="pp-nav-fab-center">${NAV_ICONS.plus}</div>
+        <div class="pp-nav-flat-item">
+          <span class="pp-nav-flat-ico">${NAV_ICONS.heart}</span>
+          <span class="pp-nav-flat-lbl">Likes</span>
+        </div>
+        <div class="pp-nav-flat-item">
+          <span class="pp-nav-flat-ico">${NAV_ICONS.user}</span>
+          <span class="pp-nav-flat-lbl">Me</span>
+        </div>
+      </nav>
+      ${navHomeIndicator()}
+    </div>
+  `;
+}
+
+// ── unchanged: keep simple shapes for the existing 3 ───────────────
+function navPreviewFloatingCta() {
+  return `
+    <div class="pp-nav-screen pp-nav-screen-flat">
+      ${navStatusBar()}
+      <div class="pp-nav-header">
+        <span class="pp-nav-title pp-nav-title-serif">Notes</span>
+        <span class="pp-nav-icon-btn">${NAV_ICONS.search}</span>
+      </div>
+      <div class="pp-nav-body">
+        ${navListRow(null, 80, 45)}
+        ${navListRow(null, 60, 80)}
+        ${navListRow(null, 45, 60)}
+      </div>
+      <button class="pp-nav-fab-corner">${NAV_ICONS.plus}</button>
+      ${navHomeIndicator()}
+    </div>
+  `;
+}
+
+function navPreviewActionGrid() {
+  return `
+    <div class="pp-nav-screen pp-nav-screen-flat">
+      ${navStatusBar()}
+      <div class="pp-nav-header">
+        <span class="pp-nav-title pp-nav-title-serif">Hello</span>
+      </div>
+      <div class="pp-nav-body">
+        <div class="pp-nav-action-grid">
+          <div class="pp-nav-action-card amber"><span class="num">01</span><span class="lbl">Send</span></div>
+          <div class="pp-nav-action-card slate"><span class="num">02</span><span class="lbl">Receive</span></div>
+          <div class="pp-nav-action-card ink"><span class="num">03</span><span class="lbl">Scan</span></div>
+          <div class="pp-nav-action-card cream"><span class="num">04</span><span class="lbl">History</span></div>
+        </div>
+      </div>
+      ${navHomeIndicator()}
+    </div>
+  `;
+}
+
+function navPreviewNone() {
+  return `
+    <div class="pp-nav-screen pp-nav-screen-flat">
+      ${navStatusBar()}
+      <div class="pp-nav-header">
+        <span class="pp-nav-back">${'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>'}</span>
+        <span class="pp-nav-title pp-nav-title-serif">Scan</span>
+        <span></span>
+      </div>
+      <div class="pp-nav-single-body">
+        <div class="pp-nav-qr"></div>
+        <span class="pp-nav-single-lbl">Point at any QR</span>
+      </div>
+      ${navHomeIndicator()}
+    </div>
+  `;
+}
+
+async function submitPreferences() {
+  if (!prefModalState) return;
+  const submitBtn = document.getElementById('pref-modal-submit');
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.classList.add('busy');
+    submitBtn.textContent = t('pref_modal_submitting');
+  }
+  try {
+    const res = await fetch(`${API_BASE}/chat/${prefModalState.projectId}/preferences`, {
+      method: 'POST',
+      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(prefModalState.selection),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      console.error('[prefs] save failed', err);
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.classList.remove('busy');
+        submitBtn.textContent = t('pref_modal_submit');
+      }
+      alert(t('pref_modal_save_failed'));
+      return;
+    }
+    const onSaved = prefModalState.onSaved;
+    closePreferencesModal();
+    if (typeof onSaved === 'function') onSaved();
+  } catch (err) {
+    console.error('[prefs] save error', err);
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.classList.remove('busy');
+      submitBtn.textContent = t('pref_modal_submit');
+    }
+  }
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function hidePlanActions() {
@@ -2080,7 +3438,7 @@ function setHeaderWorking(working, pct) {
   const statusEl = document.getElementById('chat-app-status');
   if (!statusEl) return;
   if (working) {
-    statusEl.innerHTML = `<span class="loader loader--small"></span> Working... ${pct || 0}%`;
+    statusEl.innerHTML = `<span class="loader loader--small"></span> ${t('chat_working')} ${pct || 0}%`;
     statusEl.classList.add('header-working');
   } else {
     statusEl.textContent = currentProject?.botUsername
@@ -2984,6 +4342,9 @@ function openVersionDetail(versionNum) {
     actionsHtml += `<a class="tm-row tm-row-link" id="btn-view-log"><span class="tm-icon af-icon-log"></span><span>${t('version_view_log')}</span></a>`;
     actionsHtml += `<a class="tm-row tm-row-link" id="btn-download-log"><span class="tm-icon af-icon-download"></span><span>${t('version_download_log')}</span></a>`;
   }
+  if (v.hasDetailedLog && isAdmin) {
+    actionsHtml += `<a class="tm-row tm-row-link" id="btn-download-detailed-log"><span class="tm-icon af-icon-download"></span><span>${t('version_download_detailed_log')}</span></a>`;
+  }
 
   actionsEl.innerHTML = actionsHtml;
 
@@ -3053,6 +4414,26 @@ function openVersionDetail(versionNum) {
     } catch (err) {
       console.error('Download log error:', err);
       showToast('Failed to download log.', 'error');
+    }
+  });
+
+  document.getElementById('btn-download-detailed-log')?.addEventListener('click', async () => {
+    if (!currentProject) return;
+    try {
+      const res = await fetch(`${API_BASE}/versions/${currentProject.id}/detailed-log/${v.version}`, { headers: apiHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `detailed-log-${v.version}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Download detailed log error:', err);
+      showToast('Failed to download detailed log.', 'error');
     }
   });
 
@@ -3501,8 +4882,25 @@ function admSourceCard(block) {
           <div class="adm-src-metric-value yellow">$${arppu}</div>
         </div>
       </div>
+
+      <button class="adm-src-users-btn"
+              data-users-kind="${esc(block.kind)}"
+              data-users-key="${esc(admBlockKey(block))}"
+              data-users-title="${esc(titleLabel)}">
+        View ${admFmtInt(block.users)} user${block.users === 1 ? '' : 's'} →
+      </button>
     </div>
   `;
+}
+
+// Identifier that uniquely picks this bucket on the backend.
+//   source:  utm_source value
+//   partner / referrer: referrer's telegramId
+//   all / organic: empty (the kind alone is enough)
+function admBlockKey(block) {
+  if (block.kind === 'source')  return block.source || block.title || '';
+  if (block.kind === 'partner' || block.kind === 'referrer') return block.telegramId || '';
+  return '';
 }
 
 function admRenderSources() {
@@ -3551,6 +4949,12 @@ function admRenderSources() {
     btn.addEventListener('click', () => {
       admSourcesTab = btn.dataset.tab;
       admRenderSources();
+    });
+  });
+
+  el.querySelectorAll('.adm-src-users-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      openAdmSourceUsers(btn.dataset.usersKind, btn.dataset.usersKey, btn.dataset.usersTitle);
     });
   });
 }
@@ -3628,6 +5032,84 @@ function admWireSourcesControls() {
       admReloadSources();
     });
   }
+}
+
+// ---- Source-Users drill-down ----
+// Opens a sub-view listing every user that registered in the active Sources
+// date range AND belongs to the bucket (kind+key) the admin tapped on.
+let admSourceUsersCtx = null; // { kind, key, title }
+
+function admSourceRangeLabel() {
+  const r = admSourcesRange;
+  if (r.preset === 'today')  return 'today';
+  if (r.preset === 'week')   return 'last 7 days';
+  if (r.preset === 'all' || (!r.from && !r.to)) return 'all time';
+  const fmt = (iso) => admIsoToDateInput(iso) || '?';
+  return `${fmt(r.from)} → ${fmt(r.to)}`;
+}
+
+async function openAdmSourceUsers(kind, key, title) {
+  admSourceUsersCtx = { kind, key: key || '', title: title || 'Users' };
+  showView('adm-source-users');
+
+  const titleEl = document.getElementById('adm-source-users-title');
+  const subEl   = document.getElementById('adm-source-users-sub');
+  const el      = document.getElementById('adm-source-users-content');
+  if (titleEl) titleEl.textContent = admSourceUsersCtx.title;
+  if (subEl)   subEl.textContent   = `Registered · ${admSourceRangeLabel()}`;
+  if (el)      el.innerHTML        = '<div class="loading-spinner"></div>';
+
+  try {
+    const params = new URLSearchParams();
+    params.set('kind', kind);
+    if (key) params.set('key', key);
+    if (admSourcesRange.from) params.set('from', admSourcesRange.from);
+    if (admSourcesRange.to)   params.set('to',   admSourcesRange.to);
+    const data = await admApi('/stats/sources/users?' + params.toString());
+    admRenderSourceUsers(data);
+  } catch (err) {
+    if (el) el.innerHTML = `<div class="adm-empty">Failed to load: ${esc(String(err && err.message || err))}</div>`;
+  }
+}
+
+function admRenderSourceUsers(data) {
+  const el = document.getElementById('adm-source-users-content');
+  if (!el) return;
+  const subEl = document.getElementById('adm-source-users-sub');
+  if (subEl) {
+    subEl.textContent = `${data.count} user${data.count === 1 ? '' : 's'} · registered · ${admSourceRangeLabel()}`;
+  }
+
+  if (!data.users || !data.users.length) {
+    el.innerHTML = '<div class="adm-empty">No users in this bucket for the selected range</div>';
+    return;
+  }
+
+  let html = '<div class="tm-table-wrap">';
+  for (const u of data.users) {
+    const name = u.username || u.firstName || 'User ' + u.id;
+    const avatar = userAvatarHtml(name, u.username);
+    const flags = [
+      u.hasBot  ? 'bot'  : null,
+      u.hasPlan ? 'plan' : null,
+      u.hasApp  ? 'app'  : null,
+      u.revenue > 0 ? `$${u.revenue.toFixed(2)}` : null,
+    ].filter(Boolean).join(' · ') || 'no activity';
+    html += `<a class="tm-row tm-row-link" data-user-id="${u.id}">` +
+      avatar +
+      `<div style="flex:1;min-width:0;overflow:hidden;">` +
+        `<div class="tm-row-value" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(name)}</div>` +
+        `<div class="tm-row-description">${esc(flags)} · ${admFmtDate(u.createdAt)}</div>` +
+      `</div>` +
+      `<div class="tm-row-status"><span class="tm-status-dot" style="background:${Number(u.balance) > 0 ? '#5CC377' : '#708499'}"></span>${admFmtMoney(u.balance)}</div>` +
+      `</a>`;
+  }
+  html += '</div>';
+  el.innerHTML = html;
+
+  el.querySelectorAll('[data-user-id]').forEach(row => {
+    row.addEventListener('click', () => openAdmUserDetail(row.dataset.userId));
+  });
 }
 
 async function openAdmActivities() {
@@ -3910,35 +5392,128 @@ async function openAdmProjectChat(projectId) {
   } catch { showToast('Failed to open project', 'error'); }
 }
 
+// ── Admin Apps: state shared across renders ──────────────────────────────
+let admAppsList = null;            // cached fetch (server source of truth)
+let admAppsStatusFilter = 'all';   // 'all' | 'released' | 'deployed' | 'building' | 'planning' | 'created' | 'error'
+let admAppsSort = 'updated_desc';  // see ADM_APPS_SORTERS below
+
+// Order chosen so the most actionable statuses are leftmost.
+const ADM_APPS_STATUS_ORDER = ['released', 'deployed', 'building', 'planning', 'created', 'error'];
+
+const ADM_APPS_SORTERS = {
+  updated_desc: { label: 'Recently updated', cmp: (a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt) },
+  created_desc: { label: 'Recently created', cmp: (a, b) => +new Date(b.createdAt) - +new Date(a.createdAt) },
+  budget_desc:  { label: 'Budget: high → low', cmp: (a, b) => (b.totalCost || 0) - (a.totalCost || 0) },
+  budget_asc:   { label: 'Budget: low → high', cmp: (a, b) => (a.totalCost || 0) - (b.totalCost || 0) },
+  name_asc:     { label: 'Name (A → Z)',     cmp: (a, b) => String(a.name || '').localeCompare(String(b.name || '')) },
+  status:       { label: 'Status',           cmp: (a, b) => ADM_APPS_STATUS_ORDER.indexOf(a.status) - ADM_APPS_STATUS_ORDER.indexOf(b.status) },
+};
+
 async function openAdmApps() {
   admLastSubpage = 'adm-apps';
   showView('adm-apps');
   const el = document.getElementById('adm-apps-content');
   el.innerHTML = '<div class="loading-spinner"></div>';
   try {
-    const allProjects = await admApi('/projects');
-    if (!allProjects.length) { el.innerHTML = '<div class="adm-empty">No projects yet</div>'; return; }
-    let html = '<div class="tm-table-wrap">';
-    for (const p of allProjects) {
+    admAppsList = await admApi('/projects');
+    if (!admAppsList.length) { el.innerHTML = '<div class="adm-empty">No projects yet</div>'; return; }
+    admRenderApps();
+  } catch (err) { el.innerHTML = `<div class="adm-empty">Failed to load projects: ${esc(String(err))}</div>`; }
+}
+
+function admRenderApps() {
+  const el = document.getElementById('adm-apps-content');
+  if (!el || !admAppsList) return;
+
+  // Build status counts off the unfiltered list so chips don't shift.
+  const counts = { all: admAppsList.length };
+  for (const s of ADM_APPS_STATUS_ORDER) counts[s] = 0;
+  for (const p of admAppsList) counts[p.status] = (counts[p.status] || 0) + 1;
+
+  const chips = [{ id: 'all', label: 'All' }]
+    .concat(ADM_APPS_STATUS_ORDER
+      .filter(s => counts[s] > 0)
+      .map(s => ({ id: s, label: statusLabel(s) })));
+
+  const chipsHtml = `<div class="adm-tabs" id="adm-apps-status-chips">${
+    chips.map(c => {
+      const active = c.id === admAppsStatusFilter ? ' active' : '';
+      return `<button class="adm-tab${active}" data-status="${c.id}">${esc(c.label)}<span class="adm-tab-count">${counts[c.id] || 0}</span></button>`;
+    }).join('')
+  }</div>`;
+
+  const sortHtml = `<div class="adm-apps-toolbar">
+    <label class="adm-apps-sort-label">Sort by</label>
+    <select class="adm-apps-sort" id="adm-apps-sort">${
+      Object.entries(ADM_APPS_SORTERS).map(([id, s]) =>
+        `<option value="${id}"${id === admAppsSort ? ' selected' : ''}>${esc(s.label)}</option>`
+      ).join('')
+    }</select>
+  </div>`;
+
+  const filtered = admAppsStatusFilter === 'all'
+    ? admAppsList.slice()
+    : admAppsList.filter(p => p.status === admAppsStatusFilter);
+  const sorter = ADM_APPS_SORTERS[admAppsSort] || ADM_APPS_SORTERS.updated_desc;
+  filtered.sort(sorter.cmp);
+
+  // Total budget for the currently-filtered slice — useful at a glance.
+  const totalBudget = filtered.reduce((s, p) => s + (p.totalCost || 0), 0);
+  const summaryHtml = `<div class="adm-apps-summary">
+    <span><b>${filtered.length}</b> ${filtered.length === 1 ? 'app' : 'apps'}</span>
+    <span class="adm-apps-summary-sep">·</span>
+    <span>Total spend <b>${admFmtMoney(totalBudget)}</b></span>
+  </div>`;
+
+  let listHtml;
+  if (!filtered.length) {
+    listHtml = `<div class="adm-empty">No apps with status “${esc(statusLabel(admAppsStatusFilter))}”</div>`;
+  } else {
+    listHtml = '<div class="tm-table-wrap">';
+    for (const p of filtered) {
       const username = p.botUsername ? `@${esc(p.botUsername)}` : '';
       const [c1, c2] = getGradient(p.name);
       const avatarHtml = `<div class="tm-row-pic tm-row-pic-user avatar-gradient" style="background:linear-gradient(135deg,${c1},${c2})">${getInitials(p.name)}</div>`;
       const statusDot = p.status === 'building'
         ? '<span class="loader" style="width:16px;height:16px;margin-right:8px"></span>'
         : `<span class="tm-status-dot ${p.status}"></span>`;
-      html += `<a class="tm-row tm-row-link" data-proj-id="${p.id}" style="align-items:center;">` +
+      const cost = Number(p.totalCost || 0);
+      const budgetPill = `<span class="adm-apps-budget${cost ? '' : ' zero'}" title="Total spend">${admFmtMoney(cost)}</span>`;
+      listHtml += `<a class="tm-row tm-row-link" data-proj-id="${p.id}" style="align-items:center;">` +
         avatarHtml +
-        `<div style="flex:1;min-width:0;overflow:hidden;"><div class="tm-row-value" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.name)}</div>` +
-        `<div class="tm-row-description" style="white-space:nowrap;">${username}</div></div>` +
-        `<div class="tm-row-status">${statusDot}${statusLabel(p.status)}</div>` +
+        `<div style="flex:1;min-width:0;overflow:hidden;">` +
+          `<div class="tm-row-value" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.name)}</div>` +
+          `<div class="tm-row-description" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${username || '<span style="opacity:0.5">no bot</span>'}</div>` +
+        `</div>` +
+        `<div class="tm-row-status" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">` +
+          `<div style="display:flex;align-items:center;">${statusDot}${statusLabel(p.status)}</div>` +
+          budgetPill +
+        `</div>` +
         `</a>`;
     }
-    html += '</div>';
-    el.innerHTML = html;
-    el.querySelectorAll('[data-proj-id]').forEach(row => {
-      row.addEventListener('click', () => openAdmProjectChat(row.dataset.projId));
+    listHtml += '</div>';
+  }
+
+  el.innerHTML = chipsHtml + sortHtml + summaryHtml + listHtml;
+
+  el.querySelectorAll('#adm-apps-status-chips .adm-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      admAppsStatusFilter = btn.dataset.status;
+      admRenderApps();
     });
-  } catch (err) { el.innerHTML = `<div class="adm-empty">Failed to load projects: ${esc(String(err))}</div>`; }
+  });
+
+  const sortEl = document.getElementById('adm-apps-sort');
+  if (sortEl) {
+    sortEl.addEventListener('change', () => {
+      admAppsSort = sortEl.value;
+      admRenderApps();
+    });
+  }
+
+  el.querySelectorAll('[data-proj-id]').forEach(row => {
+    row.addEventListener('click', () => openAdmProjectChat(row.dataset.projId));
+  });
 }
 
 async function openAdmVouchers() {
@@ -4076,6 +5651,7 @@ function showView(view) {
   document.getElementById('view-admin').classList.toggle('hidden', view !== 'admin');
   document.getElementById('view-adm-dashboard').classList.toggle('hidden', view !== 'adm-dashboard');
   document.getElementById('view-adm-sources').classList.toggle('hidden', view !== 'adm-sources');
+  document.getElementById('view-adm-source-users').classList.toggle('hidden', view !== 'adm-source-users');
   document.getElementById('view-adm-activities').classList.toggle('hidden', view !== 'adm-activities');
   document.getElementById('view-adm-users').classList.toggle('hidden', view !== 'adm-users');
   document.getElementById('view-adm-apps').classList.toggle('hidden', view !== 'adm-apps');
@@ -4698,6 +6274,14 @@ async function init() {
         closeTestPreview();
         return;
       }
+      // Preferences modal: BackButton always cancels — drops the optimistic
+      // user bubble and reverts the chat to the pre-prompt plan-ready state,
+      // regardless of which step we're on. (The in-modal arrow handles
+      // step-by-step back navigation.)
+      if (prefModalState) {
+        cancelPreferencesModal();
+        return;
+      }
       if (currentView === 'version-detail') {
         openVersions(currentProject.id);
       } else if (currentView === 'versions') {
@@ -4732,7 +6316,17 @@ async function init() {
         // who hit it early aren't dumped onto a half-shown carousel.
         onbFinish();
       } else if (currentView === 'admin-user') {
-        openAdmUsers();
+        // Detail returns to whichever list we came from (Sources drill-down
+        // or the top-level Users page) so Back doesn't yank the admin out
+        // of the funnel they were inspecting.
+        if (admSourceUsersCtx) {
+          openAdmSourceUsers(admSourceUsersCtx.kind, admSourceUsersCtx.key, admSourceUsersCtx.title);
+        } else {
+          openAdmUsers();
+        }
+      } else if (currentView === 'adm-source-users') {
+        admSourceUsersCtx = null;
+        openAdmSources();
       } else if (currentView === 'adm-dashboard' || currentView === 'adm-sources' || currentView === 'adm-activities' || currentView === 'adm-users' || currentView === 'adm-apps' || currentView === 'adm-vouchers' || currentView === 'adm-config') {
         openAdmin();
       } else if (currentView === 'admin') {

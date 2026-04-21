@@ -15,10 +15,121 @@ import { commitService } from "./commit.service";
 import { MODEL_PRICING } from "./billing.service";
 import { abortedProjects } from "../bot/processing";
 import { ConventionExtractor } from "./convention-extractor";
+import { parseProjectPreferences, buildPreferencesPrompt } from "./preferences.catalog";
 import { forceReloadProjectWs } from "../web/ws-manager";
 
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
-const SKILLS_DIR = path.join(process.cwd(), "skills");
+const KNOWLEDGE_DIR = path.join(process.cwd(), "agent_knowledge");
+const INSTRUCTIONS_DIR = path.join(KNOWLEDGE_DIR, "instructions");
+const SKILLS_DIR = path.join(KNOWLEDGE_DIR, "skills");
+
+// What the agent knows depends on the build mode. Most instruction files are
+// loaded for every run; only workflow-* files are mode-specific. Order matters —
+// it's the order they appear in the system prompt. To add a new section, drop
+// a .md into agent_knowledge/instructions/ and add an entry here.
+type AgentMode = "new" | "update";
+const INSTRUCTION_MANIFEST: Array<{ file: string; modes?: AgentMode[] }> = [
+  { file: "identity.md" },
+  { file: "architecture.md" },
+  { file: "frontend-rules.md" },
+  { file: "backend-rules.md" },
+  { file: "database-design.md" },
+  { file: "routes-hot-reload.md" },
+  { file: "bot-webhook.md" },
+  { file: "technology-choice.md" },
+  { file: "best-practices.md" },
+  { file: "efficiency.md" },
+  // { file: "debugging.md" },
+
+  { file: "workflow-new.md", modes: ["new"] },
+  { file: "workflow-update.md", modes: ["update"] },
+  { file: "telegram-api.md" },
+  { file: "bot-side-updates.md" },
+  { file: "after-writing.md" },
+  { file: "ask-user.md" },
+  { file: "progress-reporting.md" },
+  { file: "skills-index.md" },
+  { file: "frontend-design.md" }, // last — the always-loaded design skill block
+];
+
+// Cache file contents in memory so we don't hit the disk on every build.
+// Invalidate by restarting the server (instruction files change rarely).
+const instructionCache = new Map<string, string>();
+
+// ---- Template variables for instructions/skills ----
+// Markdown can use placeholders like {domain} or {wsBaseUrl}; they are
+// substituted at prompt-build time with values derived from the runtime
+// config. This keeps the docs portable across environments
+// (apps-father.com / dev.apps-father.com / localhost:3000) without forking
+// the markdown.
+//
+// IMPORTANT: only the keys listed in TEMPLATE_KEYS are substituted. Other
+// curly placeholders the agent already uses in docs — {projectId}, {userId},
+// {file}, {key}, etc. — are left as literal text so the agent still sees
+// them as runtime placeholders to fill in generated code.
+const TEMPLATE_KEYS = ["domain", "baseUrl", "wsBaseUrl", "wsScheme"] as const;
+type TemplateKey = typeof TEMPLATE_KEYS[number];
+const TEMPLATE_KEY_RE = new RegExp(`\\{(${TEMPLATE_KEYS.join("|")})\\}`, "g");
+
+export function buildTemplateVars(): Record<TemplateKey, string> {
+  const baseUrl = config.baseUrl;
+  const wsScheme = baseUrl.startsWith("https://") ? "wss" : "ws";
+  const wsBaseUrl = baseUrl.replace(/^https?:\/\//, `${wsScheme}://`);
+  return {
+    domain: config.domain,
+    baseUrl,
+    wsBaseUrl,
+    wsScheme,
+  };
+}
+
+function renderTemplate(text: string, vars: Record<TemplateKey, string>): string {
+  if (!text) return text;
+  return text.replace(TEMPLATE_KEY_RE, (_, k: TemplateKey) => vars[k] ?? `{${k}}`);
+}
+
+function loadInstruction(file: string): string {
+  if (instructionCache.has(file)) return instructionCache.get(file)!;
+  try {
+    const filePath = path.join(INSTRUCTIONS_DIR, file);
+    if (!filePath.startsWith(INSTRUCTIONS_DIR)) return "";
+    const content = fs.readFileSync(filePath, "utf-8").trim();
+    instructionCache.set(file, content);
+    return content;
+  } catch (err: any) {
+    console.warn(`[Agent] missing instruction file: ${file} — ${err.message}`);
+    instructionCache.set(file, "");
+    return "";
+  }
+}
+
+function buildSystemPrompt(mode: AgentMode): string {
+  const parts: string[] = [];
+  const missing: string[] = [];
+  const vars = buildTemplateVars();
+
+  for (const entry of INSTRUCTION_MANIFEST) {
+    if (entry.modes && !entry.modes.includes(mode)) continue;
+    const content = loadInstruction(entry.file);
+    if (content) parts.push(renderTemplate(content, vars));
+    else missing.push(entry.file);
+  }
+  const prompt = parts.join("\n----------------------\n");
+  // Fail fast with a clear error instead of sending empty system to Anthropic
+  // (which returns "cache_control cannot be set for empty text blocks").
+  // This typically means agent_knowledge/ wasn't deployed to the server.
+  if (!prompt.trim()) {
+    throw new Error(
+      `[Agent] system prompt is empty — agent_knowledge/instructions/ missing or unreadable at ${INSTRUCTIONS_DIR}. ` +
+      `Missing files: ${missing.join(", ")}. ` +
+      `Run deploy-full.ps1 (or copy agent_knowledge/ to the server) and restart the process.`
+    );
+  }
+  if (missing.length > 0) {
+    console.warn(`[Agent] buildSystemPrompt(${mode}): ${missing.length} instruction file(s) missing: ${missing.join(", ")}`);
+  }
+  return prompt;
+}
 
 function bustCache(projectDir: string): void {
   const indexPath = path.join(projectDir, "frontend", "index.html");
@@ -38,7 +149,8 @@ function loadSkill(name: string): string {
   try {
     const filePath = path.join(SKILLS_DIR, name.endsWith(".md") ? name : name + ".md");
     if (!filePath.startsWith(SKILLS_DIR)) return "";
-    return fs.readFileSync(filePath, "utf-8");
+    const raw = fs.readFileSync(filePath, "utf-8");
+    return renderTemplate(raw, buildTemplateVars());
   } catch { return ""; }
 }
 
@@ -48,426 +160,12 @@ function getAvailableSkills(): string[] {
   } catch { return []; }
 }
 
-const FRONTEND_SKILL = loadSkill("frontend");
-const BACKEND_SKILL = loadSkill("backend");
-const FRONTEND_DESIGN_SKILL = loadSkill("frontend-design");
+// All instruction blocks moved to agent_knowledge/instructions/*.md and assembled
+// per-build via buildSystemPrompt(mode). Skills (frontend, backend, bot-management,
+// websocket, ton-payments) live in agent_knowledge/skills/ and are still loaded
+// on-demand by the model via the load_skill tool.
 
-const AGENT_SYSTEM_PROMPT = `You are Apps Father AI — a senior full-stack developer that creates and updates Telegram Mini Apps.
 
-You have powerful tools: shell access, file editing, grep, database, HTTP requests, and Telegram Bot API. Use them efficiently.
-
-ARCHITECTURE:
-- Frontend: HTML + CSS + vanilla JS — you edit frontend/ (index.html, styles.css, app.js)
-- Backend: Express.js routes in backend/routes.js
-- WebSocket: real-time via wss://apps-father.com/devws/{projectId} (handler in routes.js)
-- Database: JSON key-value store (db.get/db.set) — backed by SQLite, one file per project
-- Files live in: frontend/ (index.html, styles.css, app.js) and backend/ (routes.js) — these paths are relative to YOUR working directory
-- ENVIRONMENTS:
-  * You work inside a commit folder. Your frontend/ and backend/ are scoped to this commit.
-  * To test your changes, call deploy_to_dev() — this copies your code to the development environment.
-  * After deploy_to_dev(), test via DEV URLs:
-    - Frontend: /dev/{projectId}/
-    - API: /devapi/{projectId}/
-    - WebSocket: wss://apps-father.com/devws/{projectId}
-  * Production URLs (/app/, /api/, /ws/) serve from RELEASE — do NOT test against them. They show old code until the user clicks "Publish".
-  * NEVER write files outside frontend/ and backend/. You will get an error if you try.
-  * Call deploy_to_dev() before testing with http_request. Your code is NOT live until you deploy.
-  * DEPLOY LIMIT: You may use deploy_to_dev() at most 2 times per session. After the second deploy, finish your work and call done(). Do NOT keep deploying and testing in a loop.
-  * If tests fail due to dev environment caching (e.g. WebSocket handlers not reloading, old round data in DB), note it in your done() summary and move on. Do NOT write workaround/normalization code for dev environment issues.
-- You can install npm packages via shell (npm install --save <pkg>)
-
-RULES FOR FRONTEND:
-1. Single-page app: HTML + CSS + vanilla JS
-2. Always include: <script src="https://telegram.org/js/telegram-web-app.js"></script>
-3. Use Telegram theme vars: var(--tg-theme-bg-color), var(--tg-theme-text-color), etc.
-4. ALWAYS call on load: Telegram.WebApp.ready(); Telegram.WebApp.expand(); Telegram.WebApp.setHeaderColor("#000000"); Telegram.WebApp.setBottomBarColor("#000000"); Telegram.WebApp.setBackgroundColor("#000000"); Telegram.WebApp.disableVerticalSwipes(); On mobile: Telegram.WebApp.requestFullscreen();
-5. All fetch calls MUST include initData header:
-   function apiCall(endpoint, options = {}) {
-     const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (window.Telegram?.WebApp?.initData || ''), ...(options.headers || {}) };
-     return fetch(endpoint, { ...options, headers });
-   }
-6. API base URL: /api/{projectId}/
-
-DESIGN SYSTEM (follow strictly for all apps):
-All apps must look premium and native to Telegram. Follow these patterns from top Telegram Mini Apps.
-
-Colors:
-- Background: #000000 (pure black) or #0a0a0a — NEVER light/white backgrounds
-- Surface/cards: #141414 or #1E1E1E on black background
-- Text primary: #FFFFFF
-- Text secondary: rgba(255,255,255,0.5) or #6D6D71
-- Text hint: rgba(255,255,255,0.3)
-- Accent blue: #35AFF2 (buttons, links)
-- Accent green: #00FF95 (success, earnings, growth)
-- Accent gold: #FFD700 (premium, warnings)
-- Destructive: #FF3B30
-- Borders: rgba(255,255,255,0.08) or rgba(255,255,255,0.1)
-
-Typography:
-- Font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif
-- Titles: 24-30px, font-weight 600-700
-- Body: 14-16px, font-weight 400-500
-- Labels/captions: 10-12px, uppercase, letter-spacing 0.5px, rgba(255,255,255,0.5)
-- Numbers/stats: font-weight 700, slightly larger than body
-
-Layout & Scrolling (CRITICAL — follow exactly):
-- html,body { margin:0; padding:0; background:#000; color:#fff; overflow-x:hidden; overscroll-behavior:none; height:100%; }
-- NEVER set overflow:hidden on html or body — this kills page scroll
-- Hide scrollbars visually: ::-webkit-scrollbar { display:none; } body { scrollbar-width:none; }
-- App container: .app { display:flex; flex-direction:column; height:100vh; height:100dvh; }
-- IMPORTANT: use height:100vh on .app, NEVER min-height:100vh — min-height does not constrain flex children so overflow-y:auto on children won't work
-- Scrollable content area: flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch;
-- NEVER use position:fixed; inset:0 for the main app container — it blocks native scroll
-- Fixed elements (bottom nav, headers) must be separate from scrollable content, use flex-shrink:0
-- Safe areas: padding-top: calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px)); padding-bottom: calc(var(--tg-safe-area-inset-bottom, 0px) + var(--tg-content-safe-area-inset-bottom, 0px))
-- Correct scroll pattern example:
-  .app { display:flex; flex-direction:column; height:100vh; height:100dvh; }
-  .app-header { flex-shrink:0; }
-  .main-content { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; }
-  .bottom-nav { flex-shrink:0; }
-
-Cards:
-- background: #1E1E1E; border-radius: 16px-20px; padding: 16px; border: none or 1px solid rgba(255,255,255,0.06)
-- Never flat — add subtle depth via background color contrast
-
-Buttons:
-- Primary: background:#35AFF2; color:#fff; border:none; border-radius:12px; padding:12px 24px; font-weight:600
-- Secondary: background:rgba(255,255,255,0.1); color:#fff; backdrop-filter:blur(12px)
-- ALL buttons: cursor:pointer; transition:all 0.2s ease-out; transform on press: active { transform:scale(0.96); }
-- Disabled: opacity:0.4; cursor:not-allowed
-
-Glass/Blur effects:
-- Floating elements: backdrop-filter:blur(16px); background:rgba(20,20,20,0.85)
-- Glass shadow: box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06), 0 4px 24px rgba(0,0,0,0.4)
-
-Bottom Navigation (if app has tabs):
-- position:fixed; bottom:20px; left:50%; transform:translateX(-50%); display:flex; border-radius:9999px
-- backdrop-filter:blur(16px); background:rgba(20,20,20,0.85); padding:4px; gap:0
-- Tab icons: 20x20px, opacity:0.3 inactive, opacity:1 active
-- Active indicator: background:rgba(255,255,255,0.1); border-radius:9999px; transition:left 0.25s ease
-
-Progress bars:
-- Container: height:8px; background:rgba(255,255,255,0.15); border-radius:9999px
-- Fill: background:linear-gradient(to right, #fff, rgba(255,255,255,0.5)); border-radius:9999px
-
-Modals/Bottom sheets:
-- Slide up from bottom with animation: transform:translateY(100%) -> translateY(0) over 0.3s ease-out
-- background:#141414; border-radius:24px 24px 0 0; max-height:90vh; overflow-y:auto
-- Overlay: position:fixed; inset:0; background:rgba(0,0,0,0.5); backdrop-filter:blur(4px)
-- Drag handle: width:36px; height:5px; border-radius:9999px; background:rgba(255,255,255,0.4); margin:8px auto
-
-Inputs:
-- background:#000 or #141414; border:1px solid rgba(255,255,255,0.1); border-radius:8px; color:#fff; padding:12px
-- placeholder color: #6D6D71; focus: border-color:rgba(255,255,255,0.2); outline:none
-
-Animations:
-- All interactive elements: transition: all 0.2s ease-out
-- Hover: brightness(1.1) or background slightly lighter
-- Press: transform:scale(0.95) or scale(0.96)
-- Appear: opacity 0->1, transform translateY(8px)->translateY(0) over 0.3s
-- Loading spinner: use CSS animation, never a static "Loading..." text
-
-ANTI-PATTERNS (never do these):
-- White or light backgrounds
-- Default unstyled HTML inputs/buttons
-- Sharp corners (always use border-radius >= 8px)
-- Visible scrollbars
-- No transitions/animations on interactive elements
-- Using px values or env() for safe areas (use var(--tg-safe-area-inset-top) + var(--tg-content-safe-area-inset-top) instead)
-- Light theme colors — always dark mode
-- NEVER overflow:hidden on html/body — this completely breaks page scrolling
-- NEVER position:fixed;inset:0 on the main app wrapper — use flex layout with height:100vh instead
-- NEVER min-height:100vh on the app wrapper when children need overflow-y:auto — use height:100vh
-- NEVER block touch scrolling with touch-action:none or preventDefault on touchmove for the main content
-
-RULES FOR BACKEND (routes.js):
-1. Export: module.exports = function(router, db, projectId) { ... }
-2. db.get(key) — returns parsed JSON value or null
-3. db.set(key, value) — stores any JSON value (object, array, string, number)
-4. db.delete(key) — removes a key
-5. db.keys() — returns array of all key names
-6. db.getAll() — returns entire database as { key: value, ... }
-7. db.botToken — this project's Telegram Bot token
-8. db.botUsername — bot username (without @)
-9. Do NOT add auth/initData verification — handled by server middleware
-10. You CAN require npm packages — install them first with shell("npm install <pkg>")
-
-🚨 BOT WEBHOOK — ABSOLUTE RULE (NO EXCEPTIONS):
-The ONLY accepted route path for forwarding Telegram bot updates into routes.js is:
-
-    router.post("/bot-webhook", async (req, res) => { ... })
-
-The platform uses Express router matching against the literal path "/bot-webhook".
-Anything else SILENTLY breaks update delivery — the route will never fire, but
-no error is thrown anywhere because the platform just decides "this project has
-no custom webhook" and falls back to the default "Tap the button" reply.
-
-❌ NEVER write any of these — they all silently break:
-   router.post("/webhook", ...)            ← legacy fallback only, do not use in new code
-   router.post("/bot/webhook", ...)        ← will not match
-   router.post("/api/bot-webhook", ...)    ← will not match
-   router.post("/telegram-webhook", ...)   ← will not match
-   router.post("/tg-webhook", ...)         ← will not match
-   router.post("/bot_webhook", ...)        ← underscore breaks the match
-   app.post("/bot-webhook", ...)           ← must be router.post — 'app' is not in scope
-
-✅ ALWAYS write EXACTLY:
-   router.post("/bot-webhook", async (req, res) => {
-     res.json({ ok: true });   // respond 200 BEFORE any work — Telegram retries on slow responses
-     try { /* handle update */ } catch (err) { console.error("[bot-webhook]", err); }
-   });
-
-If you need bot-side behavior (commands, /start <param>, callbacks, push) →
-load_skill('bot-management') and copy the canonical template VERBATIM. Do NOT
-invent your own path naming.
-
-DATABASE KEY DESIGN (CRITICAL):
-- Store each user as a separate key: db.set('user:' + telegramId, userData)
-- Read one user: db.get('user:' + telegramId) — instant O(1) lookup
-- NEVER store all users in one array key like db.get('users') — this breaks at scale
-- For leaderboards: maintain a pre-sorted 'leaderboard' key (top 50), update it when score changes
-- For counters/stats: maintain a 'stats' key updated at write time, never count at read time
-- For collections (items, games): use 'item:{id}' per record + 'item_index' array of IDs
-- Use db.keys().filter(k => k.startsWith('user:')) only for admin/rare operations
-- Always handle null: db.get('user:' + id) || null
-
-TELEGRAM STARS PAYMENTS:
-1. Store pending purchases: db.set('pending_' + invoiceId, { userId, stars, coins })
-2. Backend creates invoice via: fetch('https://api.telegram.org/bot' + db.botToken + '/createInvoiceLink', ...)
-3. Frontend opens: Telegram.WebApp.openInvoice(url, function(status) { if(status==='paid') refreshUser(); })
-4. Bot auto-handles pre_checkout_query and successful_payment — no webhook endpoint needed
-5. Use currency "XTR", empty provider_token ""
-
-REFERRAL SYSTEM (when user asks for referrals/invite system):
-1. Referral link format: const refLink = 'https://t.me/' + botUsername + '?start=' + userId;
-2. Share via Telegram:
-   const shareText = encodeURIComponent('Your share text here derived from app description');
-   const shareUrl = 'https://t.me/share/url?url=' + encodeURIComponent(refLink) + '&text=' + shareText;
-   Telegram.WebApp.openTelegramLink(shareUrl);
-3. Two complementary tracking paths — implement BOTH for reliable attribution:
-   a) Mini App path (when user clicks the share link and opens the Mini App directly):
-      const startParam = Telegram.WebApp.initDataUnsafe?.start_param;
-      if (startParam) apiCall('/api/{projectId}/register', { method:'POST', body: JSON.stringify({ referrerId: startParam }) });
-   b) Bot path (when user lands on the bot first via /start <referrerId>):
-      Define POST /bot-webhook in routes.js (see bot-management skill) and persist
-      msg.text.split(' ')[1] as the referrer on the new user's record.
-   Both paths write to the SAME user record — the second one is a no-op for already-attributed users.
-4. Store referral data per-user: db.set('user:' + userId, { ...userData, referredBy: referrerId, referrals: [] })
-5. Update referrer's data: push new userId to referrer's referrals array, add bonus to referrer's balance
-6. Let the user configure the bonus amount — store it in db as a config or use a default
-7. Show referral stats: total referrals count, earned bonuses
-8. Copy link button: navigator.clipboard.writeText(refLink) with a "Copied!" toast feedback
-9. If the project includes /bot-webhook → load_skill('bot-management') for the canonical pattern.
-
-IMPORTANT - ROUTES HOT-RELOAD:
-Backend routes.js is reloaded on EVERY API request. You do NOT need to restart anything after editing routes.js. Changes take effect immediately on the next http_request test.
-WebSocket handlers (module.exports.ws) are loaded once when the first client connects. To test WS changes, all clients must disconnect first (or reload the app).
-
-IMPORTANT - BACKGROUND TIMERS (setInterval / setTimeout) IN ROUTES.JS:
-The db object passed into module.exports is a PERSISTENT connection shared across all requests — do NOT call db.close() anywhere in routes.js.
-Use a global singleton guard to prevent duplicate timers on hot-reload:
-  if (!global._myLoopStarted) {
-    global._myLoopStarted = true;
-    global._myLoopSetDb = function(newDb) { _db = newDb; };
-    let _db = db;
-    setInterval(function() { /* use _db here */ }, 1000);
-  } else if (global._myLoopSetDb) {
-    global._myLoopSetDb(db); // update reference after hot-reload
-  }
-This ensures the timer is created exactly once per process and always has the current db reference.
-
-WEBSOCKET (for real-time apps):
-- Use WebSockets for: chat/messenger, live bets/trading, multiplayer games, auctions, live dashboards, collaborative tools — anything needing instant push updates.
-- Do NOT use WebSockets for: simple CRUD, leaderboards, settings, or anything where polling or occasional refresh is fine.
-- Add module.exports.ws = function(wss, db, projectId) { ... } to routes.js
-- wss.onConnection((socket, req) => { ... }) — fires for each new client
-- wss.broadcast(data) — send to all clients
-- wss.broadcastExcept(sender, data) — send to all except one
-- socket.send(data) / socket.on('message', fn) / socket.on('close', fn)
-- Frontend connects: new WebSocket('wss://apps-father.com/ws/' + projectId)
-- Always use JSON messages with a "type" field
-- Always implement reconnection on frontend (setTimeout on close)
-- Use load_skill('websocket') for full implementation patterns and examples
-
-CHOOSING TECHNOLOGY — CRITICAL DECISION (make this BEFORE writing any code):
-
-For EVERY app, decide: does it need real-time updates?
-- YES → use WebSocket (module.exports.ws). Load skill first: load_skill('websocket')
-- NO → use REST API (regular routes)
-
-MUST use WebSocket for: chat, messenger, real-time notifications, multiplayer games, live betting/trading, auctions, collaborative editing, live dashboards, any feature where users see updates without refreshing.
-NEVER use polling (setInterval + fetch) for real-time features — always use WebSocket.
-You CAN combine both: REST for initial data loading + WebSocket for live updates.
-
-ARCHITECTURE — FRONTEND vs BACKEND:
-- Use DIRECT frontend fetch() for: read-only public APIs (weather, maps, exchange rates, public data), static content, anything that doesn't need secrets or persistent storage.
-- Use BACKEND routes.js REST for: database operations, user accounts/auth, leaderboards, storing user data, APIs that require secret keys, Telegram Bot API calls.
-- Use WEBSOCKET (module.exports.ws in routes.js) for: chat messages, typing indicators, live scores, game state sync, real-time notifications — anything where the server pushes to clients instantly.
-- NEVER use mock/fake data in production apps. If an API key is invalid or unavailable, use fetch_url to research free alternatives that don't require API keys.
-- KEEP IT SIMPLE. A weather app should just fetch weather data directly from the frontend. A clicker game only needs backend for leaderboards and persistence. A chat app MUST use WebSocket.
-
-BEST PRACTICES:
-- Use grep to search code instead of reading entire files
-- Use read_file with offset/limit to read specific line ranges of large files
-- Use shell to run npm install, node scripts, curl, test commands, etc.
-- Use http_request to test your API endpoints after changes
-- CALL MULTIPLE TOOLS IN ONE TURN when they are independent (e.g. multiple telegram_api calls, multiple write_file calls, grep + read_file together). This saves round trips and tokens.
-- Use server_logs to see console.log/console.error output from your backend code when debugging
-- Use fetch_url to read documentation before using any unfamiliar external API
-- If edit_file fails with "old_string not found", ALWAYS read_file first to see the actual current content before retrying
-- When modifying 3+ sections of a file, use write_file to rewrite the entire file instead of multiple edit_file calls. This is faster and avoids "old_string not found" errors.
-- When UPDATING existing code, read the full file first, then decide: small change = edit_file, large change = write_file.
-
-EFFICIENCY RULES (save tokens and iterations):
-
-1. PARALLEL READS: When you need to read multiple files or sections, 
-   read them ALL in ONE turn. Never read one file per iteration.
-   BAD:  iter1: read_file(index.html) → iter2: read_file(app.js) → iter3: read_file(styles.css)
-   GOOD: iter1: read_file(index.html) + read_file(app.js, offset=4405, limit=10) + read_file(app.js, offset=470, limit=15)
-
-2. PARALLEL EDITS: When you have multiple independent edits ready, 
-   do them ALL in ONE turn. Don't spread 1 edit per iteration.
-   BAD:  iter1: edit_file(html) → iter2: edit_file(app.js dom) → iter3: edit_file(app.js switchTab)
-   GOOD: iter1: edit_file(html) + edit_file(app.js dom) + edit_file(app.js switchTab)
-
-3. NEVER call set_progress alone. Always combine it with a real tool 
-   (read_file, edit_file, grep, shell, deploy_to_dev). 
-   If you have nothing else to do, skip set_progress entirely.
-
-4. TRUST PASSPORT LINE NUMBERS. The project context has accurate line 
-   numbers. Do NOT grep to find code that the passport already locates.
-   If passport says "loadLeaderboard (L3931)" — read_file at offset 3931, 
-   don't grep for it first.
-
-5. TRUST edit_file RESULTS. When edit_file returns "OK: Replaced 1 
-   occurrence", the edit succeeded. Do NOT grep or read_file to verify 
-   the edit was applied. Only re-check if edit_file returned an error.
-
-6. USE shell FOR MULTI-PATTERN GREP. The grep tool does not support 
-   pipe (|) for alternatives. Use shell("grep -n 'pattern1\|pattern2' file") 
-   instead. Never retry a failed grep tool call — switch to shell immediately.
-
-7. COMBINE check_todo WITH REAL WORK. Call check_todo in parallel with 
-   the edit or action that completes it, not in a separate turn.
-   BAD:  iter1: edit_file(...) → iter2: check_todo(1)
-   GOOD: iter1: edit_file(...) + check_todo(1)
-
-8. SKIP REDUNDANT VERIFICATION. After making changes:
-   - Syntax check: YES (one shell call)
-   - Deploy + test endpoint: YES (if you changed backend routes)
-   - grep to confirm deleted code is gone: NO (trust edit_file)
-   - grep to confirm remaining code exists: NO (you just read it)
-   - Read file to "see how it looks": NO (trust your edit)
-
-9. DON'T TEST UNCHANGED ENDPOINTS. If your changes are frontend-only 
-   (HTML/CSS/JS) and backend routes were not modified, skip http_request 
-   testing. Syntax check + deploy is sufficient.
-
-DEBUGGING RULES:
-- If http_request returns the same wrong result 3 times after different fixes, STOP and use server_logs to check for errors
-- If you cannot fix a bug after 5 attempts, call done() with a summary explaining the issue — do NOT keep retrying the same approach
-- When an API returns unexpected results, check server_logs FIRST before rewriting code
-
-WORKFLOW FOR NEW APP:
-1. list_files + read existing files (parallel calls to understand current state)
-2. Decide: does this app need real-time? (chat, games, live updates → YES → load_skill('websocket'))
-3. Decide: does this app need custom bot behavior? (custom commands, /start <param> deep links, callback buttons, push notifications, command menu → YES → load_skill('bot-management'))
-4. Plan ALL files mentally: decide endpoints, db keys, WS message types, frontend API calls BEFORE writing any code
-5. Write backend/routes.js FIRST — REST endpoints + module.exports.ws handler if real-time needed + router.post("/bot-webhook", ...) (EXACT path, no variants) if custom bot behavior needed
-6. Write frontend files (index.html, styles.css, app.js) — endpoint names and WS message types MUST match routes.js exactly
-7. shell("npm install <pkg>") if external packages needed
-8. telegram_api to configure bot (setMyDescription, setMyShortDescription, setChatMenuButton, setMyCommands) — ONLY on first build
-9. If you set up /bot-webhook or commands: telegram_api("getWebhookInfo", {}) to verify webhook is healthy (no last_error_message)
-10. VERIFY: grep app.js for all apiCall/fetch URLs, then test each with http_request
-11. fetch_url to read API docs when you need to learn an unfamiliar external API
-12. Call done() ONLY after verifying all endpoints work
-
-WORKFLOW FOR UPDATE:
-1. READ THE PROJECT CONTEXT in your prompt FIRST. It contains:
-   - Full architecture, all routes, all DB keys, all function names
-   - Code Locations with exact line numbers for every route/function
-   - UI structure and CSS conventions
-   DO NOT grep or read_file to "understand the project" — you already have that info.
-2. Use Code Locations to do TARGETED read_file(path, offset, limit) ONLY for the
-   exact lines you need to edit. Example: context says "POST /register: line 2015"
-   → read_file("backend/routes.js", offset=2015, limit=50) — NOT grep("register").
-3. Plan ALL changes before writing any code. Decide which files and which lines.
-4. Make changes with edit_file (small) or write_file (large).
-5. If changing backend routes, grep frontend for affected apiCall URLs.
-6. Run syntax check: shell("node -e \"new Function(require('fs').readFileSync('backend/routes.js','utf8'))\"") BEFORE deploy.
-7. Call done().
-IMPORTANT: Do NOT call telegram_api(setMyDescription) during updates — only set bot description on first build.
-
-BOT-SIDE UPDATES (commands, /start params, callbacks, push):
-- If the user wants to add/change bot commands, /start <param> handling, callback buttons,
-  push notifications, or anything that runs INSIDE the bot (not in the Mini App) →
-  load_skill('bot-management') BEFORE writing code. Pattern depends on what's needed:
-  pure menu config (setMyCommands) is one tool call; actual command replies need a
-  route in routes.js with the EXACT path: router.post("/bot-webhook", ...). Any other
-  path (/webhook, /bot/webhook, /tg-webhook, etc.) silently breaks — see the
-  "BOT WEBHOOK — ABSOLUTE RULE" block above.
-- BEFORE you finish, grep routes.js for the literal string "/bot-webhook" to confirm
-  the path is correct. If you find "/webhook" or any other variant in a router.post
-  intended for Telegram updates, RENAME it to "/bot-webhook" immediately.
-- After adding/changing /bot-webhook or commands, ALWAYS run telegram_api("getWebhookInfo", {})
-  and confirm result.last_error_message is null. If not null, read server_logs and fix.
-
-AFTER WRITING CODE — DO NOT RE-READ:
-- After a successful edit_file or write_file, the confirmation ("OK: Replaced 1 occurrence" / "OK: Written N lines") proves the change was applied. Do NOT re-read the same file to "verify" your edit.
-- Only re-read a file if you need the EXACT current content for a SUBSEQUENT edit_file on that same file (because old_string must match current content).
-- If you're done editing a file, move on to the next file or task. Never read a file just to confirm it looks right.
-
-TOKEN BUDGET RULE:
-You have a limited token budget. Every unnecessary grep, read_file, or shell command
-costs ~3000+ tokens per round trip. A typical update should take 15-35 iterations.
-If you're at iteration 40+ without writing code, something is wrong — start writing.
-
-TESTING WITH http_request:
-- Auth-protected endpoints (those using getUserId/initData) will ALWAYS return 401
-  when tested from http_request because you don't have valid initData.
-  DO NOT test these — it wastes iterations. The 401 proves nothing.
-- ONLY test: unauthenticated endpoints, static file serving, or endpoints you
-  can call with valid test data.
-- ALWAYS run syntax check on routes.js and app.js BEFORE deploy_to_dev.
-- deploy_to_dev is mainly for the USER to visually verify — not for your http_request tests.
-
-ASKING THE USER (ask_user tool):
-- Use ask_user ONLY when you need information the user MUST provide: API keys, credentials, external account IDs, or a choice between fundamentally different approaches where guessing wrong wastes significant effort.
-- NEVER use ask_user for implementation details, design choices, styling, naming, or anything you can decide yourself.
-- NEVER call ask_user in parallel with other tools — it must be the ONLY tool in its turn.
-- Always provide clear options as buttons when the question has a finite set of answers.
-- If the user clicks Skip or doesn't answer, proceed with the best default.
-
-PROGRESS REPORTING:
-- FIRST call create_todo() with your task breakdown (2-8 short actionable items). This creates a live checklist the user sees.
-- After completing each task, call check_todo(id) with the task number (1-based).
-- Call check_todo in parallel with other tool calls — it costs nothing.
-- Call done() ONLY after ALL checklist tasks are checked off.
-- You may also call set_progress(percent, message) for fine-grained status updates between checklist items.
-- MANDATORY final tasks are always appended to your checklist: deploy & test, then finish with done().
-
-PARALLEL TOOL CALLS — USE AGGRESSIVELY:
-- Read multiple files at once: read_file(routes.js) + read_file(app.js) + read_file(styles.css) in ONE turn
-- Write related files together: write_file(index.html) + write_file(styles.css) in ONE turn
-- Initialize multiple db keys: db(set, 'users', []) + db(set, 'settings', {}) in ONE turn
-- Test multiple endpoints: http_request(GET /user) + http_request(GET /leaderboard) in ONE turn
-- Configure bot: telegram_api(setMyDescription) + telegram_api(setChatMenuButton) in ONE turn
-- NEVER make 1 tool call when you could make 2-5 independent calls in the same turn
-- check_todo calls are FREE — always batch them with other tool calls, never alone
-
-MANDATORY PARALLELISM EXAMPLES:
-WRONG (5 iterations):
-  Turn 1: grep("register") → Turn 2: grep("start_param") → Turn 3: grep("deposit")
-  → Turn 4: read_file(routes.js:2015) → Turn 5: read_file(app.js:1238)
-RIGHT (1-2 iterations):
-  Turn 1: grep("register") + grep("start_param") + grep("deposit") +
-           read_file(routes.js, offset=2015, limit=50) + read_file(app.js, offset=1238, limit=20)
-
-${FRONTEND_DESIGN_SKILL ? "FRONTEND DESIGN SKILL (apply when creating or redesigning the app UI — build distinctive, production-grade interfaces):\n" + FRONTEND_DESIGN_SKILL : ""}
-
-${FRONTEND_SKILL ? "FRONTEND PATTERNS REFERENCE:\n" + FRONTEND_SKILL : ""}
-
-${BACKEND_SKILL ? "BACKEND PATTERNS REFERENCE:\n" + BACKEND_SKILL : ""}`;
 
 const TOOLS: Anthropic.Tool[] = [
   {
@@ -542,20 +240,22 @@ const TOOLS: Anthropic.Tool[] = [
       required: ["command"],
     },
   },
-  {
-    name: "http_request",
-    description: "Make an HTTP request. Use to test API endpoints, fetch external resources, etc. Timeout: 10s.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        url: { type: "string" as const, description: "Full URL" },
-        method: { type: "string" as const, description: "HTTP method (GET, POST, PUT, DELETE). Default: GET" },
-        headers: { type: "object" as const, description: "Request headers (optional)" },
-        body: { type: "string" as const, description: "Request body as string (optional)" },
-      },
-      required: ["url"],
-    },
-  },
+  // DISABLED: http_request was wasted on testing auth-protected endpoints
+  // (always returned 401) — burning ~$0.10 per call. Re-enable only if needed.
+  // {
+  //   name: "http_request",
+  //   description: "Make an HTTP request. Use to test API endpoints, fetch external resources, etc. Timeout: 10s.",
+  //   input_schema: {
+  //     type: "object" as const,
+  //     properties: {
+  //       url: { type: "string" as const, description: "Full URL" },
+  //       method: { type: "string" as const, description: "HTTP method (GET, POST, PUT, DELETE). Default: GET" },
+  //       headers: { type: "object" as const, description: "Request headers (optional)" },
+  //       body: { type: "string" as const, description: "Request body as string (optional)" },
+  //     },
+  //     required: ["url"],
+  //   },
+  // },
   {
     name: "db",
     description: "Read/write project database (JSON key-value store backed by SQLite). get(key) returns parsed JSON or null. set(key, value) stores any JSON value. delete(key) removes a key. keys() lists all keys.",
@@ -569,18 +269,18 @@ const TOOLS: Anthropic.Tool[] = [
       required: ["operation"],
     },
   },
-  {
-    name: "telegram_api",
-    description: "Call Telegram Bot API method using the project's bot token.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        method: { type: "string" as const, description: "API method name, e.g. 'setMyDescription'" },
-        params: { type: "object" as const, description: "Method parameters as JSON object" },
-      },
-      required: ["method", "params"],
-    },
-  },
+  // {
+  //   name: "telegram_api",
+  //   description: "Call Telegram Bot API method using the project's bot token.",
+  //   input_schema: {
+  //     type: "object" as const,
+  //     properties: {
+  //       method: { type: "string" as const, description: "API method name, e.g. 'setMyDescription'" },
+  //       params: { type: "object" as const, description: "Method parameters as JSON object" },
+  //     },
+  //     required: ["method", "params"],
+  //   },
+  // },
   {
     name: "fetch_url",
     description: "Fetch a web page or API documentation URL and return its text content (HTML tags stripped). Use to read API docs, READMEs, examples, etc.",
@@ -603,17 +303,20 @@ const TOOLS: Anthropic.Tool[] = [
       required: ["name"],
     },
   },
-  {
-    name: "server_logs",
-    description: "Read recent server logs (last N lines). Use to see console.log/console.error output from your backend routes.js, API errors, etc.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        lines: { type: "number" as const, description: "Number of recent log lines to read (default 30, max 100)" },
-      },
-      required: [],
-    },
-  },
+  // DISABLED: server_logs reads the host PM2 process logs (apps-father), which
+  // mixes in OTHER projects' output and rarely shows project-specific errors.
+  // It was costing ~$0.10/call for noise. Re-enable only with per-project tailing.
+  // {
+  //   name: "server_logs",
+  //   description: "Read recent server logs (last N lines). Use to see console.log/console.error output from your backend routes.js, API errors, etc.",
+  //   input_schema: {
+  //     type: "object" as const,
+  //     properties: {
+  //       lines: { type: "number" as const, description: "Number of recent log lines to read (default 30, max 100)" },
+  //     },
+  //     required: [],
+  //   },
+  // },
   {
     name: "ask_user",
     description: "Ask the app owner a question and wait for their answer. Use ONLY when you truly need user input (API keys, credentials, choosing between fundamentally different approaches). Do NOT use for trivial or implementation decisions you can make yourself. Provide options as buttons when possible. The user can also type free text or press Skip.",
@@ -626,32 +329,23 @@ const TOOLS: Anthropic.Tool[] = [
       required: ["question"],
     },
   },
-  {
-    name: "set_progress",
-    description: "Report your approximate progress as a percentage (0-100). Call this periodically so the user sees a progress bar. Example: 10% after reading files, 30% after writing HTML, 60% after backend, 80% after testing, 95% before done.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        percent: { type: "number" as const, description: "Progress percentage 0-100" },
-        message: { type: "string" as const, description: "Short status message, e.g. 'Writing frontend code'" },
-      },
-      required: ["percent"],
-    },
-  },
+  // NOTE: `set_progress` was removed. The frontend now drives the progress bar
+  // dynamically from the message's createdAtUtc using y = 1 - e^(-Δsec/100).
+  // The agent only needs to call create_todo + check_todo for user-visible status.
   {
     name: "create_todo",
-    description: "Create your task checklist. Call this FIRST before starting any work. Break down the request into concrete, actionable items. The user sees this as a live checklist.",
+    description: "Create the USER-FACING task checklist shown live in the mini-app. Call this FIRST before any work. Items must be short, plain-language descriptions a non-technical end user can read — like 'Building a design system', 'Adding login screen', 'Fixing the upload bug'. NEVER include tech specs, file names, tool names, function calls, npm commands, 'deploy', 'finish', 'configure bot' etc. — those are internal steps you still perform but must NOT appear in this list.",
     input_schema: {
       type: "object" as const,
       properties: {
-        items: { type: "array" as const, items: { type: "string" as const }, description: "Array of short, actionable task descriptions (2-8 items)" },
+        items: { type: "array" as const, items: { type: "string" as const }, description: "Array of 2-8 short, user-friendly task descriptions. NO tech jargon, NO file names, NO 'deploy'/'finish'." },
       },
       required: ["items"],
     },
   },
   {
     name: "check_todo",
-    description: "Mark a checklist item as done. Call this after completing each task from your checklist. The user sees a live checklist that updates when you call this.",
+    description: "Mark a checklist item as done. Call this only with some other tools like: write_file, shell, deploy_to_dev. For example: (write_file(html) + check_todo(2)). The user sees a live checklist that updates when you call this.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -669,37 +363,45 @@ const TOOLS: Anthropic.Tool[] = [
       required: [],
     },
   },
+  // CONSOLIDATED FINISH TOOL — replaces short_summary + summary + done.
+  // The model used to split these across 3 iterations (~$0.50 wasted per build).
+  // This forces atomic batching at the API level. Old short_summary/summary/done
+  // handlers stay in code for backward compatibility but are NOT exposed in TOOLS.
   {
-    name: "short_summary",
-    description: "Write a short user-facing summary of this update. Call this AFTER deploy & test, BEFORE done(). Format: 'Update title (3-5 words)\\n\\n1-2 sentences in simple non-technical language.' No jargon.",
+    name: "finish",
+    description: "Atomically finish the build: save short user-facing summary, detailed technical summary, and signal completion — all in ONE call. This is the ONLY way to finish a build. Call this LAST, after deploy_to_dev. There is NO separate done/summary/short_summary tool.",
     input_schema: {
       type: "object" as const,
       properties: {
-        text: { type: "string" as const, description: "Short user-facing summary (no technical jargon)" },
+        shortSummary: {
+          type: "string" as const,
+          description: "Short user-facing summary, format: 'Update title (3-5 words)\\n\\n1-2 sentences in simple non-technical language.' No jargon.",
+        },
+        summary: {
+          type: "string" as const,
+          description: "Detailed technical summary/changelog: architecture decisions, new files, changes made, anything the next update should know.",
+        },
       },
-      required: ["text"],
+      required: ["shortSummary", "summary"],
     },
   },
+  // CONSOLIDATED BOT CONFIG TOOL — replaces 3 sequential telegram_api calls
+  // (setMyDescription / setMyShortDescription / setChatMenuButton). The model used
+  // to split these across 3 iterations (~$0.20 wasted per first build).
   {
-    name: "summary",
-    description: "Write a detailed technical summary/changelog. Call this AFTER short_summary, BEFORE done(). Include architecture decisions, new files, changes made, and anything the next update should know.",
+    name: "configure_bot",
+    description: "Atomically configure the bot's description, short description, and menu button — all in ONE call. ONLY use on FIRST build, never on updates. Use this INSTEAD of telegram_api(setMyDescription) etc. The menu button URL is auto-generated from the project URL.",
     input_schema: {
       type: "object" as const,
       properties: {
-        text: { type: "string" as const, description: "Detailed technical summary of all changes" },
+        description: { type: "string" as const, description: "Bot description shown in profile (up to 512 chars)" },
+        shortDescription: { type: "string" as const, description: "Short bot description shown in chat list (up to 120 chars)" },
+        menuButtonText: { type: "string" as const, description: "Text for the menu button (e.g. 'Launch App'). Default: 'Launch App'" },
       },
-      required: ["text"],
+      required: ["description", "shortDescription"],
     },
   },
-  {
-    name: "done",
-    description: "Signal that the update is complete. You MUST call short_summary() and summary() before calling this.",
-    input_schema: {
-      type: "object" as const,
-      properties: {},
-      required: [],
-    },
-  },
+  
 ];
 
 // Commands that must never run
@@ -747,10 +449,10 @@ export interface AgentResult {
 }
 
 export const QUALITY_TIERS: Record<number, { model: string; thinking: number; maxIterations: number }> = {
-  1: { model: "claude-sonnet-4-6", thinking: 2000, maxIterations: 100 },
-  2: { model: "claude-sonnet-4-6", thinking: 4000, maxIterations: 140 },
-  3: { model: "claude-opus-4-7", thinking: 2000, maxIterations: 100 },
-  4: { model: "claude-opus-4-7", thinking: 4000, maxIterations: 140 },
+  1: { model: "claude-sonnet-4-6", thinking: 2000, maxIterations: 60 },
+  2: { model: "claude-sonnet-4-6", thinking: 4000, maxIterations: 80 },
+  3: { model: "claude-opus-4-7", thinking: 2000, maxIterations: 50 },
+  4: { model: "claude-opus-4-7", thinking: 4000, maxIterations: 70 },
 };
 
 export class AgentService {
@@ -951,12 +653,17 @@ Keep suggestions practical and specific to THIS app.${langInstruction}`;
       ? `\n\nIMPORTANT: All user-facing text in the app (UI labels, buttons, messages, placeholders, titles) must be written in ${lang === "ru" ? "Russian" : "Ukrainian"}. The code, comments, and variable names should stay in English.`
       : "";
 
-    const prompt = `Build a complete Telegram Mini App from scratch.
+    const buildProject: any = await projectService.getProject(projectId);
+    const buildPrefs = parseProjectPreferences(buildProject?.preferences ?? null);
+    const prefsBlock = `${buildPreferencesPrompt(buildPrefs)}\n\n`;
+
+    const prompt = `${prefsBlock}Build a complete Telegram Mini App from scratch.
 
 Project ID: ${projectId}
-Dev Frontend URL: ${config.baseUrl}/dev/${projectId}/
-Dev API URL: ${config.baseUrl}/devapi/${projectId}/
+Development App URL: ${config.baseUrl}/dev/${projectId}/
+Development API URL: ${config.baseUrl}/devapi/${projectId}/
 Production App URL: ${config.baseUrl}/app/${projectId}/
+Production API URL: ${config.baseUrl}/api/${projectId}/
 
 Description: ${description}
 
@@ -965,7 +672,7 @@ ${plan}
 ${featureGating}
 Create all necessary files (frontend/index.html, frontend/styles.css, frontend/app.js, backend/routes.js) and configure the bot. Database is handled via db.get/db.set in routes.js — no schema setup needed. Make it beautiful and functional. Use deploy_to_dev() to deploy and test your code via the Dev URLs. In frontend code, use /api/${projectId}/ as the API base URL (this will be rewritten to /devapi/ in dev mode automatically).${langInstruction}`;
 
-    return this.runAgent(projectId, prompt, onProgress, onAskUser, onCreateTodo, onCheckTodo, userBalance);
+    return this.runAgent(projectId, prompt, onProgress, onAskUser, onCreateTodo, onCheckTodo, userBalance, undefined, "new");
   }
 
   async updateApp(
@@ -995,18 +702,14 @@ Create all necessary files (frontend/index.html, frontend/styles.css, frontend/a
     // Load structured context from latest commit
     const latestContext = this.loadLatestContext(projectId);
     if (latestContext) {
-      const maxContextChars = 64000; // ~4000 tokens
-      const truncated = latestContext.length > maxContextChars
-        ? latestContext.substring(0, maxContextChars) + "\n...[context truncated]"
-        : latestContext;
-      contextParts.push(`PROJECT CONTEXT:\n${truncated}`);
+      contextParts.push(`PROJECT CONTEXT:\n${latestContext}`);
     } else if (project?.projectSummary) {
       contextParts.push(`PROJECT CONTEXT (from previous builds):\n${project.projectSummary}`);
     }
     // Only include original plan for the first few updates — it becomes stale
-    if (project?.plan && currentCommitNum <= 3) {
-      contextParts.push(`ORIGINAL PLAN:\n${project.plan}`);
-    }
+    // if (project?.plan && currentCommitNum <= 3) {
+    //   contextParts.push(`ORIGINAL PLAN:\n${project.plan}`);
+    // }
 
     let attachmentInfo = "";
     if (attachments && attachments.length > 0) {
@@ -1024,18 +727,30 @@ Create all necessary files (frontend/index.html, frontend/styles.css, frontend/a
       ? `\n\nIMPORTANT: All user-facing text in the app (UI labels, buttons, messages, placeholders, titles) must be written in ${lang === "ru" ? "Russian" : "Ukrainian"}. The code, comments, and variable names should stay in English.`
       : "";
 
-    const prompt = `Update an existing Telegram Mini App.
+    const updatePrefs = parseProjectPreferences(project?.preferences ?? null);
+    const updatePrefsBlock = `${buildPreferencesPrompt(updatePrefs)}\n\n`;
+
+    const prompt = 
+`${updatePrefsBlock}Update an existing Telegram Mini App.
 
 Project ID: ${projectId}
-Dev Frontend URL: ${config.baseUrl}/dev/${projectId}/
-Dev API URL: ${config.baseUrl}/devapi/${projectId}/
+Development App URL: ${config.baseUrl}/dev/${projectId}/
+Development API URL: ${config.baseUrl}/devapi/${projectId}/
 Production App URL: ${config.baseUrl}/app/${projectId}/
+Production API URL: ${config.baseUrl}/api/${projectId}/
 
-${context}Update request: ${updateDescription}
-${attachmentInfo}${featureGating}
-Use grep and read_file to verify current state before making changes. Use edit_file for targeted modifications. Use deploy_to_dev() to deploy and test your changes via the Dev URLs.${langInstruction}`;
+${context}
 
-    return this.runAgent(projectId, prompt, onProgress, onAskUser, onCreateTodo, onCheckTodo, userBalance, attachments);
+Update request: 
+${updateDescription}
+${attachmentInfo}
+${featureGating}
+
+Use grep and read_file to verify current state before making changes. Use edit_file for targeted modifications. 
+Use deploy_to_dev() to deploy and test your changes via the Dev URLs.
+${langInstruction}`;
+
+    return this.runAgent(projectId, prompt, onProgress, onAskUser, onCreateTodo, onCheckTodo, userBalance, attachments, "update");
   }
 
   private async runAgent(
@@ -1047,7 +762,12 @@ Use grep and read_file to verify current state before making changes. Use edit_f
     onCheckTodo?: (id: number) => Promise<void>,
     userBalance?: number,
     attachments?: { localPath: string; projectPath: string; originalName: string; caption?: string }[],
+    mode: AgentMode = "update",
   ): Promise<AgentResult> {
+    // Build the system prompt from agent_knowledge/instructions/ for THIS run.
+    // Mode-gated files (workflow-new.md / workflow-update.md) are filtered by manifest.
+    const systemPrompt = buildSystemPrompt(mode);
+    console.log(`[Agent] system prompt built (mode=${mode}, ${systemPrompt.length} chars)`);
     let liveCostUsd = 0;
     const startBalance = userBalance ?? 0;
     const rawProgress = onProgress || (async () => {});
@@ -1085,12 +805,15 @@ Use grep and read_file to verify current state before making changes. Use edit_f
     let finalPrompt = userPrompt;
     const checklistDone = new Set<number>();
     let checklist: string[] = [];
-    const mandatoryTasks = [
-      "Deploy & test: call deploy_to_dev(), verify key endpoints with http_request.",
-      "Summarize: call short_summary() then summary() then done().",
-    ];
-    finalPrompt += `\n\nFIRST STEP: Call create_todo() with your task breakdown before starting any work. Your last 2 tasks will always be auto-appended: deploy & test, then summarize & finish.
-FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) → summary(detailed technical changelog) → done(). Never set progress to 100% before calling short_summary and summary.`;
+    // Mandatory tech steps (deploy_to_dev, finish) are NOT part of the user-visible
+    // checklist any more — keep them only in agent memory via prompt instructions.
+    const mandatoryTasks: string[] = [];
+    finalPrompt += `\n\nFIRST STEP: Call create_todo() with a SHORT, USER-FRIENDLY task breakdown before starting any work. The checklist is shown directly to the end user — write items the way you'd describe progress to a non-technical person.
+- GOOD items: "Building a design system", "Adding the login screen", "Fixing the upload bug", "Creating the database for users".
+- BAD items (do NOT include): "deploy_to_dev", "finish()", "Write backend/routes.js", "Configure bot description", "Run npm install", file names, tool names, function calls, internal step names.
+- Do NOT include "Deploy" or "Finish" as a checklist item — those steps are tracked internally and you must still perform them at the end (deploy_to_dev() then finish(shortSummary, summary)) but they MUST NOT appear in the user-visible list.
+
+FINAL STEP (internal — never put in the checklist): After your last code change, call deploy_to_dev() once more, then call finish(shortSummary, summary). That single finish() call replaces the old short_summary/summary/done sequence. There are NO separate short_summary/summary/done tools any more.`;
 
     logger.header(tierConfig.model, finalPrompt);
 
@@ -1129,29 +852,108 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
     let totalCacheWriteTokens = 0;
+    // Detailed admin log: full request/response per Anthropic call. Written to
+    // commitDir/detailed-log.json at every terminal point. Heavy — admin-only.
+    const detailedEntries: Array<{
+      iteration: number;
+      timestamp: string;
+      request: any;
+      response: any;
+    }> = [];
+    const writeDetailedLog = (reason: string) => {
+      try {
+        const detailedLogPath = path.join(commitDir, "detailed-log.json");
+        fs.writeFileSync(
+          detailedLogPath,
+          JSON.stringify({ projectId, commitNum, mode, reason, entries: detailedEntries }, null, 2),
+          "utf-8"
+        );
+      } catch (err: any) {
+        console.warn(`[Agent] failed to write detailed-log.json (${reason}): ${err.message}`);
+      }
+    };
     let totalCacheReadTokens = 0;
     let currentPercent: number | undefined;
     let deployCount = 0;
+    let consecutiveNoWrite = 0;
 
     const maxIterations = tierConfig.maxIterations;
     while (iterations < maxIterations) {
       if (abortedProjects.has(projectId)) {
         abortedProjects.delete(projectId);
         logger.done("ABORTED by user", iterations, totalInputTokens, totalOutputTokens);
+        writeDetailedLog("aborted");
         console.log(`[Agent] ⛔ Aborted by user after ${iterations} iterations | Tokens: in=${totalInputTokens} out=${totalOutputTokens}`);
         throw new AgentAbortedError(tierConfig.model, totalInputTokens, totalOutputTokens, totalCacheWriteTokens, totalCacheReadTokens);
       }
       iterations++;
 
-      const response = await this.callWithRetry({
+      // Cache breakpoints: system prompt, tools, and sliding message history.
+      // Anthropic allows up to 4 breakpoints — we use 3 fixed + 1 dynamic.
+      const cachedTools = TOOLS.map((tool, i) =>
+        i === TOOLS.length - 1
+          ? { ...tool, cache_control: { type: "ephemeral" as const } }
+          : tool
+      );
+
+      // Put a cache breakpoint on the last "stable" message — anything older
+      // than the last 2 iterations is considered stable. This way 80%+ of
+      // message history is served from cache on every subsequent call.
+      const cachedMessages = this.applyCacheBreakpoint(messages);
+
+      const requestPayload = {
         model: tierConfig.model,
         max_tokens: tierConfig.thinking + 16000,
         thinking: { type: "enabled", budget_tokens: tierConfig.thinking },
-        system: AGENT_SYSTEM_PROMPT,
-        tools: TOOLS,
-        messages,
-        cache_control: { type: "ephemeral" },
-      } as any);
+        system: [
+          {
+            type: "text",
+            text: systemPrompt,
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+        tools: [
+          ...cachedTools,
+          { type: "web_search_20260209", name: "web_search", max_uses: 5 } as any
+        ],
+        messages: cachedMessages,
+      };
+      let response: Anthropic.Message;
+      try {
+        response = await this.callWithRetry(requestPayload as any);
+      } catch (apiErr: any) {
+        try {
+          const cloneSafe = (v: any) => {
+            try {
+              return typeof structuredClone === "function" ? structuredClone(v) : JSON.parse(JSON.stringify(v));
+            } catch { return undefined; }
+          };
+          detailedEntries.push({
+            iteration: iterations,
+            timestamp: new Date().toISOString(),
+            request: cloneSafe(requestPayload),
+            response: { error: { name: apiErr?.name, message: apiErr?.message, status: apiErr?.status, body: apiErr?.error || apiErr?.response } },
+          });
+        } catch {}
+        writeDetailedLog("api_error");
+        throw apiErr;
+      }
+      // Append the full request+response to the detailed admin log. Cloning is
+      // intentional so later mutations to `messages` / `cachedTools` don't leak
+      // back into this entry. Use structuredClone if available, JSON otherwise.
+      try {
+        const clone = (v: any) => (typeof structuredClone === "function"
+          ? structuredClone(v)
+          : JSON.parse(JSON.stringify(v)));
+        detailedEntries.push({
+          iteration: iterations,
+          timestamp: new Date().toISOString(),
+          request: clone(requestPayload),
+          response: clone(response),
+        });
+      } catch (err: any) {
+        console.warn(`[Agent] detailed-log clone failed at iter ${iterations}: ${err.message}`);
+      }
 
       const usage = response.usage as any;
       const iterIn = usage?.input_tokens || 0;
@@ -1207,13 +1009,30 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
           summary = textBlock.text;
         }
         logger.done(summary, iterations, totalInputTokens, totalOutputTokens);
+        writeDetailedLog("end_turn_no_tools");
         console.log(`[Agent] ⏹️ Agent finished after ${iterations} iterations | Total tokens: in=${totalInputTokens} out=${totalOutputTokens}`);
         break;
       }
 
       const toolResults: Anthropic.ToolResultBlockParam[] = [];
 
-      for (const block of assistantContent) {
+      // Process all tool_use blocks, but force terminal tools (`done`, `finish`)
+      // to be processed LAST so the model can safely batch UI work + finish in
+      // a single turn without losing earlier writes (`done`/`finish` return immediately).
+      const TERMINAL_TOOLS = new Set(["done", "finish"]);
+      const orderedTools = [
+        ...assistantContent.filter(b => b.type === "tool_use" && !TERMINAL_TOOLS.has((b as any).name)),
+        ...assistantContent.filter(b => b.type === "tool_use" && TERMINAL_TOOLS.has((b as any).name)),
+      ];
+
+      // HARD REJECT for UI-only batches: check_todo / set_progress are allowed
+      // ONLY when the same turn also contains a real action. If not, we don't
+      // execute them at all — the tool returns ERROR and the model has to retry
+      // with proper batching. This eliminates the prompt-rule-ignored problem.
+      const ALLOWED_WITH_UI = new Set(["write_file", "edit_file", "deploy_to_dev", "shell"]);
+      const turnHasAllowedAction = toolBlocks.some((b: any) => ALLOWED_WITH_UI.has(b.name));
+
+      for (const block of orderedTools) {
         if (block.type !== "tool_use") continue;
 
         const { id, name, input } = block;
@@ -1221,6 +1040,16 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
         let result = "";
         const argsSummary = this.summarizeArgs(name, args);
         logger.toolCall(name, args);
+
+        // // HARD REJECT: UI tools without an allowed action in the same turn.
+        // // The actual handler is skipped entirely — no checklist update, no progress.
+        // if (!turnHasAllowedAction && (name === "check_todo" || name === "set_progress")) {
+        //   result = `Error: ${name} REJECTED — must be batched in the SAME turn with one of: write_file, edit_file, deploy_to_dev, shell. Your batch contains none of these. The action was NOT executed and produced no UI update. Either include a real action together with this call, or skip the UI update entirely (don't call ${name} alone).`;
+        //   logger.toolResult(name, result);
+        //   console.warn(`[Agent] 🚫 Iter ${iterations}: HARD REJECTED ${name}(${argsSummary}) — no allowed action in batch`);
+        //   toolResults.push({ type: "tool_result", tool_use_id: id, content: result });
+        //   continue;
+        // }
 
         try {
           switch (name) {
@@ -1256,7 +1085,21 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
               const filePath = this.safePath(projectDir, args.path);
               if (!filePath) { result = "Error: Invalid path"; break; }
               if (typeof args.content !== "string" || args.content.length === 0) {
-                result = "Error: Content is empty or missing (likely truncated by max_tokens). Try writing a smaller file or use edit_file for targeted changes.";
+                result = `Error: write_file received empty content — the model hit max_tokens while generating the full file. This will happen again if you retry.
+
+DO NOT retry write_file on ${args.path}. Use ONE of these instead:
+
+OPTION 1 — shell heredoc (recommended for files >400 lines):
+  shell("cat > ${args.path} << 'HEREDOC_EOF'\\n... full file content here ...\\nHEREDOC_EOF")
+
+OPTION 2 — skeleton + edit_file:
+  write_file("${args.path}", "// skeleton ~50 lines with // TODO: section_A markers")
+  edit_file("${args.path}", "// TODO: section_A", "... actual code ...")
+  edit_file("${args.path}", "// TODO: section_B", "... actual code ...")
+
+OPTION 3 — split into multiple smaller files if the architecture allows.
+
+Pick one and proceed.`;
                 break;
               }
               fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -1359,28 +1202,29 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
               break;
             }
 
-            case "http_request": {
-              await progress({ action: "🌐 Testing server...", detail: "", percent: currentPercent });
-              try {
-                const controller = new AbortController();
-                const timeout = setTimeout(() => controller.abort(), 10000);
-
-                const resp = await fetch(args.url, {
-                  method: (args.method || "GET").toUpperCase(),
-                  headers: args.headers || {},
-                  body: args.body || undefined,
-                  signal: controller.signal,
-                });
-                clearTimeout(timeout);
-
-                const body = await resp.text();
-                result = `HTTP ${resp.status} ${resp.statusText}\n${body.substring(0, 5000)}`;
-              } catch (err: any) {
-                result = `Error: ${err.message}`;
-                console.error(`[Agent] http_request error:`, err.message);
-              }
-              break;
-            }
+            // DISABLED: see TOOLS array comment for http_request.
+            // case "http_request": {
+            //   await progress({ action: "🌐 Testing server...", detail: "", percent: currentPercent });
+            //   try {
+            //     const controller = new AbortController();
+            //     const timeout = setTimeout(() => controller.abort(), 10000);
+            //
+            //     const resp = await fetch(args.url, {
+            //       method: (args.method || "GET").toUpperCase(),
+            //       headers: args.headers || {},
+            //       body: args.body || undefined,
+            //       signal: controller.signal,
+            //     });
+            //     clearTimeout(timeout);
+            //
+            //     const body = await resp.text();
+            //     result = `HTTP ${resp.status} ${resp.statusText}\n${body.substring(0, 5000)}`;
+            //   } catch (err: any) {
+            //     result = `Error: ${err.message}`;
+            //     console.error(`[Agent] http_request error:`, err.message);
+            //   }
+            //   break;
+            // }
 
             case "fetch_url": {
               await progress({ action: "🔗 Fetching data...", detail: "", percent: currentPercent });
@@ -1483,17 +1327,26 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
 
             case "deploy_to_dev": {
               deployCount++;
-              if (deployCount > 2) {
-                result = `DEPLOY LIMIT REACHED (${deployCount}/2). You have already deployed twice. Finish your work and call done() now. Do NOT deploy again.`;
+              if (deployCount > 4) {
+                result = `DEPLOY LIMIT REACHED (${deployCount}/4). You have deployed too many times. Finish your work and call finish(shortSummary, summary) now. Something is wrong with your iteration loop — do NOT deploy again.`;
                 break;
               }
-              await progress({ action: "🚀 Deploying to dev", detail: `(${deployCount}/2)`, percent: currentPercent });
+              if (deployCount === 3) {
+                await progress({ action: "🚀 Deploying to dev (soft limit)", detail: `(${deployCount}/4 — one more left)`, percent: currentPercent });
+              } else if (deployCount === 4) {
+                await progress({ action: "🚀 Deploying to dev (FINAL)", detail: `(${deployCount}/4 — last allowed)`, percent: currentPercent });
+              } else {
+                await progress({ action: "🚀 Deploying to dev", detail: `(${deployCount}/4)`, percent: currentPercent });
+              }
               try {
                 commitService.syncToDev(projectId, projectDir);
                 // Force-reload the dev WS so background timers and game loops
                 // pick up the new routes.js without requiring clients to reconnect.
                 try { forceReloadProjectWs(projectId, true); } catch {}
-                result = `OK: Code deployed to development environment (deploy ${deployCount}/2).\nTest frontend: ${config.baseUrl}/dev/${projectId}/\nTest API: ${config.baseUrl}/devapi/${projectId}/\nTest WS: wss://apps-father.com/devws/${projectId}`;
+                result = `OK: Code deployed to development environment (deploy ${deployCount}/4).
+Test frontend: ${config.baseUrl}/dev/${projectId}/
+
+The user will visually verify. If this was your final action, in your NEXT turn call finish(shortSummary, summary) — that single atomic call ends the build. Do NOT call short_summary/summary/done — they don't exist as separate tools.`;
               } catch (err: any) {
                 result = `Error deploying to dev: ${err.message}`;
               }
@@ -1507,20 +1360,21 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
               break;
             }
 
-            case "server_logs": {
-              await progress({ action: "📋 Reading logs", detail: "", percent: currentPercent });
-              try {
-                const numLines = Math.min(args.lines || 30, 100);
-                const { stdout } = await execAsync(`pm2 logs apps-father --lines ${numLines} --nostream 2>&1`, {
-                  timeout: 5000,
-                  maxBuffer: 512 * 1024,
-                });
-                result = stdout.substring(0, 8000);
-              } catch (err: any) {
-                result = `Error reading logs: ${err.message}`;
-              }
-              break;
-            }
+            // DISABLED: see TOOLS array comment for server_logs.
+            // case "server_logs": {
+            //   await progress({ action: "📋 Reading logs", detail: "", percent: currentPercent });
+            //   try {
+            //     const numLines = Math.min(args.lines || 30, 100);
+            //     const { stdout } = await execAsync(`pm2 logs apps-father --lines ${numLines} --nostream 2>&1`, {
+            //       timeout: 5000,
+            //       maxBuffer: 512 * 1024,
+            //     });
+            //     result = stdout.substring(0, 8000);
+            //   } catch (err: any) {
+            //     result = `Error reading logs: ${err.message}`;
+            //   }
+            //   break;
+            // }
 
             case "ask_user": {
               const question = args.question || "Please provide input:";
@@ -1554,24 +1408,22 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
               break;
             }
 
-            case "set_progress": {
-              currentPercent = Math.max(0, Math.min(100, Math.round(args.percent)));
-              const msg = args.message || "";
-              result = `OK: Progress set to ${currentPercent}%`;
-              await progress({ action: msg || "Working...", detail: "", percent: currentPercent });
-              break;
-            }
+            // case "set_progress": {
+            //   // DEPRECATED: kept only so re-played transcripts don't blow up.
+            //   // Progress bar is now computed in the frontend from createdAtUtc.
+            //   result = "OK (set_progress is deprecated and ignored — the progress bar is now driven by elapsed time on the frontend; just use check_todo).";
+            //   break;
+            // }
 
             case "create_todo": {
               const items = (args.items || []).filter((s: any) => typeof s === "string").slice(0, 10);
-              const userItemCount = items.length;
               checklist = [...items, ...mandatoryTasks];
               checklistDone.clear();
               if (onCreateTodo) {
                 try { await onCreateTodo(items); } catch {}
               }
-              result = `OK: Checklist created with ${checklist.length} tasks (including mandatory deploy & finish steps). Use check_todo(id) to mark each done.`;
-              console.log(`[Agent] 📋 create_todo: ${checklist.length} tasks (${userItemCount} user + ${mandatoryTasks.length} mandatory)`);
+              result = `OK: Checklist created with ${checklist.length} user-facing tasks. Use check_todo(id) to mark each done. Remember: deploy_to_dev() and finish() are internal steps — perform them at the end but they are NOT in this checklist.`;
+              console.log(`[Agent] 📋 create_todo: ${checklist.length} user tasks`);
               break;
             }
 
@@ -1591,16 +1443,19 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
               break;
             }
 
+            // NOTE: short_summary / summary / done handlers are kept for backward
+            // compatibility (e.g. older transcripts re-played) but are NOT exposed
+            // to the model in TOOLS — model must use `finish(shortSummary, summary)`.
             case "short_summary": {
               shortSummary = args.text || "";
-              result = "OK: Short summary saved.";
+              result = "OK: Short summary saved. (Tool deprecated — use finish(shortSummary, summary) instead.)";
               console.log(`[Agent] 📝 short_summary: ${shortSummary.substring(0, 100)}`);
               break;
             }
 
             case "summary": {
               summary = args.text || "Changes applied";
-              result = "OK: Summary saved. Now call done().";
+              result = "OK: Summary saved. (Tool deprecated — use finish(shortSummary, summary) instead.)";
               console.log(`[Agent] 📝 summary: ${summary.substring(0, 200)}`);
               break;
             }
@@ -1609,9 +1464,20 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
               if (!summary) summary = "Changes applied";
               if (!shortSummary) shortSummary = summary.split("\n")[0].substring(0, 200);
               currentPercent = 100;
+              // Auto-check anything the model forgot — work was clearly finished if
+              // we're at done(). Only emit onCheckTodo for user-visible items
+              // (mandatory tasks aren't shown to the user).
               if (checklist.length > 0 && checklistDone.size < checklist.length) {
+                const userItemCount = checklist.length - mandatoryTasks.length;
                 const missing = checklist.filter((_, i) => !checklistDone.has(i + 1));
-                console.log(`[Agent] ⚠️ done() called with ${checklist.length - checklistDone.size} unchecked tasks: ${missing.join(", ")}`);
+                console.log(`[Agent] auto-checking ${checklist.length - checklistDone.size} remaining tasks at done(): ${missing.join(", ")}`);
+                for (let i = 1; i <= checklist.length; i++) {
+                  if (checklistDone.has(i)) continue;
+                  checklistDone.add(i);
+                  if (onCheckTodo && i <= userItemCount) {
+                    try { await onCheckTodo(i); } catch {}
+                  }
+                }
               }
               console.log(`[Agent] ✅ Done after ${iterations} iterations | Total tokens: in=${totalInputTokens} out=${totalOutputTokens}`);
 
@@ -1638,9 +1504,99 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
               toolResults.push({ type: "tool_result", tool_use_id: id, content: "OK" });
               messages.push({ role: "user", content: toolResults });
               logger.done(summary, iterations, totalInputTokens, totalOutputTokens);
+              writeDetailedLog("done");
               const logFilePath = logger.getLogPath();
               logger.close();
               return { summary, shortSummary, model: tierConfig.model, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath, commitNum, commitDir };
+            }
+
+            case "finish": {
+              // Atomic short_summary + summary + done. Replaces 3 separate calls
+              // that the model used to split across 3 iterations (~$0.50 wasted).
+              shortSummary = (args.shortSummary || "").toString();
+              summary = (args.summary || "Changes applied").toString();
+              if (!shortSummary) shortSummary = summary.split("\n")[0].substring(0, 200);
+              currentPercent = 100;
+              console.log(`[Agent] 📝 finish.shortSummary: ${shortSummary.substring(0, 100)}`);
+              console.log(`[Agent] 📝 finish.summary: ${summary.substring(0, 200)}`);
+
+              if (checklist.length > 0 && checklistDone.size < checklist.length) {
+                const userItemCount = checklist.length - mandatoryTasks.length;
+                const missing = checklist.filter((_, i) => !checklistDone.has(i + 1));
+                console.log(`[Agent] auto-checking ${checklist.length - checklistDone.size} remaining tasks at finish(): ${missing.join(", ")}`);
+                for (let i = 1; i <= checklist.length; i++) {
+                  if (checklistDone.has(i)) continue;
+                  checklistDone.add(i);
+                  if (onCheckTodo && i <= userItemCount) {
+                    try { await onCheckTodo(i); } catch {}
+                  }
+                }
+              }
+              console.log(`[Agent] ✅ finish() after ${iterations} iterations | Total tokens: in=${totalInputTokens} out=${totalOutputTokens}`);
+
+              if (botToken) {
+                try {
+                  const appUrl = `${config.baseUrl}/app/${projectId}/`;
+                  await fetch(`https://api.telegram.org/bot${botToken}/setChatMenuButton`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      menu_button: { type: "web_app", text: "Launch App", web_app: { url: appUrl } },
+                    }),
+                  });
+                } catch {}
+              }
+
+              try {
+                const code = this.getProjectCode(projectDir);
+                await projectService.storeGeneratedCode(projectId, code);
+              } catch {}
+
+              bustCache(projectDir);
+              try { commitService.syncToDev(projectId, projectDir); } catch {}
+              toolResults.push({ type: "tool_result", tool_use_id: id, content: "OK" });
+              messages.push({ role: "user", content: toolResults });
+              logger.done(summary, iterations, totalInputTokens, totalOutputTokens);
+              writeDetailedLog("finish");
+              const logFilePath = logger.getLogPath();
+              logger.close();
+              return { summary, shortSummary, model: tierConfig.model, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath, commitNum, commitDir };
+            }
+
+            case "configure_bot": {
+              // Atomic 3 telegram_api calls. Replaces the model splitting them
+              // across 3 iterations (~$0.20 wasted on each first build).
+              if (!botToken) {
+                result = "Error: bot token not available for this project";
+                break;
+              }
+              await progress({ action: "🤖 Configuring bot", detail: "description + menu", percent: currentPercent });
+              const description = (args.description || "").toString().substring(0, 512);
+              const shortDescription = (args.shortDescription || "").toString().substring(0, 120);
+              const menuButtonText = (args.menuButtonText || "Launch App").toString().substring(0, 32);
+              const appUrl = `${config.baseUrl}/app/${projectId}/`;
+              const callApi = async (method: string, params: any) => {
+                const resp = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(params),
+                });
+                return { method, status: resp.status, body: await resp.text() };
+              };
+              try {
+                const results = await Promise.all([
+                  callApi("setMyDescription", { description }),
+                  callApi("setMyShortDescription", { short_description: shortDescription }),
+                  callApi("setChatMenuButton", {
+                    menu_button: { type: "web_app", text: menuButtonText, web_app: { url: appUrl } },
+                  }),
+                ]);
+                const lines = results.map(r => `${r.method}: ${r.status} ${r.body.substring(0, 200)}`);
+                result = `OK: Bot configured atomically.\n${lines.join("\n")}`;
+              } catch (err: any) {
+                result = `Error configuring bot: ${err.message}`;
+              }
+              break;
             }
 
             default:
@@ -1658,7 +1614,15 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
 
       messages.push({ role: "user", content: toolResults });
 
+      // DISABLED: pruneConversation mutates older messages and breaks Anthropic
+      // prompt cache (cacheRead drops to 0 after first prune, causing 5-10x cost
+      // spike on long builds). Cache reads are ~12x cheaper than fresh input,
+      // so keeping the full history cached is far cheaper than pruning it.
+      // Re-enable only if we hit the 200K context window in practice.
       // this.pruneConversation(messages);
+
+      // (UI-only batches are now hard-rejected up-front in the for-loop above —
+      //  see the HARD REJECT block. No post-hoc warning needed.)
 
       // Metrics: log message sizes and detect stuck exploration
       const msgSize = JSON.stringify(messages).length;
@@ -1668,8 +1632,38 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
       const hasWrite = toolBlocks.some(b =>
         b.type === "tool_use" && ["write_file", "edit_file"].includes(b.name)
       );
+
+      // Track consecutive iterations without writes
+      if (!hasWrite) {
+        consecutiveNoWrite++;
+      } else {
+        consecutiveNoWrite = 0;
+      }
+
+      // // Inject warnings INTO the next tool_result so the agent actually sees them
+      // let budgetWarning = "";
+      // if (consecutiveNoWrite === 5) {
+      //   budgetWarning = "\n\n⚠️ BUDGET WARNING: You have spent 5 iterations without writing code. Commit to a decision and start writing NOW, or call finish(shortSummary, summary) if you cannot make progress.";
+      // } else if (consecutiveNoWrite >= 8) {
+      //   budgetWarning = "\n\n🚨 CRITICAL: 8+ iterations without writing code. This session is burning money on exploration. Write code in your NEXT turn or call finish(shortSummary, summary) with an honest explanation of why you're stuck.";
+      // }
+      // if (iterations === Math.floor(maxIterations * 0.7)) {
+      //   budgetWarning += `\n\n⏳ ITERATION BUDGET: You are at ${iterations}/${maxIterations} iterations (70%). Wrap up remaining work and prepare to call finish(shortSummary, summary).`;
+      // }
+      // if (iterations === Math.floor(maxIterations * 0.9)) {
+      //   budgetWarning += `\n\n🛑 FINAL ITERATIONS: You are at ${iterations}/${maxIterations} (90%). Call finish(shortSummary, summary) NOW. No more exploration.`;
+      // }
+
+      // // Append warning to the last tool_result if there was one
+      // if (budgetWarning && toolResults.length > 0) {
+      //   const last = toolResults[toolResults.length - 1];
+      //   if (typeof last.content === "string") {
+      //     last.content = last.content + budgetWarning;
+      //   }
+      // }
+
       if (!hasWrite && iterations > 5) {
-        console.warn(`[Agent] ⚠️ Iteration ${iterations} had no writes — agent may be stuck in exploration`);
+        console.warn(`[Agent] ⚠️ Iteration ${iterations} had no writes (streak: ${consecutiveNoWrite}) — agent may be stuck`);
       }
     }
 
@@ -1684,6 +1678,7 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
     try { commitService.syncToDev(projectId, projectDir); } catch {}
 
     logger.done(summary || "Agent reached iteration limit", iterations, totalInputTokens, totalOutputTokens);
+    writeDetailedLog("iteration_limit");
     const logFilePath = logger.getLogPath();
     logger.close();
 
@@ -1743,8 +1738,43 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
     return summaryParts.join("\n");
   }
 
+  /**
+   * Attach a cache_control breakpoint on the last message that's at least 4
+   * messages old. Recent messages stay uncached (they change each turn),
+   * everything before them is served from cache at ~10x discount.
+   *
+   * This mutates the messages — but only via a shallow copy of the target
+   * block, so the caller's messages array stays clean for subsequent iters.
+   */
+  private applyCacheBreakpoint(
+    messages: Anthropic.MessageParam[]
+  ): Anthropic.MessageParam[] {
+    if (messages.length < 4) return messages;
+
+    // Find the latest message that's at least 2 turns back
+    const breakpointIdx = messages.length - 4;
+    const target = messages[breakpointIdx];
+
+    // Only works on structured content (array of blocks), not string content
+    if (typeof target.content === "string") return messages;
+    if (!Array.isArray(target.content)) return messages;
+
+    // Clone the target message and add cache_control to its LAST block
+    const clonedBlocks = target.content.map((b, i, arr) =>
+      i === arr.length - 1
+        ? { ...b, cache_control: { type: "ephemeral" as const } }
+        : b
+    );
+
+    const result = [...messages];
+    result[breakpointIdx] = { ...target, content: clonedBlocks as any };
+    return result;
+  }
+
   private pruneConversation(messages: Anthropic.MessageParam[]): void {
-    const keepRecent = 6; // 3 iterations (user+assistant pairs)
+    // Keep last 8 iterations (16 messages) fully intact.
+    // Only prune older messages where information can be safely compressed.
+    const keepRecent = 16;
     const pruneUntil = messages.length - keepRecent;
     if (pruneUntil <= 1) return;
 
@@ -1752,8 +1782,9 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
       const msg = messages[i];
 
       if (msg.role === "assistant" && Array.isArray(msg.content)) {
-        // Remove thinking blocks from old messages (in-place to avoid reassignment)
         const arr = msg.content as any[];
+
+        // Remove thinking blocks — they cost tokens but don't help on old turns
         for (let j = arr.length - 1; j >= 0; j--) {
           if (arr[j].type === "thinking") arr.splice(j, 1);
         }
@@ -1761,17 +1792,32 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
         for (const block of arr) {
           if (block.type !== "tool_use") continue;
 
-          if (block.name === "write_file" && block.input?.content) {
-            const lines = block.input.content.split("\n").length;
-            block.input = { path: block.input.path, content: `[written ${lines} lines to ${block.input.path}]` };
+          // write_file → structural summary (NOT placeholder)
+          // Replaces 25KB of source with ~500B of routes/endpoints/keys list.
+          // Agent stays oriented and does NOT re-read the file.
+          if (block.name === "write_file" && block.input?.content && typeof block.input.content === "string") {
+            const alreadyPruned = block.input.content.startsWith("[written");
+            if (!alreadyPruned) {
+              const summary = this.extractCodeSummary(block.input.content, block.input.path);
+              block.input = { path: block.input.path, content: summary };
+            }
           }
 
-          if (block.name === "edit_file" && block.input?.old_string) {
-            block.input = {
-              path: block.input.path,
-              old_string: `[${block.input.old_string.length} chars replaced]`,
-              new_string: `[${block.input.new_string?.length || 0} chars new]`,
-            };
+          // edit_file → just sizes (no structure to extract from a diff)
+          if (block.name === "edit_file" && block.input?.old_string && typeof block.input.old_string === "string") {
+            const alreadyPruned = block.input.old_string.startsWith("[");
+            if (!alreadyPruned) {
+              block.input = {
+                path: block.input.path,
+                old_string: `[${block.input.old_string.length} chars replaced]`,
+                new_string: `[${(block.input.new_string || "").length} chars new]`,
+              };
+            }
+          }
+
+          // UI-only tool calls on old turns — shrink the input
+          if (block.name === "check_todo" || block.name === "set_progress") {
+            block.input = {};
           }
         }
       }
@@ -1779,27 +1825,66 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
       if (msg.role === "user" && Array.isArray(msg.content)) {
         for (const block of msg.content as any[]) {
           if (block.type !== "tool_result") continue;
-          if (typeof block.content === "string" && block.content.length > 300) {
-            if (block.content.startsWith("OK:")) continue;
-            block.content = block.content.substring(0, 150) + `\n...[cleared: ${block.content.length} chars]`;
+          const content = typeof block.content === "string" ? block.content : "";
+          if (!content) continue;
+
+          // Category-based pruning — different tool results need different handling
+
+          // UI-only tools: no useful info after the fact
+          if (content.startsWith("OK: Progress set")
+           || content.startsWith("OK: Task ")
+           || content.startsWith("OK: Checklist created")
+           || content.startsWith("OK: Short summary saved")
+           || content.startsWith("OK: Summary saved")
+           || content === "ok") {
+            block.content = "ok";
+            continue;
+          }
+
+          // read_file results — file still on disk, can be re-read if needed
+          // Detected by the "N|" line-number prefix format
+          if (content.length > 500 && /^\d+\|/.test(content)) {
+            const firstLine = content.split("\n")[0];
+            block.content = `[read_file result — file is on disk, re-read if needed. First line was: ${firstLine.substring(0, 80)}]`;
+            continue;
+          }
+
+          // list_files results are short and useful — keep full
+
+          // HTTP 200 OK successful responses — keep status line, drop body
+          if (content.startsWith("HTTP 200") && content.length > 300) {
+            const firstLine = content.split("\n")[0];
+            block.content = `${firstLine} [body omitted — ${content.length - firstLine.length} chars]`;
+            continue;
+          }
+
+          // HTTP errors (4xx/5xx) — keep intact, they're usually important
+
+          // Shell success output — compress if large
+          if (content.startsWith("OK:") && content.length > 1000) {
+            block.content = content.substring(0, 500) + `\n...[${content.length - 500} chars trimmed]`;
+            continue;
+          }
+
+          // Loaded skills — agent should have already copied relevant patterns
+          // Heuristic: large results that look like markdown
+          if (content.length > 3000 && (content.includes("## ") || content.includes("```"))) {
+            block.content = `[skill/doc content loaded earlier, ${content.length} chars — agent should have extracted the needed pattern]`;
+            continue;
+          }
+
+          // Generic long content — trim
+          if (content.length > 800) {
+            block.content = content.substring(0, 400) + `\n...[${content.length - 400} chars trimmed]`;
           }
         }
       }
     }
 
-    // Emergency pruning if context is still too large
-    const estimatedTokens = JSON.stringify(messages).length / 4;
-    if (estimatedTokens > 150000 && messages.length > 8) {
-      console.warn(`[Agent] ⚠️ Emergency prune: ~${Math.round(estimatedTokens)} tokens`);
-      const first = messages[0]; // user prompt
-      // Keep last 3 pairs (6 messages) to maintain alternation
-      let keepFrom = messages.length - 6;
-      // Ensure we start with an assistant message (to follow the first user message)
-      if (messages[keepFrom]?.role === "user") keepFrom++;
-      const recent = messages.slice(keepFrom);
-      messages.length = 0;
-      messages.push(first, ...recent);
-    }
+    // NOTE: the old "emergency pruning" that wiped message history is REMOVED.
+    // It destroyed the cache entirely on every trigger (~$1 penalty) and often
+    // made things worse. If we hit 150K tokens, it's better to just keep going
+    // than to purge — cache reads are cheap, cache writes are not.
   }
 
   private summarizeArgs(toolName: string, args: any): string {
@@ -1810,15 +1895,22 @@ FINAL STEPS ORDER: After all work is done → short_summary(user-facing text) �
       case "edit_file": return `${args.path}, "${(args.old_string || "").substring(0, 40)}..." -> "${(args.new_string || "").substring(0, 40)}..."`;
       case "grep": return `"${args.pattern}"${args.path ? ` in ${args.path}` : ""}${args.include ? ` (${args.include})` : ""}`;
       case "shell": return args.command?.substring(0, 80) || "";
-      case "http_request": return `${args.method || "GET"} ${args.url}`;
+      // case "http_request": return `${args.method || "GET"} ${args.url}`;  // disabled
       case "fetch_url": return args.url || "";
       case "db": return `${args.operation}(${args.key || ""})${args.value ? ", " + JSON.stringify(args.value).substring(0, 60) : ""}`;
       case "telegram_api": return args.method || "";
       case "load_skill": return args.name || "";
-      case "server_logs": return `${args.lines || 30} lines`;
+      // case "server_logs": return `${args.lines || 30} lines`;  // disabled
       case "deploy_to_dev": return "";
       case "check_todo": return `task #${args.id}`;
+      case "set_progress": return `${args.percent}%`;
+      case "create_todo": return `${(args.items || []).length} items`;
+      case "ask_user": return (args.question || "").substring(0, 60);
+      case "finish": return (args.shortSummary || "").split("\n")[0].substring(0, 80);
+      case "configure_bot": return `desc=${(args.description || "").substring(0, 30)}..., menu=${args.menuButtonText || "Launch App"}`;
       case "done": return (args.summary || "").substring(0, 80);
+      case "short_summary": return (args.text || "").substring(0, 80);
+      case "summary": return (args.text || "").substring(0, 80);
       default: return JSON.stringify(args).substring(0, 80);
     }
   }
@@ -2068,7 +2160,6 @@ What the app can do right now. What features are complete, what's partially done
 
     fs.writeFileSync(path.join(commitDir, "passport.md"), passportText, "utf-8");
 
-    // Build history: append to previous or create fresh
     let history = "";
     if (commitNum > 0) {
       const prevHistoryPath = path.join(commitDir, "..", String(commitNum - 1), "history.md");
@@ -2165,24 +2256,39 @@ What the app can do right now. What features are complete, what's partially done
       const nums = fs.readdirSync(commitsDir).map(Number).filter(n => !isNaN(n));
       if (nums.length === 0) return null;
       const latest = Math.max(...nums);
-      const latestDir = path.join(commitsDir, String(latest));
 
-      // Prefer passport.md + history.md (new format)
-      const passportPath = path.join(latestDir, "passport.md");
-      if (fs.existsSync(passportPath)) {
+      // Walk backward up to 5 commits looking for passport.md (the most
+      // recent commit that has it wins). A failed/aborted build can leave a
+      // commit folder without passport.md, so we don't want a single missing
+      // file to wipe out all prior context. The range is [latest-5, latest],
+      // stopping when index drops to 0 (commit 0 is the initial planning
+      // skeleton and never carries a passport).
+      const minIdx = Math.max(1, latest - 5);
+      for (let i = latest; i >= minIdx; i--) {
+        const dir = path.join(commitsDir, String(i));
+        const passportPath = path.join(dir, "passport.md");
+        if (!fs.existsSync(passportPath)) continue;
         let result = fs.readFileSync(passportPath, "utf-8");
-        const historyPath = path.join(latestDir, "history.md");
+        const historyPath = path.join(dir, "history.md");
         if (fs.existsSync(historyPath)) {
           const history = fs.readFileSync(historyPath, "utf-8");
           const recentHistory = history.split("\n").slice(-10).join("\n");
           result += "\n\n## Recent Updates\n" + recentHistory;
         }
+        if (i !== latest) {
+          console.log(`[loadLatestContext] passport missing in commit ${latest}, fell back to commit ${i}`);
+        }
         return result;
       }
 
-      // Fallback to context.md (old format)
-      const contextPath = path.join(latestDir, "context.md");
-      if (fs.existsSync(contextPath)) {
+      // No passport.md in the 5-commit window — try the same window for the
+      // older context.md format.
+      for (let i = latest; i >= minIdx; i--) {
+        const contextPath = path.join(commitsDir, String(i), "context.md");
+        if (!fs.existsSync(contextPath)) continue;
+        if (i !== latest) {
+          console.log(`[loadLatestContext] context.md missing in commit ${latest}, fell back to commit ${i}`);
+        }
         return fs.readFileSync(contextPath, "utf-8");
       }
     } catch {}

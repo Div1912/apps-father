@@ -162,12 +162,47 @@ export function notifyDeposit(
   const methodLine = method
     ? `${METHOD_LABELS[method] || method}`
     : "";
-  notifyAdmins(
-    `💵 <b>${amount.toFixed(2)}</b>\n` +
-    `Method: <b>${methodLine}</b>\n` +
-    `New balance: <b>${newBalance.toFixed(2)}</b>\n` +
-    `User: <b>${uname}</b> | ID: <b>#ID${telegramId}</b>\n`
-  );
+
+  // Pull the user's attribution (utm_source / referredBy) so the deposit
+  // notification carries the same Source line as the new-user notification.
+  // Failure here is non-fatal — we still send the deposit notification, just
+  // without the Source line.
+  void (async () => {
+    let sourceLine = "";
+    try {
+      const user = await prisma.user.findUnique({
+        where: { telegramId: BigInt(telegramId) },
+        select: { utmSource: true, referredBy: true },
+      });
+      if (user) {
+        const referredBy = user.referredBy ? Number(user.referredBy) : null;
+        const source = user.utmSource || null;
+        if (referredBy && source) {
+          sourceLine =
+            `Source: <b>#partnership</b>\n` +
+            `Partner: <b>${source}</b> | <b>${referredBy}</b>\n`;
+        } else if (referredBy) {
+          sourceLine =
+            `Source: <b>#referral</b>\n` +
+            `Referred by: <b>${referredBy}</b>\n`;
+        } else if (source) {
+          sourceLine = `Source: <b>#${source}</b>\n`;
+        } else {
+          sourceLine = `Source: <b>#organic</b>\n`;
+        }
+      }
+    } catch (err) {
+      console.error("[Notify] notifyDeposit source lookup failed:", err);
+    }
+
+    notifyAdmins(
+      `💵 <b>${amount.toFixed(2)}</b>\n` +
+      `Method: <b>${methodLine}</b>\n` +
+      `New balance: <b>${newBalance.toFixed(2)}</b>\n` +
+      `User: <b>${uname}</b> | ID: <b>#ID${telegramId}</b>\n` +
+      sourceLine
+    );
+  })();
 }
 
 export function notifyProcessDone(

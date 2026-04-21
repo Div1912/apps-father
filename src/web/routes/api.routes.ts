@@ -5,6 +5,7 @@ import Database from "better-sqlite3";
 import { verifyInitData } from "../middleware/initdata";
 import { projectService } from "../../services/project.service";
 import { decryptToken } from "../../services/crypto.service";
+import { runWithProject } from "../../services/console-tagger.service";
 
 const router = Router();
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
@@ -65,6 +66,10 @@ router.all("/:projectId/{*routePath}", async (req: Request, res: Response) => {
     return;
   }
 
+  // Tag every console output produced by this project's routes.js (sync code,
+  // promises, timers, listeners) with `[app:<projectId>]` so the log viewer
+  // can filter by project. AsyncLocalStorage propagates through awaits.
+  await runWithProject(projectId, async () => {
   try {
     // Clear module cache so route code changes take effect on next request
     for (const key of Object.keys(require.cache)) {
@@ -121,6 +126,7 @@ router.all("/:projectId/{*routePath}", async (req: Request, res: Response) => {
     console.error(`[API] Error loading routes for ${projectId}:`, err);
     res.status(500).json({ error: "Internal server error" });
   }
+  });
 });
 
 /** Evict a project's cached DB connection so the next request opens a fresh one. */

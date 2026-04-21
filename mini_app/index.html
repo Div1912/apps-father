@@ -15,7 +15,7 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <link href="bootstrap.min.css" rel="stylesheet">
   <link href="bootstrap-extra.css" rel="stylesheet">
-  <link href="styles.css?r=113" rel="stylesheet">
+  <link href="styles.css?r=122" rel="stylesheet">
   <script>
     window.op=window.op||function(){var n=[];return new Proxy(function(){arguments.length&&n.push([].slice.call(arguments))},{get:function(t,r){return"q"===r?n:function(){n.push([r].concat([].slice.call(arguments)))}} ,has:function(t,r){return"q"===r}}) }();
     window.op('init', {
@@ -42,12 +42,12 @@
   <script src="https://unpkg.com/@tonconnect/ui@2.0.9/dist/tonconnect-ui.min.js"></script>
   <script src="https://unpkg.com/tonweb@0.0.66/dist/tonweb.js"></script>
   <!-- Telegram Analytics — independent, can stay async -->
-  <!-- <script
+  <script
     async
     src="https://tganalytics.xyz/index.js"
     onload="initAnalytics && initAnalytics()"
     type="text/javascript"
-  ></script> -->
+  ></script>
 </head>
 <body class="emoji_image">
 
@@ -638,6 +638,19 @@
     </div>
   </div>
 
+  <!-- ═══ ADMIN SOURCE USERS (drill-down from a Sources card) ═══ -->
+  <div id="view-adm-source-users" class="view-container hidden">
+    <div>
+      <main class="tm-main">
+        <section class="tm-main-intro">
+          <h1 class="tm-main-intro-header" id="adm-source-users-title">Users</h1>
+          <p class="tm-main-intro-text" style="max-width:312px;" id="adm-source-users-sub"></p>
+        </section>
+        <section class="tm-section" style="padding-top:0;" id="adm-source-users-content"></section>
+      </main>
+    </div>
+  </div>
+
   <!-- ═══ ADMIN USERS ═══ -->
   <div id="view-adm-users" class="view-container hidden">
     <div>
@@ -994,8 +1007,34 @@
     </div>
   </div>
 
-  <script src="i18n.js?r=121" defer></script>
-  <script src="app.js?r=126" defer></script>
+  <!-- ═══ PREFERENCES MODAL (full-screen, blocking, step-by-step wizard) ═══ -->
+  <!-- Opens after the user's first prompt and BEFORE /plan. One question
+       per slide; tapping a card auto-advances. Last slide submits. -->
+  <div id="preferences-modal" class="pref-modal hidden" aria-hidden="true">
+    <div class="pref-modal-backdrop"></div>
+    <div class="pref-modal-sheet" role="dialog" aria-labelledby="pref-modal-title">
+      <header class="pref-modal-header">
+        <button id="pref-modal-back" class="pref-modal-back" type="button" aria-label="Back">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+        </button>
+        <div class="pref-modal-progress" id="pref-modal-progress"></div>
+        <div class="pref-modal-step-counter" id="pref-modal-step-counter">1/5</div>
+      </header>
+      <div class="pref-modal-body">
+        <div class="pref-steps" id="pref-steps">
+          <!-- One .pref-step per category injected here -->
+        </div>
+      </div>
+      <footer class="pref-modal-footer">
+        <button id="pref-modal-submit" class="pref-modal-submit" type="button">
+          Build with these preferences
+        </button>
+      </footer>
+    </div>
+  </div>
+
+  <script src="i18n.js?r=122" defer></script>
+  <script src="app.js?r=143" defer></script>
   <script>
       function initAnalytics() {
         window.telegramAnalytics.init({

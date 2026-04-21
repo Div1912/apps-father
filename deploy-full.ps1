@@ -95,16 +95,20 @@ Remove-Item tmp_ret.sql -ErrorAction SilentlyContinue
 ssh $SERVER "$psql 'ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_notified_at TIMESTAMPTZ;'"
 ssh $SERVER "$psql 'UPDATE users SET admin_notified_at = created_at WHERE admin_notified_at IS NULL;'"
 ssh $SERVER "$psql 'ALTER TABLE users ADD COLUMN IF NOT EXISTS sub_bonus_claimed_at TIMESTAMPTZ;'"
+ssh $SERVER "$psql 'ALTER TABLE projects ADD COLUMN IF NOT EXISTS preferences TEXT;'"
 Write-Host "Migration OK" -ForegroundColor Green
 
-# ── Skills ────────────────────────────────────────────────
-Write-Host "=== [$ENV_NAME] Syncing skills ===" -ForegroundColor $COLOR
-scp -r skills/* "${SERVER}:${APP_DIR}/skills/"
-Write-Host "Skills OK" -ForegroundColor Green
+# ── Agent knowledge (instructions + skills) ───────────────
+Write-Host "=== [$ENV_NAME] Syncing agent_knowledge ===" -ForegroundColor $COLOR
+ssh $SERVER "mkdir -p ${APP_DIR}/agent_knowledge/instructions ${APP_DIR}/agent_knowledge/skills ${APP_DIR}/agent_knowledge/preferences"
+scp -r agent_knowledge/instructions/* "${SERVER}:${APP_DIR}/agent_knowledge/instructions/"
+scp -r agent_knowledge/skills/* "${SERVER}:${APP_DIR}/agent_knowledge/skills/"
+scp -r agent_knowledge/preferences/* "${SERVER}:${APP_DIR}/agent_knowledge/preferences/"
+Write-Host "agent_knowledge OK" -ForegroundColor Green
 
 # ── Restart ───────────────────────────────────────────────
 Write-Host "=== [$ENV_NAME] Restarting ===" -ForegroundColor $COLOR
-ssh $SERVER "cd ${APP_DIR} && (pm2 restart ${PM2} --update-env --kill-timeout 300000 2>/dev/null || pm2 start ecosystem.config.js && pm2 save)"
+ssh $SERVER "cd ${APP_DIR} && (pm2 restart ${PM2} --update-env --kill-timeout 300000 2>/dev/null || pm2 start dist/index.js --name ${PM2} --max-memory-restart 1G && pm2 save)"
 if ($LASTEXITCODE -ne 0) { Write-Host "Restart failed!" -ForegroundColor Red; exit 1 }
 
 Write-Host "=== Deployed to $ENV_NAME! ===" -ForegroundColor Green

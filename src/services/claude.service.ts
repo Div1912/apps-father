@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config";
 import { GeneratedApp, GeneratedFile } from "../types";
+import { ProjectPreferences, buildPreferencesPrompt } from "./preferences.catalog";
 
 const SYSTEM_PROMPT = `You are Apps Father AI — an expert developer that creates Telegram Mini Apps.
 
@@ -256,12 +257,18 @@ export class ClaudeService {
     };
   }
 
-  async generatePlan(description: string, assets?: string[], lang?: string): Promise<{
+  async generatePlan(
+    description: string,
+    assets?: string[],
+    lang?: string,
+    prefs?: ProjectPreferences | null,
+  ): Promise<{
     plan: string;
     inputTokens: number;
     outputTokens: number;
   }> {
-    let prompt = `Create a plan for a Telegram Mini App based on this description:\n\n${description}`;
+    const prefsBlock = prefs ? `${buildPreferencesPrompt(prefs)}\n\n` : "";
+    let prompt = `${prefsBlock}Create a plan for a Telegram Mini App based on this description:\n\n${description}`;
     if (assets && assets.length > 0) {
       prompt += `\n\nThe user has provided ${assets.length} image(s) as reference for the app design.`;
     }

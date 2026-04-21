@@ -5,6 +5,7 @@ import Database from "better-sqlite3";
 import { verifyInitData } from "../middleware/initdata";
 import { projectService } from "../../services/project.service";
 import { decryptToken } from "../../services/crypto.service";
+import { runWithProject } from "../../services/console-tagger.service";
 
 const router = Router();
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
@@ -63,6 +64,9 @@ router.all("/:projectId/{*routePath}", async (req: Request, res: Response) => {
 
   let db: ReturnType<typeof createProjectDb> | null = null;
 
+  // Tag console output produced inside this project's routes.js with
+  // `[app:<projectId>]` so the log viewer can attribute it correctly.
+  await runWithProject(projectId, async () => {
   try {
     for (const key of Object.keys(require.cache)) {
       if (key.startsWith(backendDir) && !key.includes("node_modules")) delete require.cache[key];
@@ -106,6 +110,7 @@ router.all("/:projectId/{*routePath}", async (req: Request, res: Response) => {
     res.status(500).json({ error: "Internal server error" });
     if (db) db.close();
   }
+  });
 });
 
 export default router;

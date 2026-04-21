@@ -1,12 +1,82 @@
 import { Router, Request, Response } from "express";
 import fs from "fs";
 import path from "path";
+import os from "os";
+import { execSync } from "child_process";
 import { config } from "../../config";
+import { prisma } from "../../db";
 
 const router = Router();
 
-const OUT_LOG = "/root/.pm2/logs/apps-father-out.log";
-const ERR_LOG = "/root/.pm2/logs/apps-father-error.log";
+// PM2 writes logs to ~/.pm2/logs/<process_name>-out.log / -error.log,
+// but in cluster mode adds an instance suffix (e.g. -out-0.log), and the
+// process name differs between envs (apps-father vs apps-father-dev).
+// We resolve paths in 3 steps:
+//   1. explicit env var override
+//   2. ask PM2 directly via `pm2 jlist` (most reliable)
+//   3. scan PM2 logs dir with a permissive regex
+const PM2_LOG_DIR = process.env.PM2_LOG_DIR || path.join(os.homedir(), ".pm2", "logs");
+
+function findPm2LogsViaJlist(): { out: string; err: string } | null {
+  try {
+    const stdout = execSync("pm2 jlist", { encoding: "utf8", timeout: 3000 });
+    const procs = JSON.parse(stdout);
+    if (!Array.isArray(procs) || procs.length === 0) return null;
+    const wanted =
+      procs.find((p: any) => typeof p?.name === "string" && p.name.includes("apps-father")) ||
+      procs[0];
+    const env = wanted?.pm2_env;
+    if (!env) return null;
+    return {
+      out: typeof env.pm_out_log_path === "string" ? env.pm_out_log_path : "",
+      err: typeof env.pm_err_log_path === "string" ? env.pm_err_log_path : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function findPm2LogViaScan(suffix: "out" | "error"): string {
+  try {
+    if (!fs.existsSync(PM2_LOG_DIR)) return "";
+    // Match both `-out.log` and cluster-mode `-out-0.log` etc.
+    const re = suffix === "out" ? /-out(-\d+)?\.log$/ : /-error(-\d+)?\.log$/;
+    const all = fs
+      .readdirSync(PM2_LOG_DIR)
+      .filter((f) => re.test(f))
+      .map((f) => {
+        const full = path.join(PM2_LOG_DIR, f);
+        try {
+          const stat = fs.statSync(full);
+          return { full, name: f, mtime: stat.mtimeMs };
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .sort((a: any, b: any) => b.mtime - a.mtime) as { full: string; name: string; mtime: number }[];
+    if (all.length === 0) return "";
+    // Prefer files whose name mentions our app, otherwise take the most recent.
+    const preferred = all.find((c) => c.name.includes("apps-father"));
+    return (preferred || all[0]).full;
+  } catch {
+    return "";
+  }
+}
+
+function findPm2Log(suffix: "out" | "error"): string {
+  const explicit = suffix === "out" ? process.env.PM2_OUT_LOG : process.env.PM2_ERR_LOG;
+  if (explicit) return explicit;
+  const viaJlist = findPm2LogsViaJlist();
+  if (viaJlist) {
+    const candidate = suffix === "out" ? viaJlist.out : viaJlist.err;
+    if (candidate && fs.existsSync(candidate)) return candidate;
+  }
+  return findPm2LogViaScan(suffix);
+}
+
+function getOutLog(): string { return findPm2Log("out"); }
+function getErrLog(): string { return findPm2Log("error"); }
 
 // Simple token auth — use WEBHOOK_SECRET as the token
 function isAuthorized(req: Request): boolean {
@@ -56,17 +126,28 @@ router.get("/", (req: Request, res: Response) => {
   }
   button:hover { background: #30363d; }
   button.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
-  input[type=text] {
+  input[type=text], select {
     padding: 5px 10px; border-radius: 6px; border: 1px solid #30363d;
-    background: #0d1117; color: #e6edf3; font-size: 12px; width: 200px;
+    background: #0d1117; color: #e6edf3; font-size: 12px;
     font-family: inherit;
   }
+  input[type=text] { width: 200px; }
+  select { width: 220px; cursor: pointer; }
   input::placeholder { color: #484f58; }
 
-  .tabs { display: flex; gap: 1px; padding: 0 20px; background: #161b22; border-bottom: 1px solid #30363d; flex-shrink: 0; }
+  .tabs { display: flex; gap: 1px; padding: 0 20px; background: #161b22; border-bottom: 1px solid #30363d; flex-shrink: 0; align-items: center; }
   .tab { padding: 8px 16px; cursor: pointer; color: #8b949e; font-size: 12px; border-bottom: 2px solid transparent; transition: all 0.15s; }
   .tab:hover { color: #e6edf3; }
   .tab.active { color: #f0f6fc; border-bottom-color: #1f6feb; }
+  .tab-spacer { flex: 1; }
+  .tabs select { margin: 4px 0; }
+
+  .pid-tag {
+    display: inline-block; padding: 0 6px; border-radius: 10px; font-size: 10px;
+    background: #1f2a3a; color: #79c0ff; border: 1px solid #30404f; margin-right: 6px;
+    white-space: nowrap;
+  }
+  .pid-tag.core { background: #2a1f3a; color: #d2a8ff; border-color: #3f304f; }
 
   #log-container { flex: 1; overflow-y: auto; padding: 12px 20px; }
   .log-line { padding: 1px 0; line-height: 1.6; white-space: pre-wrap; word-break: break-all; display: flex; gap: 12px; }
@@ -101,6 +182,11 @@ router.get("/", (req: Request, res: Response) => {
   <div class="tab" onclick="setTab('err')">stderr</div>
   <div class="tab" onclick="setTab('agent')">Agent</div>
   <div class="tab" onclick="setTab('bot')">Bot</div>
+  <div class="tab-spacer"></div>
+  <select id="project-select" onchange="applyFilter()">
+    <option value="all">All sources</option>
+    <option value="__core__">Apps Father (core)</option>
+  </select>
 </div>
 <div id="log-container"><div class="empty">Connecting to log stream...</div></div>
 
@@ -110,6 +196,43 @@ let currentTab = 'all';
 let filterText = '';
 let lineCount = 0;
 const container = document.getElementById('log-container');
+const projectSelect = document.getElementById('project-select');
+
+// Map of projectId -> display name. Populated lazily from /logs/projects and
+// extended on the fly when previously-unseen project tags appear in the stream.
+const projectNames = {};
+const seenProjectIds = new Set();
+
+const APP_TAG_RE = /^\\[app:([A-Za-z0-9_\\-]+)\\]\\s?(.*)$/;
+
+function shortId(id) {
+  return id && id.length > 12 ? id.slice(0, 8) : id;
+}
+
+function parseAppTag(text) {
+  const m = APP_TAG_RE.exec(text);
+  if (!m) return { projectId: null, body: text };
+  return { projectId: m[1], body: m[2] };
+}
+
+function ensureProjectOption(projectId) {
+  if (!projectId || seenProjectIds.has(projectId)) return;
+  seenProjectIds.add(projectId);
+  const opt = document.createElement('option');
+  opt.value = projectId;
+  const name = projectNames[projectId];
+  opt.textContent = name ? (name + ' (' + shortId(projectId) + ')') : shortId(projectId);
+  projectSelect.appendChild(opt);
+}
+
+function refreshProjectOptionLabels() {
+  for (const opt of projectSelect.options) {
+    const id = opt.value;
+    if (id === 'all' || id === '__core__') continue;
+    const name = projectNames[id];
+    opt.textContent = name ? (name + ' (' + shortId(id) + ')') : shortId(id);
+  }
+}
 
 function classify(text, source) {
   const t = text.toLowerCase();
@@ -133,6 +256,13 @@ function tabMatch(cls) {
   return true;
 }
 
+function projectMatch(projectId) {
+  const sel = projectSelect.value;
+  if (sel === 'all') return true;
+  if (sel === '__core__') return !projectId;       // core / apps_father lines (no app tag)
+  return projectId === sel;
+}
+
 function addLine(text, source, isHistory) {
   const empty = container.querySelector('.empty');
   if (empty) empty.remove();
@@ -140,14 +270,18 @@ function addLine(text, source, isHistory) {
   lineCount++;
   document.getElementById('count-badge').textContent = lineCount + ' lines';
 
-  const cls = classify(text, source);
+  const { projectId, body } = parseAppTag(text);
+  if (projectId) ensureProjectOption(projectId);
+
+  const cls = classify(body, source);
   const now = new Date();
   const ts = now.toTimeString().slice(0,8);
 
   const div = document.createElement('div');
   div.className = 'log-line ' + cls + (isHistory ? ' history' : '');
   div.dataset.source = source;
-  div.dataset.text = text.toLowerCase();
+  div.dataset.text = body.toLowerCase();
+  div.dataset.projectId = projectId || '';
 
   const tsSpan = document.createElement('span');
   tsSpan.className = 'ts';
@@ -155,12 +289,29 @@ function addLine(text, source, isHistory) {
 
   const msgSpan = document.createElement('span');
   msgSpan.className = 'msg';
-  msgSpan.textContent = text;
+
+  if (projectId) {
+    const tag = document.createElement('span');
+    tag.className = 'pid-tag';
+    const name = projectNames[projectId];
+    tag.textContent = name ? name : shortId(projectId);
+    tag.title = projectId;
+    msgSpan.appendChild(tag);
+  } else {
+    const tag = document.createElement('span');
+    tag.className = 'pid-tag core';
+    tag.textContent = 'core';
+    tag.title = 'Apps Father (untagged)';
+    msgSpan.appendChild(tag);
+  }
+  msgSpan.appendChild(document.createTextNode(body));
 
   div.appendChild(tsSpan);
   div.appendChild(msgSpan);
 
-  const hidden = !tabMatch(cls) || (filterText && !text.toLowerCase().includes(filterText));
+  const hidden = !tabMatch(cls)
+    || !projectMatch(projectId)
+    || (filterText && !body.toLowerCase().includes(filterText));
   if (hidden) div.classList.add('hidden');
 
   container.appendChild(div);
@@ -185,11 +336,25 @@ function applyFilter() {
   document.querySelectorAll('.log-line').forEach(div => {
     const cls = div.className;
     const text = div.dataset.text || '';
+    const projectId = div.dataset.projectId || null;
     const tabOk = tabMatch(cls);
+    const projOk = projectMatch(projectId);
     const filterOk = !filterText || text.includes(filterText);
-    div.classList.toggle('hidden', !tabOk || !filterOk);
+    div.classList.toggle('hidden', !tabOk || !projOk || !filterOk);
   });
 }
+
+// Fetch project name index so the dropdown shows readable names instead of bare IDs.
+fetch('/logs/projects?token=${token}')
+  .then(r => r.ok ? r.json() : [])
+  .then(list => {
+    if (!Array.isArray(list)) return;
+    for (const p of list) {
+      if (p && p.id) projectNames[p.id] = p.name || '';
+    }
+    refreshProjectOptionLabels();
+  })
+  .catch(() => {});
 
 function toggleScroll() {
   autoScroll = !autoScroll;
@@ -272,8 +437,39 @@ router.get("/stream", (req: Request, res: Response) => {
     } catch {}
   };
 
-  sendHistory(OUT_LOG, "out");
-  sendHistory(ERR_LOG, "err");
+  // Resolve log paths once per connection — handles env differences (apps-father vs apps-father-dev).
+  const outLog = getOutLog();
+  const errLog = getErrLog();
+
+  // Surface a debug line so the user sees what we're tailing (helps diagnose empty-stream issues).
+  const debugInfo = `[logs] tailing out=${outLog || "<none found>"} err=${errLog || "<none found>"} dir=${PM2_LOG_DIR}`;
+  res.write(`data: ${JSON.stringify({ text: debugInfo, source: "out", history: true })}\n\n`);
+
+  // If neither path was resolved, show the user what's actually in the dir so they can diagnose.
+  if (!outLog && !errLog) {
+    try {
+      const listing = fs.existsSync(PM2_LOG_DIR)
+        ? fs.readdirSync(PM2_LOG_DIR).slice(0, 30).join(", ")
+        : "(directory does not exist)";
+      const hint = `[logs] dir contents: ${listing || "(empty)"}`;
+      res.write(`data: ${JSON.stringify({ text: hint, source: "err", history: true })}\n\n`);
+    } catch (e: any) {
+      res.write(`data: ${JSON.stringify({ text: `[logs] cannot read dir: ${e?.message || e}`, source: "err", history: true })}\n\n`);
+    }
+    try {
+      const pm2List = execSync("pm2 jlist", { encoding: "utf8", timeout: 3000 });
+      const procs = JSON.parse(pm2List);
+      const summary = Array.isArray(procs)
+        ? procs.map((p: any) => `${p.name}#${p.pm_id}(${p.pm2_env?.status || "?"})`).join(", ")
+        : "(unexpected pm2 jlist output)";
+      res.write(`data: ${JSON.stringify({ text: `[logs] pm2 processes: ${summary || "(none)"}`, source: "err", history: true })}\n\n`);
+    } catch (e: any) {
+      res.write(`data: ${JSON.stringify({ text: `[logs] pm2 jlist failed: ${e?.message || e}`, source: "err", history: true })}\n\n`);
+    }
+  }
+
+  if (outLog) sendHistory(outLog, "out");
+  if (errLog) sendHistory(errLog, "err");
 
   // Send initial ping so client knows the stream is live (even if no history)
   res.write(`: ping\n\n`);
@@ -286,11 +482,11 @@ router.get("/stream", (req: Request, res: Response) => {
     return fs.statSync(filePath).size;
   };
 
-  positions[OUT_LOG] = getPos(OUT_LOG);
-  positions[ERR_LOG] = getPos(ERR_LOG);
+  if (outLog) positions[outLog] = getPos(outLog);
+  if (errLog) positions[errLog] = getPos(errLog);
 
   const poll = (filePath: string, source: "out" | "err") => {
-    if (!fs.existsSync(filePath)) return;
+    if (!filePath || !fs.existsSync(filePath)) return;
     try {
       const stat = fs.statSync(filePath);
       if (stat.size < positions[filePath]) positions[filePath] = 0; // rotated
@@ -308,8 +504,8 @@ router.get("/stream", (req: Request, res: Response) => {
 
   let tickCount = 0;
   const interval = setInterval(() => {
-    poll(OUT_LOG, "out");
-    poll(ERR_LOG, "err");
+    poll(outLog, "out");
+    poll(errLog, "err");
     // Send SSE comment ping every ~30s to keep connection alive through proxies
     if (++tickCount % 37 === 0) res.write(`: ping\n\n`);
   }, 800);
@@ -343,10 +539,30 @@ router.get("/history", (req: Request, res: Response) => {
     } catch {}
   };
 
-  readTail(OUT_LOG, "out");
-  readTail(ERR_LOG, "err");
+  const outLog = getOutLog();
+  const errLog = getErrLog();
+  if (outLog) readTail(outLog, "out");
+  if (errLog) readTail(errLog, "err");
 
   res.json(result);
+});
+
+// Project name index for the log viewer's project filter dropdown.
+// Returns a slim list so the client can show "MyApp (a1b2c3)" instead of bare IDs.
+router.get("/projects", async (req: Request, res: Response) => {
+  if (!isAuthorized(req)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  try {
+    const projects = await prisma.project.findMany({
+      select: { id: true, name: true },
+      orderBy: { updatedAt: "desc" },
+    });
+    res.json(projects);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
 });
 
 // Agent log download for a specific commit

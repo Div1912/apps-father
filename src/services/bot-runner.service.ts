@@ -3,6 +3,7 @@ import { Router } from "express";
 import { config } from "../config";
 import { projectService } from "./project.service";
 import { decryptToken } from "./crypto.service";
+import { runWithProject } from "./console-tagger.service";
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
@@ -257,6 +258,9 @@ export class BotRunnerService {
     const webhookPath = this.getCustomWebhookPath(projectId);
     if (!webhookPath) return;
 
+    // Tag console output produced by the project's webhook handler with
+    // `[app:<projectId>]` so the log viewer can filter by project.
+    return runWithProject(projectId, async () => {
     let db: any = null;
     try {
       delete require.cache[require.resolve(routesFile)];
@@ -322,6 +326,7 @@ export class BotRunnerService {
       if (db) try { db.close(); } catch {}
       throw err;
     }
+    });
   }
 }
 

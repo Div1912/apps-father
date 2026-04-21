@@ -73,6 +73,7 @@ model Project {
 
   totalCostUsd  Decimal        @default(0) @map("total_cost_usd") @db.Decimal(12, 4)
   features      String?        @map("features")
+  preferences   String?        @map("preferences")
   tonWallet     String?        @map("ton_wallet")
   qualityTier   Int            @default(1) @map("quality_tier")
   releaseCommit Int?           @map("release_commit")

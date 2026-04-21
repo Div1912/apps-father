@@ -15,6 +15,9 @@ export interface ChatMessage {
   costUsd?: number;
   balance?: number;
   timestamp: number;
+  /** ISO 8601 UTC string (e.g. "2026-04-14T09:33:00.123Z"). Used by the
+   *  frontend to drive the dynamic progress curve y = 1 - e^(-Δsec/100). */
+  createdAtUtc?: string;
   metadata?: Record<string, any>;
 }
 
@@ -51,10 +54,12 @@ export const chatService = {
 
   addMessage(projectId: string, msg: Omit<ChatMessage, "id" | "timestamp">): ChatMessage {
     const messages = readHistory(projectId);
+    const now = Date.now();
     const full: ChatMessage = {
       ...msg,
       id: crypto.randomBytes(8).toString("hex"),
-      timestamp: Date.now(),
+      timestamp: now,
+      createdAtUtc: msg.createdAtUtc ?? new Date(now).toISOString(),
     };
     messages.push(full);
     writeHistory(projectId, messages);
@@ -91,5 +96,76 @@ export const chatService = {
   clearHistory(projectId: string): void {
     const fp = historyPath(projectId);
     if (fs.existsSync(fp)) fs.unlinkSync(fp);
+  },
+
+  /**
+   * Recover dangling in-flight messages after a crash/restart.
+   *
+   * Heals EVERY `progress` (percent < 100) or `question` message anywhere in
+   * the history — not just the last one. After a restart no agent can be
+   * running, so any open progress/question is by definition orphaned. The old
+   * "last message only" rule missed cases where the agent had appended a
+   * follow-up question/answer/auto-fix progress on top of an in-flight build,
+   * leaving the UI permanently showing "Working…".
+   *
+   * Returns the project IDs that had at least one message healed.
+   */
+  recoverDanglingProgress(reason: string): string[] {
+    const healed: string[] = [];
+    if (!fs.existsSync(PROJECTS_DIR)) return healed;
+    let projectIds: string[];
+    try {
+      projectIds = fs.readdirSync(PROJECTS_DIR);
+    } catch {
+      return healed;
+    }
+    for (const projectId of projectIds) {
+      const result = this.healProject(projectId, reason);
+      if (result > 0) healed.push(projectId);
+    }
+    return healed;
+  },
+
+  /**
+   * Convert every dangling `progress` (percent < 100) or `question` message in
+   * the given project to an `error`. Returns the number of messages healed.
+   * Safe to call at any time; returns 0 if nothing needed healing.
+   */
+  healProject(projectId: string, reason: string): number {
+    const fp = historyPath(projectId);
+    if (!fs.existsSync(fp)) return 0;
+    let messages: ChatMessage[];
+    try {
+      messages = JSON.parse(fs.readFileSync(fp, "utf-8"));
+    } catch {
+      return 0;
+    }
+    if (!Array.isArray(messages) || messages.length === 0) return 0;
+
+    let healedCount = 0;
+    const next = messages.map(m => {
+      const isOpenProgress = m.type === "progress" && (m.percent ?? 0) < 100;
+      const isOpenQuestion = m.type === "question";
+      if (!isOpenProgress && !isOpenQuestion) return m;
+      healedCount++;
+      return {
+        ...m,
+        type: "error" as const,
+        content: `⚠️ ${reason}`,
+        // Drop progress-only fields so the UI doesn't render a percent bar.
+        percent: undefined,
+        checklist: undefined,
+      };
+    });
+
+    if (healedCount === 0) return 0;
+    try {
+      writeHistory(projectId, next);
+      console.log(`[Recovery] Healed ${healedCount} dangling message(s) in project ${projectId}`);
+      return healedCount;
+    } catch (err: any) {
+      console.warn(`[Recovery] Failed to heal ${projectId}: ${err.message}`);
+      return 0;
+    }
   },
 };

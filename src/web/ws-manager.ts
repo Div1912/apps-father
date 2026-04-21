@@ -5,6 +5,7 @@ import fs from "fs";
 import Database from "better-sqlite3";
 import { projectService } from "../services/project.service";
 import { decryptToken } from "../services/crypto.service";
+import { runWithProject } from "../services/console-tagger.service";
 
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
 
@@ -147,7 +148,12 @@ async function initProjectWs(projectId: string, isDev: boolean): Promise<Project
   };
 
   try {
-    routeModule.ws(wss, db, projectId);
+    // Run inside the project's tagging context so any timers/listeners
+    // registered by routeModule.ws() inherit the AsyncLocalStorage and their
+    // console output is tagged automatically.
+    runWithProject(projectId, () => {
+      routeModule.ws(wss, db, projectId);
+    });
   } finally {
     global.setInterval = origSetInterval;
     global.setTimeout = origSetTimeout;
@@ -271,7 +277,12 @@ export function setupWebSocket(server: import("http").Server, miniAppWss?: impor
 
         if (finalState.connectionHandler) {
           try {
-            finalState.connectionHandler(ws, request);
+            // Run the user's onConnection callback inside the project's tagging
+            // context so any ws.on(...) listeners it registers inherit the
+            // AsyncLocalStorage and emit logs tagged with [app:<projectId>].
+            runWithProject(projectId, () => {
+              finalState.connectionHandler!(ws, request);
+            });
           } catch (err) {
             console.error(`[WS] onConnection error for ${projectId.substring(0, 8)}:`, err);
           }

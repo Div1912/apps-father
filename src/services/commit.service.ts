@@ -232,6 +232,11 @@ class CommitService {
     return fs.existsSync(logFile) ? logFile : null;
   }
 
+  getDetailedLogPath(projectId: string, commitNum: number): string | null {
+    const file = path.join(PROJECTS_DIR, projectId, "commits", String(commitNum), "detailed-log.json");
+    return fs.existsSync(file) ? file : null;
+  }
+
   /**
    * Migrate existing projects from old layout (root frontend/backend/data)
    * to new layout (development/, release/data/).
