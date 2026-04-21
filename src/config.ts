@@ -19,6 +19,8 @@ export const config = {
   withdrawGroupId: process.env.WITHDRAW_GROUP_ID || "-1003984965330",
   openPanelClientId: process.env.OPENPANEL_CLIENT_ID || "",
   openPanelClientSecret: process.env.OPENPANEL_CLIENT_SECRET || "",
+  // Same key for dev and prod (provided by product). Override via env if needed.
+  elevenLabsApiKey: process.env.ELEVENLABS_API_KEY || "sk_d8d1894ac4e643e5c4aa20e97649837f96d62408da2e96e2",
 
   get baseUrl(): string {
     if (this.nodeEnv === "development") {

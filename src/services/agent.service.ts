@@ -37,6 +37,7 @@ const INSTRUCTION_MANIFEST: Array<{ file: string; modes?: AgentMode[] }> = [
   { file: "routes-hot-reload.md" },
   { file: "bot-webhook.md" },
   { file: "technology-choice.md" },
+
   { file: "best-practices.md" },
   { file: "efficiency.md" },
   // { file: "debugging.md" },
@@ -738,6 +739,11 @@ Development App URL: ${config.baseUrl}/dev/${projectId}/
 Development API URL: ${config.baseUrl}/devapi/${projectId}/
 Production App URL: ${config.baseUrl}/app/${projectId}/
 Production API URL: ${config.baseUrl}/api/${projectId}/
+
+Telegram Bot Link: https://t.me/${project.botUsername}
+Telegram Bot Deep Link Making: https://t.me/${project.botUsername}?start={some_param}
+Track Deep Link: in routes.js from /bot-webhook route track the as message of start param
+
 
 ${context}
 

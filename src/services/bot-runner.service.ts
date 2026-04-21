@@ -4,10 +4,21 @@ import { config } from "../config";
 import { projectService } from "./project.service";
 import { decryptToken } from "./crypto.service";
 import { runWithProject } from "./console-tagger.service";
+import { prisma } from "../db";
+import { Lang, t } from "../bot/i18n";
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
 import type { Request, Response, NextFunction } from "express";
+
+/**
+ * Apps Father's own bot username, picked per-environment so user-bot deep
+ * links land on the correct mini-app instance. Dev server uses the dev bot
+ * (its mini-app domain is dev.apps-father.com), prod uses the main bot.
+ */
+function getFatherBotUsername(): string {
+  return config.domain.startsWith("dev.") ? "apps_father_dev_bot" : "apps_father_bot";
+}
 
 interface ManagedBotInstance {
   bot: Bot;
@@ -19,7 +30,23 @@ interface ManagedBotInstance {
 export class BotRunnerService {
   private bots = new Map<string, ManagedBotInstance>();
 
-  async startBot(projectId: string, token: string, botUsername: string): Promise<void> {
+  /**
+   * Start (or re-start) the user's bot and register its webhook.
+   *
+   * @param sendOwnerWelcome When true, immediately push the "Good job, bot
+   *   created" card to the owner via bot.api.sendMessage *after* the webhook
+   *   is live. This covers the race where the user is bounced into their new
+   *   bot by mobile Telegram and presses /start before our webhook is set —
+   *   they'd otherwise get nothing. Pass `false` (the default) when restoring
+   *   bots at server boot, or every old user would get spammed with the
+   *   welcome card on every deploy.
+   */
+  async startBot(
+    projectId: string,
+    token: string,
+    botUsername: string,
+    sendOwnerWelcome = false,
+  ): Promise<void> {
     if (this.bots.has(projectId)) {
       console.log(`[BotRunner] Bot for ${projectId} already running`);
       return;
@@ -30,6 +57,51 @@ export class BotRunnerService {
 
     bot.command("start", async (ctx) => {
       if (await this.hasCustomWebhook(projectId)) return;
+
+      // Decide which welcome to send based on (a) deploy status and
+      // (b) whether the sender is the project owner. We deliberately fetch
+      // fresh project + owner data on every /start because it's a low-volume
+      // command and stale cache here would either show the "app not ready"
+      // card after deploy, or leak the owner-only nudge to a friend who
+      // pressed /start in someone else's bot.
+      const project = await prisma.project.findUnique({
+        where: { id: projectId },
+        select: {
+          releaseCommit: true,
+          user: { select: { telegramId: true, language: true } },
+        },
+      });
+      if (!project) return;
+
+      const isReleased = project.releaseCommit !== null && project.releaseCommit !== undefined;
+      const senderTelegramId = ctx.from?.id;
+      const isOwner = !!senderTelegramId && BigInt(senderTelegramId) === project.user.telegramId;
+
+      if (!isReleased) {
+        // App still being built / not deployed yet. Mobile Telegram clients
+        // bounce the user straight into the freshly-created bot and they
+        // hit /start out of habit — without this, they see nothing and get
+        // confused. We only respond to the owner; random visitors get no
+        // reply because the bot literally has no app to launch yet.
+        if (!isOwner) return;
+
+        const lang = (project.user.language as Lang) || "en";
+        const fatherBot = getFatherBotUsername();
+        const backUrl = `https://t.me/${fatherBot}/app?startapp=open_dialog`;
+        await ctx.reply(
+          `<b>${t(lang, "user_bot_start_owner_title")}</b>\n${t(lang, "user_bot_start_owner_body")}`,
+          {
+            parse_mode: "HTML",
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: t(lang, "user_bot_start_owner_button"), url: backUrl, style: "primary" }],
+              ],
+            },
+          },
+        );
+        return;
+      }
+
       await ctx.reply(
         `Welcome! Tap the button below to launch the app.`,
         {
@@ -122,6 +194,21 @@ export class BotRunnerService {
 
     bot.on("message:text", async (ctx) => {
       if (await this.hasCustomWebhook(projectId)) return;
+
+      // Same gating as /start: before deploy, only the owner gets a reply.
+      // Without this, bots that aren't ready yet would noisily reply
+      // "Tap the button below" and link to a /app/<id>/ URL that 404s.
+      const project = await prisma.project.findUnique({
+        where: { id: projectId },
+        select: {
+          releaseCommit: true,
+          user: { select: { telegramId: true } },
+        },
+      });
+      if (!project) return;
+      const isReleased = project.releaseCommit !== null && project.releaseCommit !== undefined;
+      if (!isReleased) return;
+
       await ctx.reply("Tap the button below to open the app!", {
         reply_markup: {
           inline_keyboard: [
@@ -161,6 +248,67 @@ export class BotRunnerService {
     }
 
     console.log(`[BotRunner] Bot @${botUsername} started for project ${projectId}`);
+
+    if (sendOwnerWelcome) {
+      // Fire-and-forget so a failure to DM the owner (blocked the bot,
+      // restricted account, etc.) never breaks the create-bot flow.
+      this.sendOwnerWelcome(bot, projectId, botUsername).catch((err) => {
+        console.error(`[BotRunner] sendOwnerWelcome failed for @${botUsername}:`, err?.message || err);
+      });
+    }
+  }
+
+  /**
+   * Push the localized "Good job, bot created" card directly to the owner
+   * the moment the webhook is live. This covers the mobile race where
+   * Telegram bounces the user into their freshly created bot and they tap
+   * /start before our webhook has been registered — without this, the
+   * /start update is dropped on the floor and the user sees nothing.
+   */
+  private async sendOwnerWelcome(bot: Bot, projectId: string, botUsername: string): Promise<void> {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: {
+        releaseCommit: true,
+        user: { select: { telegramId: true, language: true } },
+      },
+    });
+    if (!project) return;
+    // After the app has been deployed there's nothing to nudge them about —
+    // the standard /start "Launch App" card already handles that surface.
+    if (project.releaseCommit !== null && project.releaseCommit !== undefined) return;
+
+    const lang = (project.user.language as Lang) || "en";
+    const fatherBot = getFatherBotUsername();
+    const backUrl = `https://t.me/${fatherBot}/app?startapp=open_dialog`;
+    const ownerId = Number(project.user.telegramId);
+    if (!ownerId) return;
+
+    try {
+      await bot.api.sendMessage(
+        ownerId,
+        `<b>${t(lang, "user_bot_start_owner_title")}</b>\n${t(lang, "user_bot_start_owner_body")}`,
+        {
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: t(lang, "user_bot_start_owner_button"), url: backUrl, style: "primary" }],
+            ],
+          },
+        },
+      );
+      console.log(`[BotRunner] Owner welcome sent via @${botUsername} to ${ownerId}`);
+    } catch (err: any) {
+      // 403 "bot was blocked by the user" is expected for some users — log
+      // at info level rather than error so it doesn't pollute alerts.
+      const code = err?.error_code || err?.statusCode;
+      const desc = err?.description || err?.message;
+      if (code === 403) {
+        console.log(`[BotRunner] Owner welcome skipped for @${botUsername}: ${desc}`);
+      } else {
+        throw err;
+      }
+    }
   }
 
   async stopBot(projectId: string): Promise<void> {

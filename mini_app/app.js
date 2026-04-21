@@ -5,8 +5,13 @@ const API_BASE = '/telegram-mini-app/api';
 
 // ── Analytics (OpenPanel) ──────────────────────────────────────────────────
 
+// Reserved start_param values reserved for intra-app navigation. They must
+// not be treated as utm_source. Keep in sync with src/services/analytics.service.ts
+const RESERVED_START_PARAMS = new Set(['open_dialog']);
+
 function parseStartParam(param) {
   if (!param) return { source: null, referrerId: null };
+  if (RESERVED_START_PARAMS.has(param)) return { source: null, referrerId: null };
   if (param.includes('|')) {
     const [src, id] = param.split('|');
     return { source: src || null, referrerId: /^\d+$/.test(id || '') ? id : null };
@@ -175,10 +180,12 @@ function setInputDisabled(disabled) {
   const input = document.getElementById('chat-input');
   const sendBtn = document.getElementById('btn-send');
   const attachBtn = document.getElementById('btn-attach');
+  const micBtn = document.getElementById('btn-mic');
   const suggestBtn = document.getElementById('btn-get-suggestions');
   if (input) input.disabled = disabled;
   if (sendBtn) sendBtn.disabled = disabled;
   if (attachBtn) attachBtn.disabled = disabled;
+  if (micBtn) micBtn.disabled = disabled;
   if (suggestBtn) suggestBtn.disabled = disabled;
   const area = document.getElementById('chat-input-area');
   if (area) {
@@ -443,11 +450,12 @@ function createNewApp() {
     if (icon) { icon.className = 'loader'; icon.style.cssText = 'width:20px;height:20px;margin-right:4px'; }
   }
   const prevCount = projects.length;
-  if (location.host = "dev.apps-father.com") {
-    tg?.openTelegramLink('https://t.me/newbot/apps_father_dev_bot/username_bot');
-  } else {
-    tg?.openTelegramLink('https://t.me/newbot/apps_father_bot/username_bot');
-  }
+  // location.hostname (not .host) — drops port; we only ever care about the
+  // domain when picking the bot. Was previously using `=` (assignment!) which
+  // always evaluated truthy and routed everyone to the dev bot.
+  const isDev = location.hostname === "dev.apps-father.com";
+  const botUsername = isDev ? 'apps_father_dev_bot' : 'apps_father_bot';
+  tg?.openTelegramLink(`https://t.me/newbot/${botUsername}/username_bot`);
   startCreatePolling(prevCount);
 }
 
@@ -5901,6 +5909,175 @@ function selectSuggestion(suggestion, cardsContainer) {
   input.focus();
 }
 
+// Map UI language code -> ElevenLabs ISO 639-3 hint. Returning '' lets the
+// model auto-detect, which is the right default for users who switch languages
+// mid-session or whose UI language doesn't match what they're saying.
+const SPEECH_LANG_MAP = { en: 'eng', ru: 'rus', ua: 'ukr', uk: 'ukr' };
+
+// Voice input: hold-to-talk style is overkill on Telegram WebView (touch+keyboard
+// races, sleep timers, MainButton conflicts), so we use a simple toggle:
+// click once to start, click again (or click anywhere outside) to stop & send.
+let voiceRecorderState = 'idle'; // 'idle' | 'recording' | 'uploading'
+let voiceMediaRecorder = null;
+let voiceChunks = [];
+let voiceStream = null;
+
+function setMicState(state) {
+  voiceRecorderState = state;
+  const btn = document.getElementById('btn-mic');
+  if (!btn) return;
+  btn.classList.toggle('recording', state === 'recording');
+  btn.classList.toggle('uploading', state === 'uploading');
+  btn.disabled = state === 'uploading';
+  const labelKey = state === 'recording'
+    ? 'chat_mic_stop'
+    : state === 'uploading'
+      ? 'chat_mic_uploading'
+      : 'chat_mic_title';
+  const label = t(labelKey) || (state === 'recording' ? 'Tap to stop' : state === 'uploading' ? 'Transcribing...' : 'Voice input');
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+}
+
+function pickVoiceMimeType() {
+  const candidates = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/ogg;codecs=opus',
+    'audio/mp4',
+    'audio/mpeg',
+  ];
+  if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) return '';
+  for (const mt of candidates) {
+    if (MediaRecorder.isTypeSupported(mt)) return mt;
+  }
+  return '';
+}
+
+async function startVoiceRecording() {
+  if (voiceRecorderState !== 'idle') return;
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+    showToast(t('chat_mic_unsupported') || 'Voice input not supported on this device', 'error');
+    return;
+  }
+  try {
+    voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    const denied = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
+    showToast(
+      denied
+        ? (t('chat_mic_denied') || 'Microphone access denied')
+        : (t('chat_mic_failed') || 'Could not start microphone'),
+      'error',
+    );
+    return;
+  }
+
+  const mimeType = pickVoiceMimeType();
+  try {
+    voiceMediaRecorder = mimeType
+      ? new MediaRecorder(voiceStream, { mimeType })
+      : new MediaRecorder(voiceStream);
+  } catch (err) {
+    voiceStream.getTracks().forEach(t => t.stop());
+    voiceStream = null;
+    showToast(t('chat_mic_failed') || 'Could not start microphone', 'error');
+    return;
+  }
+
+  voiceChunks = [];
+  voiceMediaRecorder.addEventListener('dataavailable', (e) => {
+    if (e.data && e.data.size > 0) voiceChunks.push(e.data);
+  });
+  voiceMediaRecorder.addEventListener('stop', () => {
+    const tracks = voiceStream ? voiceStream.getTracks() : [];
+    tracks.forEach(t => t.stop());
+    voiceStream = null;
+    const blob = new Blob(voiceChunks, { type: mimeType || 'audio/webm' });
+    voiceChunks = [];
+    void uploadVoiceForTranscription(blob);
+  });
+
+  voiceMediaRecorder.start();
+  setMicState('recording');
+  try { tg?.HapticFeedback?.impactOccurred?.('light'); } catch {}
+}
+
+function stopVoiceRecording() {
+  if (voiceRecorderState !== 'recording') return;
+  setMicState('uploading');
+  try {
+    voiceMediaRecorder?.stop();
+  } catch {
+    setMicState('idle');
+  }
+  try { tg?.HapticFeedback?.impactOccurred?.('light'); } catch {}
+}
+
+async function uploadVoiceForTranscription(blob) {
+  if (!blob || blob.size === 0) {
+    setMicState('idle');
+    showToast(t('chat_mic_empty') || 'No audio captured', 'error');
+    return;
+  }
+  // Cap at 10 MB (server multer limit) — at ~64 kbps opus that's ~20 minutes,
+  // far longer than any sane chat input. We never expect to hit this.
+  if (blob.size > 10 * 1024 * 1024) {
+    setMicState('idle');
+    showToast(t('chat_mic_too_long') || 'Recording too long', 'error');
+    return;
+  }
+  try {
+    const ext = (blob.type.includes('mp4') ? 'm4a'
+      : blob.type.includes('mpeg') ? 'mp3'
+      : blob.type.includes('ogg') ? 'ogg'
+      : 'webm');
+    const fd = new FormData();
+    fd.append('audio', blob, `voice-${Date.now()}.${ext}`);
+    const langHint = SPEECH_LANG_MAP[currentLang] || '';
+    if (langHint) fd.append('languageCode', langHint);
+
+    const res = await fetch(`${API_BASE}/transcribe`, {
+      method: 'POST',
+      headers: apiHeaders(),
+      body: fd,
+    });
+    if (!res.ok) throw new Error('http ' + res.status);
+    const data = await res.json();
+    const text = (data && typeof data.text === 'string') ? data.text.trim() : '';
+
+    const input = document.getElementById('chat-input');
+    if (input && text) {
+      // Append (with a space) instead of overwriting so users can dictate on
+      // top of an in-progress message.
+      const existing = input.value.trim();
+      input.value = existing ? `${existing} ${text}` : text;
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.focus();
+      try { tg?.HapticFeedback?.notificationOccurred?.('success'); } catch {}
+    } else if (!text) {
+      showToast(t('chat_mic_empty') || 'No speech detected', 'error');
+    }
+  } catch (err) {
+    console.error('[Voice] transcription failed:', err);
+    showToast(t('chat_mic_failed') || 'Transcription failed', 'error');
+  } finally {
+    setMicState('idle');
+  }
+}
+
+function initVoiceRecorder() {
+  const btn = document.getElementById('btn-mic');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    if (voiceRecorderState === 'recording') stopVoiceRecording();
+    else if (voiceRecorderState === 'idle') void startVoiceRecording();
+  });
+  setMicState('idle');
+}
+
 function initChatInput() {
   const input = document.getElementById('chat-input');
   const sendBtn = document.getElementById('btn-send');
@@ -5924,6 +6101,8 @@ function initChatInput() {
   });
 
   document.getElementById('btn-attach').addEventListener('click', () => fileInput.click());
+
+  initVoiceRecorder();
 
   input.addEventListener('paste', (e) => {
     const items = e.clipboardData?.items;
@@ -6471,7 +6650,27 @@ async function init() {
   checkAdmin();
   checkPartner();
   loadBalance();
-  loadProjects();
+  await loadProjects();
+  maybeHandleReservedStartParam();
+}
+
+// When the user lands here from the user-bot's "Open Apps Father" button,
+// start_param is `open_dialog`. We jump straight into the chat for their most
+// recent project so they can finish the build, then clear the sentinel from
+// storage so subsequent opens don't keep re-triggering the auto-navigation.
+function maybeHandleReservedStartParam() {
+  const sp = getStartParam();
+  if (sp !== 'open_dialog') return;
+  try { localStorage.removeItem('af_start_param'); } catch (_) {}
+  try { sessionStorage.removeItem('af_start_param'); } catch (_) {}
+  if (!Array.isArray(projects) || projects.length === 0) return;
+  const sorted = projects.slice().sort((a, b) => {
+    const ta = new Date(a.updatedAt || a.createdAt || 0).getTime();
+    const tb = new Date(b.updatedAt || b.createdAt || 0).getTime();
+    return tb - ta;
+  });
+  const target = sorted[0];
+  if (target?.id) openChat(target.id);
 }
 
 init();

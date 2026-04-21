@@ -1,5 +1,39 @@
 [
   {
+    "version": "2.3.5",
+    "date": "2026-04-21",
+    "title": "Agent 2.0 — Faster, Higher Quality, Lower Price",
+    "image": "assets/updates/2.png",
+    "sections": [
+      {
+        "label": "Agent 2.0",
+        "items": [
+          "New agent core — faster turnaround on every build and update",
+          "Higher build quality across all tiers with smarter planning and fewer wasted iterations",
+          "Lower cost per build — same quality, less spend",
+          "Added voice to text function for making prompts"
+        ]
+      },
+      {
+        "label": "Style Picker",
+        "items": [
+          "Pick your app's look before the build: style, theme, header, density, bottom menu — each with a live preview",
+          "9 new visual styles added: Nature, Corporate, Paper, Aurora, Brutalist, Liquid, Titanium, Signal, Holo",
+          "4 new bottom-menu layouts: Flat Tab Bar, Floating Pill, Liquid Glass, Flat + Center FAB",
+          "\"Auto\" option per category — let the AI choose what fits your idea best",
+          "Full localization for the picker (EN / RU / UA)"
+        ]
+      },
+      {
+        "label": "Bug Fixes",
+        "items": [
+          "Progress bar no longer freezes at 0% for the first 20–30s on devices with skewed clocks",
+          "Insufficient-balance message is now compact and red for returning depositors (the big onboarding card stays for first-timers)"
+        ]
+      }
+    ]
+  },
+  {
     "version": "2.2.0",
     "date": "2026-04-14",
     "title": "Reliability, Growth & apps-father.com",

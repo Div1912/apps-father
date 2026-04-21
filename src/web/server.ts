@@ -4,6 +4,7 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import multer from "multer";
+import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import { config } from "../config";
 import appRoutes from "./routes/app.routes";
 import apiRoutes, { invalidateProjectDbCache } from "./routes/api.routes";
@@ -2207,6 +2208,88 @@ export function createWebServer() {
       res.status(400).json({ error: err.message || "Purchase failed" });
     }
   });
+
+  // Speech-to-text: accepts a single audio blob from the chat input mic
+  // button, forwards it to ElevenLabs Scribe v2 via the official SDK, returns
+  // the recognised text. The client autofills the chat input with the result
+  // (no auto-send).
+  //
+  // We use the official SDK rather than hand-rolling fetch+FormData because
+  // native Node FormData + Blob serialization has subtle edge cases (filename
+  // headers, chunked-transfer length headers) that can cause the upstream to
+  // reject the request silently — manifesting as a Cloudflare 502 with no
+  // error in our logs. The SDK normalizes all of that.
+  app.post(
+    "/telegram-mini-app/api/transcribe",
+    upload.single("audio"),
+    async (req, res) => {
+      const startedAt = Date.now();
+      const file = (req as any).file as Express.Multer.File | undefined;
+      const cleanup = () => {
+        if (file?.path) {
+          try { fs.unlinkSync(file.path); } catch {}
+        }
+      };
+      try {
+        const auth = validateAuth(req);
+        if (!auth.valid) { cleanup(); res.status(401).json({ error: "Unauthorized" }); return; }
+
+        if (!file) { res.status(400).json({ error: "No audio uploaded" }); return; }
+        if (file.size === 0) { cleanup(); res.status(400).json({ error: "Empty audio" }); return; }
+
+        if (!config.elevenLabsApiKey) {
+          cleanup();
+          console.error("[Transcribe] ELEVENLABS_API_KEY is not set");
+          res.status(503).json({ error: "Speech-to-text not configured on server" });
+          return;
+        }
+
+        const buffer = fs.readFileSync(file.path);
+        cleanup();
+
+        const languageCode = typeof req.body?.languageCode === "string" && req.body.languageCode
+          ? req.body.languageCode
+          : undefined;
+
+        // SDK accepts a Blob as the file argument — same shape as the example
+        // in the docs ( new Blob([await response.arrayBuffer()], { type: ... }) ).
+        const blob = new Blob([new Uint8Array(buffer)], {
+          type: file.mimetype || "audio/webm",
+        });
+
+        const elevenlabs = new ElevenLabsClient({ apiKey: config.elevenLabsApiKey });
+
+        const transcription = await elevenlabs.speechToText.convert({
+          file: blob,
+          modelId: "scribe_v2",
+          tagAudioEvents: false,
+          diarize: false,
+          ...(languageCode ? { languageCode } : {}),
+        });
+
+        const text = ((transcription as any)?.text || "").trim();
+        const detectedLang = (transcription as any)?.languageCode || (transcription as any)?.language_code || null;
+        const ms = Date.now() - startedAt;
+        console.log(`[Transcribe] OK ${file.size}b -> ${text.length} chars in ${ms}ms (lang=${detectedLang})`);
+
+        res.json({ text, languageCode: detectedLang });
+      } catch (err: any) {
+        cleanup();
+        const status = err?.statusCode || err?.status || 0;
+        const upstreamBody = err?.body || err?.rawResponse || err?.message || String(err);
+        console.error(
+          `[Transcribe] Failed (status=${status}, file=${file?.size}b, mime=${file?.mimetype}):`,
+          typeof upstreamBody === "string" ? upstreamBody.slice(0, 800) : upstreamBody,
+        );
+        if (!res.headersSent) {
+          res.status(502).json({
+            error: "Speech-to-text failed",
+            upstreamStatus: status || undefined,
+          });
+        }
+      }
+    },
+  );
 
   app.post("/telegram-mini-app/api/chat/:projectId/upload", upload.array("files", 5), async (req, res) => {
     try {

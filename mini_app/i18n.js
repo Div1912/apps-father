@@ -203,7 +203,7 @@ const I18N = {
     chat_edit: "Edit",
     chat_release_update: "Release Update",
     chat_release_confirm: "Are you sure you want to release this update?",
-    chat_insufficient: "Insufficient Balance",
+    chat_insufficient: "Low Balance",
     chat_topup_btn: "Top Up Balance",
     chat_almost_there_title: "Almost there!",
     chat_almost_there_sub: "Your app is just one step away",
@@ -239,6 +239,14 @@ const I18N = {
     chat_preparing: "Preparing for next update...",
     chat_finalizing: "Finalizing previous update, please wait...",
     chat_question_title: "Agent needs your input",
+    chat_mic_title: "Voice input",
+    chat_mic_stop: "Tap to stop & transcribe",
+    chat_mic_uploading: "Transcribing...",
+    chat_mic_denied: "Microphone access denied",
+    chat_mic_failed: "Could not record audio",
+    chat_mic_unsupported: "Voice input is not supported on this device",
+    chat_mic_empty: "No speech detected, try again",
+    chat_mic_too_long: "Recording is too long",
 
     // Desktop
     desktop_login_title: "Apps Father",
@@ -565,6 +573,14 @@ const I18N = {
     chat_preparing: "Подготовка к следующему обновлению...",
     chat_finalizing: "Завершаем предыдущее обновление, подождите...",
     chat_question_title: "Агенту нужен ваш ответ",
+    chat_mic_title: "Голосовой ввод",
+    chat_mic_stop: "Нажмите, чтобы остановить и распознать",
+    chat_mic_uploading: "Распознаём...",
+    chat_mic_denied: "Доступ к микрофону запрещён",
+    chat_mic_failed: "Не удалось записать звук",
+    chat_mic_unsupported: "Голосовой ввод не поддерживается на этом устройстве",
+    chat_mic_empty: "Голос не распознан, попробуйте ещё раз",
+    chat_mic_too_long: "Запись слишком длинная",
 
     desktop_login_title: "Apps Father",
     desktop_login_subtitle: "Создавайте Telegram-приложения без единой строчки кода",
@@ -590,15 +606,15 @@ const I18N = {
 
     // Categories
     pref_cat_style_label: "Стиль",
-    pref_cat_style_prompt: "Выберите визуальный язык приложения",
+    pref_cat_style_prompt: "Выберите стиль приложения",
     pref_cat_theme_label: "Тема",
-    pref_cat_theme_prompt: "Светлая, тёмная или как в Telegram",
+    pref_cat_theme_prompt: "Выберите тему приложения",
     pref_cat_header_label: "Шапка",
     pref_cat_header_prompt: "Как должна выглядеть верхняя часть экранов?",
     pref_cat_density_label: "Плотность",
     pref_cat_density_prompt: "Насколько плотно располагать элементы списков?",
     pref_cat_bottomMenu_label: "Нижнее меню",
-    pref_cat_bottomMenu_prompt: "Как пользователь переключается между разделами?",
+    pref_cat_bottomMenu_prompt: "Выберите стиль нижнего меню",
 
     // Style options
     pref_opt_style_basic_label: "Базовый",
@@ -890,6 +906,14 @@ const I18N = {
     chat_preparing: "Підготовка до наступного оновлення...",
     chat_finalizing: "Завершуємо попереднє оновлення, зачекайте...",
     chat_question_title: "Агенту потрібна ваша відповідь",
+    chat_mic_title: "Голосовий ввід",
+    chat_mic_stop: "Натисніть, щоб зупинити та розпізнати",
+    chat_mic_uploading: "Розпізнаємо...",
+    chat_mic_denied: "Доступ до мікрофона заборонено",
+    chat_mic_failed: "Не вдалося записати звук",
+    chat_mic_unsupported: "Голосовий ввід не підтримується на цьому пристрої",
+    chat_mic_empty: "Голос не розпізнано, спробуйте ще раз",
+    chat_mic_too_long: "Запис занадто довгий",
 
     desktop_login_title: "Apps Father",
     desktop_login_subtitle: "Створюйте Telegram-додатки без жодного рядка коду",
@@ -915,7 +939,7 @@ const I18N = {
 
     // Categories
     pref_cat_style_label: "Стиль",
-    pref_cat_style_prompt: "Оберіть візуальну мову застосунку",
+    pref_cat_style_prompt: "Оберіть стиль застосунку",
     pref_cat_theme_label: "Тема",
     pref_cat_theme_prompt: "Світла, темна або як у Telegram",
     pref_cat_header_label: "Шапка",

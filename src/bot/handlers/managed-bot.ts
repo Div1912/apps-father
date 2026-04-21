@@ -99,7 +99,12 @@ async function handleManagedBotAsync(bot: Bot<BotContext>, creator: any, newBot:
       bot_username: newBot.username || "",
     });
 
-    await botRunnerService.startBot(project.id, botToken, newBot.username || "");
+    // sendOwnerWelcome=true: the moment the webhook is live, push the
+    // "Good job, bot created" card directly to the owner. Mobile Telegram
+    // bounces them into the freshly created bot and they typically tap
+    // /start before the webhook is registered — that update is dropped, so
+    // without this proactive DM they'd just see an unresponsive bot.
+    await botRunnerService.startBot(project.id, botToken, newBot.username || "", true);
   } catch (err) {
     console.error("[ManagedBot] Error handling managed bot:", err);
     await sendToUser(

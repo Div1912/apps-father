@@ -325,6 +325,10 @@ const translations: Record<Lang, Record<string, string>> = {
     managed_bot_error: "Something went wrong",
     managed_bot_error_body: "while setting up your project.\n\nPlease try again.",
 
+    user_bot_start_owner_title: "Good job — your bot is live!",
+    user_bot_start_owner_body: "Let's go back to Apps Father and finish your app — your idea is waiting.",
+    user_bot_start_owner_button: "Open Apps Father",
+
     // File errors
     file_download_failed: "Failed to download photo. Please try again.",
     file_doc_failed: "Failed to download file. Please try again.",
@@ -654,6 +658,10 @@ const translations: Record<Lang, Record<string, string>> = {
     managed_bot_error: "Что-то пошло не так",
     managed_bot_error_body: "при настройке проекта.\n\nПопробуйте снова.",
 
+    user_bot_start_owner_title: "Отлично — бот создан!",
+    user_bot_start_owner_body: "Возвращайтесь в Apps Father, чтобы закончить приложение — ваша идея ждёт.",
+    user_bot_start_owner_button: "Открыть Apps Father",
+
     file_download_failed: "Не удалось скачать фото. Попробуйте снова.",
     file_doc_failed: "Не удалось скачать файл. Попробуйте снова.",
     file_audio_failed: "Не удалось скачать аудио. Попробуйте снова.",
@@ -977,6 +985,10 @@ const translations: Record<Lang, Record<string, string>> = {
     managed_bot_token_error: "Не вдалося отримати токен @{username}.",
     managed_bot_error: "Щось пішло не так",
     managed_bot_error_body: "при налаштуванні проєкту.\n\nСпробуйте ще раз.",
+
+    user_bot_start_owner_title: "Чудово — бот створений!",
+    user_bot_start_owner_body: "Поверніться до Apps Father, щоб завершити додаток — ваша ідея чекає.",
+    user_bot_start_owner_button: "Відкрити Apps Father",
 
     file_download_failed: "Не вдалося завантажити фото. Спробуйте ще раз.",
     file_doc_failed: "Не вдалося завантажити файл. Спробуйте ще раз.",

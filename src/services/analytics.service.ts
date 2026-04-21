@@ -8,17 +8,32 @@ const op = new OpenPanel({
 });
 
 /**
+ * Reserved start_param values that are used by Apps Father itself for
+ * intra-bot navigation (e.g. the user-bot's /start "back to Apps Father"
+ * button). They must NEVER be persisted as utm_source / referrer because
+ * they don't represent an external acquisition channel — they're internal
+ * deep links our own UI emits. Add new sentinels here as we introduce them.
+ */
+export const RESERVED_START_PARAMS = new Set<string>([
+  "open_dialog", // sent by the user-bot welcome card → open the most recent project's chat
+]);
+
+/**
  * Parses the Telegram start/startapp parameter.
  * Formats supported:
  *   "source|123456789"  → { source: "source", referrerId: "123456789" }
  *   "campaign_name"     → { source: "campaign_name", referrerId: null }
  *   "123456789"         → { source: null, referrerId: "123456789" }
+ *
+ * Reserved sentinels (see RESERVED_START_PARAMS) always return null/null
+ * so they don't pollute attribution.
  */
 export function parseStartParam(param: string | null | undefined): {
   source: string | null;
   referrerId: string | null;
 } {
   if (!param) return { source: null, referrerId: null };
+  if (RESERVED_START_PARAMS.has(param)) return { source: null, referrerId: null };
   if (param.includes("|")) {
     const [src, id] = param.split("|");
     return {

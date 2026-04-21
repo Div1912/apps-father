@@ -2860,6 +2860,8 @@ img.tm-row-pic-user {
   display: flex;
   align-items: center;
   gap: 12px;
+  padding: 16px;
+  display: flex;
 }
 .balance-insufficient-text {
   flex: 1;
@@ -2871,12 +2873,12 @@ img.tm-row-pic-user {
   font-weight: 600;
   line-height: 1.25;
 }
-.balance-insufficient-title::before {
+/* .balance-insufficient-title::before {
   content: "⚠️";
   margin-right: 6px;
   font-size: 13px;
   opacity: 0.95;
-}
+} */
 .balance-insufficient-sub {
   margin-top: 2px;
   color: var(--description-text-color, #8e9baa);
@@ -3937,6 +3939,77 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
   filter: brightness(0.9);
 }
 
+/* Mic button — voice input via ElevenLabs Scribe v2.
+   Three visual states: idle (mic outline), recording (red pulsing stop square),
+   uploading (spinner). Sized identically to attach/send so the input bar height
+   stays stable regardless of which icon is showing. */
+.chat-btn-mic {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--description-text-color, #8e9baa);
+  cursor: pointer;
+  border: none;
+  transition: background 0.15s, color 0.15s, transform 0.1s;
+  flex-shrink: 0;
+  margin-bottom: 0;
+  -webkit-tap-highlight-color: transparent;
+  margin-right: 4px;
+}
+.chat-btn-mic:hover:not(:disabled) {
+  color: var(--text-color, #fff);
+  background: rgba(255, 255, 255, 0.06);
+}
+.chat-btn-mic:active:not(:disabled) {
+  transform: scale(0.94);
+}
+.chat-btn-mic:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.chat-btn-mic .mic-icon-stop,
+.chat-btn-mic .mic-icon-spinner {
+  display: none;
+}
+.chat-btn-mic.recording {
+  background: linear-gradient(135deg, #ff3b30, #ff5e56);
+  color: #fff;
+  box-shadow: 0 0 0 0 rgba(255, 59, 48, 0.55);
+  animation: micRecPulse 1.4s ease-out infinite;
+}
+.chat-btn-mic.recording .mic-icon-idle,
+.chat-btn-mic.recording .mic-icon-spinner {
+  display: none;
+}
+.chat-btn-mic.recording .mic-icon-stop {
+  display: block;
+}
+.chat-btn-mic.uploading {
+  color: var(--text-color, #fff);
+  background: rgba(255, 255, 255, 0.06);
+}
+.chat-btn-mic.uploading .mic-icon-idle,
+.chat-btn-mic.uploading .mic-icon-stop {
+  display: none;
+}
+.chat-btn-mic.uploading .mic-icon-spinner {
+  display: block;
+  animation: micSpin 0.8s linear infinite;
+}
+@keyframes micRecPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(255, 59, 48, 0.55); }
+  70%  { box-shadow: 0 0 0 10px rgba(255, 59, 48, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 59, 48, 0); }
+}
+@keyframes micSpin {
+  to { transform: rotate(360deg); }
+}
+
 /* Attachments preview */
 .chat-attachments-preview {
   display: flex;
@@ -4742,7 +4815,7 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
   border-radius: 12px;
   overflow-x: auto;
   scrollbar-width: none;
-      max-width: 100%;
+  max-width: 100%;
 }
 .adm-tabs::-webkit-scrollbar { display: none; }
 .adm-tab {
@@ -5718,7 +5791,7 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
 .onb-msg-row.right { flex-direction: row-reverse; }
 .onb-bubble { padding: 9px 13px; font-size: 13px; line-height: 1.45; max-width: 85%; border-radius: 14px; }
 .onb-bubble-u {
-  background: linear-gradient(135deg, #1aa6fe, #1afefe);
+  background: linear-gradient(135deg, #1aa6fe, #1a41fe);
   color: #fff;
   border-radius: 14px 14px 4px 14px;
   box-shadow: 0 3px 12px rgba(88,101,242,0.35);
@@ -6101,6 +6174,7 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
   flex-direction: column;
   animation: prefSheetUp 0.24s cubic-bezier(0.2, 0.9, 0.3, 1);
   overflow: hidden;
+  padding-top: max(0px, calc(var(--tg-content-safe-area-inset-top, 0px) + var(--tg-safe-area-inset-top, 0px)));
 }
 .pref-modal-header {
   position: sticky;
