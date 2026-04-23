@@ -287,6 +287,16 @@ const I18N = {
     pref_modal_save_failed: "Could not save preferences. Please try again.",
 
     // Categories
+    pref_cat_kind_label: "Kind",
+    pref_cat_kind_prompt: "Are you building an app or a game?",
+    pref_cat_gameDimension_label: "Dimension",
+    pref_cat_gameDimension_prompt: "2D or 3D?",
+    pref_cat_gameGenre_label: "Genre",
+    pref_cat_gameGenre_prompt: "What kind of game is it?",
+    pref_cat_gameArtStyle_label: "Art style",
+    pref_cat_gameArtStyle_prompt: "How should the game look?",
+    pref_cat_gameControls_label: "Controls",
+    pref_cat_gameControls_prompt: "How does the player control the game on mobile?",
     pref_cat_style_label: "Style",
     pref_cat_style_prompt: "Pick the visual language for your app",
     pref_cat_theme_label: "Theme",
@@ -365,6 +375,77 @@ const I18N = {
     pref_opt_bottomMenu_action_grid_desc: "Replace bottom nav with a grid of large action cards on Home.",
     pref_opt_bottomMenu_none_label: "None",
     pref_opt_bottomMenu_none_desc: "Single-screen app, no nav at all.",
+
+    // Kind options
+    pref_opt_kind_app_label: "App",
+    pref_opt_kind_app_desc: "Standard Telegram Mini App with screens, lists, and chrome.",
+    pref_opt_kind_game_label: "Game",
+    pref_opt_kind_game_desc: "Three.js game in a full-canvas viewport. No tab bars, no list rows.",
+
+    // Game dimension
+    pref_opt_gameDimension_2d_label: "2D",
+    pref_opt_gameDimension_2d_desc: "Top-down or side-scroll. Three.js with an orthographic camera.",
+    pref_opt_gameDimension_3d_label: "3D",
+    pref_opt_gameDimension_3d_desc: "Perspective or isometric world. Voxel or low-poly geometry.",
+
+    // Game genre
+    pref_opt_gameGenre_arcade_label: "Arcade",
+    pref_opt_gameGenre_arcade_desc: "Short loops, score chasing, instant restart.",
+    pref_opt_gameGenre_runner_label: "Runner",
+    pref_opt_gameGenre_runner_desc: "Endless forward motion. Dodge or hop. Crossy Road, Subway Surfers.",
+    pref_opt_gameGenre_puzzle_label: "Puzzle",
+    pref_opt_gameGenre_puzzle_desc: "Turn-based or grid logic. 2048, Threes, match-3.",
+    pref_opt_gameGenre_shooter_label: "Shooter",
+    pref_opt_gameGenre_shooter_desc: "Aim and fire. Top-down or first-person. Fixed lanes or free movement.",
+    pref_opt_gameGenre_platformer_label: "Platformer",
+    pref_opt_gameGenre_platformer_desc: "Jump between platforms. Side-scroll. Mario-style.",
+    pref_opt_gameGenre_sandbox_label: "Sandbox",
+    pref_opt_gameGenre_sandbox_desc: "Build, place, explore. No fail state.",
+
+    // Game art style
+    pref_opt_gameArtStyle_voxel_label: "Voxel",
+    pref_opt_gameArtStyle_voxel_desc: "Chunky cubes, bright saturated palette. Crossy Road, Minecraft.",
+    pref_opt_gameArtStyle_low_poly_label: "Low poly",
+    pref_opt_gameArtStyle_low_poly_desc: "Faceted shapes, flat shading, soft palette.",
+    pref_opt_gameArtStyle_flat_label: "Flat",
+    pref_opt_gameArtStyle_flat_desc: "Untextured solid colors. No lighting. Geometry Wars feel.",
+    pref_opt_gameArtStyle_pixel_label: "Pixel",
+    pref_opt_gameArtStyle_pixel_desc: "Pixelated sprites or pixel-art UVs on 3D quads.",
+    pref_opt_gameArtStyle_wireframe_label: "Wireframe",
+    pref_opt_gameArtStyle_wireframe_desc: "Lines only. Tron / vector arcade.",
+
+    // Game controls
+    pref_opt_gameControls_touch_label: "Touch",
+    pref_opt_gameControls_touch_desc: "Tap zones on the canvas. Best for shooters and click-based games.",
+    pref_opt_gameControls_swipe_label: "Swipe",
+    pref_opt_gameControls_swipe_desc: "Swipe up/down/left/right to move. Crossy Road style.",
+    pref_opt_gameControls_dpad_label: "On-screen D-pad",
+    pref_opt_gameControls_dpad_desc: "Floating directional buttons in the corner.",
+    pref_opt_gameControls_tilt_label: "Tilt",
+    pref_opt_gameControls_tilt_desc: "Device orientation. Steers via accelerometer.",
+
+    // Text Bot kind
+    pref_opt_kind_textBot_label: "Text Bot",
+    pref_opt_kind_textBot_desc: "No Mini App. Pure Telegram bot driven by commands and keyboards.",
+
+    // Bot keyboard style category + options
+    pref_cat_botKeyboardStyle_label: "Keyboard style",
+    pref_cat_botKeyboardStyle_prompt: "How does the user interact with the bot?",
+    pref_opt_botKeyboardStyle_reply_label: "Reply keyboard",
+    pref_opt_botKeyboardStyle_reply_desc: "Big touch-friendly buttons under the input. Re-rendered on every state change.",
+    pref_opt_botKeyboardStyle_inline_label: "Inline buttons",
+    pref_opt_botKeyboardStyle_inline_desc: "Buttons attached to messages. Best for actions on a specific item.",
+    pref_opt_botKeyboardStyle_commands_label: "Slash commands",
+    pref_opt_botKeyboardStyle_commands_desc: "Pure CLI feel. /help, /start, /buy. Listed in Telegram's command menu.",
+    pref_opt_botKeyboardStyle_mixed_label: "Mixed",
+    pref_opt_botKeyboardStyle_mixed_desc: "Reply keyboard for top-level navigation, inline for actions inside messages.",
+
+    // Modal labels for the Text Bot pre-link flow
+    pref_modal_create_bot: "Create your bot first",
+    pref_modal_waiting_for_bot: "Waiting for bot creation...",
+
+    // Result card action for Text Bot projects
+    chat_open_bot: "Open Bot",
   },
 
   ru: {
@@ -633,6 +714,16 @@ const I18N = {
     pref_modal_save_failed: "Не удалось сохранить настройки. Попробуйте ещё раз.",
 
     // Categories
+    pref_cat_kind_label: "Тип",
+    pref_cat_kind_prompt: "Вы делаете приложение или игру?",
+    pref_cat_gameDimension_label: "Измерение",
+    pref_cat_gameDimension_prompt: "2D или 3D?",
+    pref_cat_gameGenre_label: "Жанр",
+    pref_cat_gameGenre_prompt: "Какого типа игра?",
+    pref_cat_gameArtStyle_label: "Арт-стиль",
+    pref_cat_gameArtStyle_prompt: "Как должна выглядеть игра?",
+    pref_cat_gameControls_label: "Управление",
+    pref_cat_gameControls_prompt: "Как игрок будет управлять игрой на телефоне?",
     pref_cat_style_label: "Стиль",
     pref_cat_style_prompt: "Выберите стиль приложения",
     pref_cat_theme_label: "Тема",
@@ -711,6 +802,73 @@ const I18N = {
     pref_opt_bottomMenu_action_grid_desc: "Вместо нижнего меню — сетка крупных карточек действий на главной.",
     pref_opt_bottomMenu_none_label: "Без меню",
     pref_opt_bottomMenu_none_desc: "Одноэкранное приложение без какой-либо навигации.",
+
+    // Kind options
+    pref_opt_kind_app_label: "Приложение",
+    pref_opt_kind_app_desc: "Стандартный Telegram Mini App с экранами, списками и навигацией.",
+    pref_opt_kind_game_label: "Игра",
+    pref_opt_kind_game_desc: "Игра на Three.js во весь экран. Без таб-бара и списков.",
+
+    // Game dimension
+    pref_opt_gameDimension_2d_label: "2D",
+    pref_opt_gameDimension_2d_desc: "Вид сверху или сбоку. Three.js с ортографической камерой.",
+    pref_opt_gameDimension_3d_label: "3D",
+    pref_opt_gameDimension_3d_desc: "Перспективный или изометрический мир. Воксельная или low-poly геометрия.",
+
+    // Game genre
+    pref_opt_gameGenre_arcade_label: "Аркада",
+    pref_opt_gameGenre_arcade_desc: "Короткие забеги, гонка за рекордом, мгновенный рестарт.",
+    pref_opt_gameGenre_runner_label: "Раннер",
+    pref_opt_gameGenre_runner_desc: "Бесконечное движение вперёд. Уворачивайся или прыгай. Crossy Road, Subway Surfers.",
+    pref_opt_gameGenre_puzzle_label: "Головоломка",
+    pref_opt_gameGenre_puzzle_desc: "Пошаговая или сеточная логика. 2048, Threes, match-3.",
+    pref_opt_gameGenre_shooter_label: "Шутер",
+    pref_opt_gameGenre_shooter_desc: "Целься и стреляй. Сверху или от первого лица. Полосы или свободное движение.",
+    pref_opt_gameGenre_platformer_label: "Платформер",
+    pref_opt_gameGenre_platformer_desc: "Прыгай по платформам. Сайд-скролл. В стиле Mario.",
+    pref_opt_gameGenre_sandbox_label: "Песочница",
+    pref_opt_gameGenre_sandbox_desc: "Строй, ставь, исследуй. Без проигрыша.",
+
+    // Game art style
+    pref_opt_gameArtStyle_voxel_label: "Воксель",
+    pref_opt_gameArtStyle_voxel_desc: "Кубики, яркая палитра. Crossy Road, Minecraft.",
+    pref_opt_gameArtStyle_low_poly_label: "Low poly",
+    pref_opt_gameArtStyle_low_poly_desc: "Угловатые формы, плоское освещение, мягкая палитра.",
+    pref_opt_gameArtStyle_flat_label: "Плоский",
+    pref_opt_gameArtStyle_flat_desc: "Без текстур, чистые цвета. Без освещения. Вайб Geometry Wars.",
+    pref_opt_gameArtStyle_pixel_label: "Пиксель",
+    pref_opt_gameArtStyle_pixel_desc: "Пиксельные спрайты или пиксель-арт UV на 3D-квадах.",
+    pref_opt_gameArtStyle_wireframe_label: "Каркас",
+    pref_opt_gameArtStyle_wireframe_desc: "Только линии. Tron / векторная аркада.",
+
+    // Game controls
+    pref_opt_gameControls_touch_label: "Тап",
+    pref_opt_gameControls_touch_desc: "Тап-зоны на канвасе. Хорошо для шутеров и кликалок.",
+    pref_opt_gameControls_swipe_label: "Свайп",
+    pref_opt_gameControls_swipe_desc: "Свайп вверх/вниз/влево/вправо. В стиле Crossy Road.",
+    pref_opt_gameControls_dpad_label: "Экранный D-pad",
+    pref_opt_gameControls_dpad_desc: "Плавающие направляющие кнопки в углу.",
+    pref_opt_gameControls_tilt_label: "Наклон",
+    pref_opt_gameControls_tilt_desc: "Управление наклоном устройства через акселерометр.",
+
+    pref_opt_kind_textBot_label: "Текстовый бот",
+    pref_opt_kind_textBot_desc: "Без Mini App. Только Telegram-бот с командами и клавиатурами.",
+
+    pref_cat_botKeyboardStyle_label: "Стиль клавиатуры",
+    pref_cat_botKeyboardStyle_prompt: "Как пользователь взаимодействует с ботом?",
+    pref_opt_botKeyboardStyle_reply_label: "Reply-клавиатура",
+    pref_opt_botKeyboardStyle_reply_desc: "Большие удобные кнопки под полем ввода. Перерисовываются при каждом изменении состояния.",
+    pref_opt_botKeyboardStyle_inline_label: "Inline-кнопки",
+    pref_opt_botKeyboardStyle_inline_desc: "Кнопки под сообщениями. Лучше всего для действий с конкретным элементом.",
+    pref_opt_botKeyboardStyle_commands_label: "Слэш-команды",
+    pref_opt_botKeyboardStyle_commands_desc: "Чистый CLI-стиль. /help, /start, /buy. Видны в меню команд Telegram.",
+    pref_opt_botKeyboardStyle_mixed_label: "Смешанный",
+    pref_opt_botKeyboardStyle_mixed_desc: "Reply-клавиатура для навигации, inline — для действий внутри сообщений.",
+
+    pref_modal_create_bot: "Сначала создайте бота",
+    pref_modal_waiting_for_bot: "Ожидаю создание бота...",
+
+    chat_open_bot: "Открыть бота",
   },
 
   ua: {
@@ -979,6 +1137,16 @@ const I18N = {
     pref_modal_save_failed: "Не вдалося зберегти налаштування. Спробуйте ще раз.",
 
     // Categories
+    pref_cat_kind_label: "Тип",
+    pref_cat_kind_prompt: "Ви робите застосунок чи гру?",
+    pref_cat_gameDimension_label: "Вимір",
+    pref_cat_gameDimension_prompt: "2D чи 3D?",
+    pref_cat_gameGenre_label: "Жанр",
+    pref_cat_gameGenre_prompt: "Якого типу гра?",
+    pref_cat_gameArtStyle_label: "Арт-стиль",
+    pref_cat_gameArtStyle_prompt: "Як має виглядати гра?",
+    pref_cat_gameControls_label: "Керування",
+    pref_cat_gameControls_prompt: "Як гравець керуватиме грою на телефоні?",
     pref_cat_style_label: "Стиль",
     pref_cat_style_prompt: "Оберіть стиль застосунку",
     pref_cat_theme_label: "Тема",
@@ -1057,6 +1225,73 @@ const I18N = {
     pref_opt_bottomMenu_action_grid_desc: "Замість нижнього меню — сітка великих карток дій на головній.",
     pref_opt_bottomMenu_none_label: "Без меню",
     pref_opt_bottomMenu_none_desc: "Одноекранний застосунок без жодної навігації.",
+
+    // Kind options
+    pref_opt_kind_app_label: "Застосунок",
+    pref_opt_kind_app_desc: "Стандартний Telegram Mini App з екранами, списками й навігацією.",
+    pref_opt_kind_game_label: "Гра",
+    pref_opt_kind_game_desc: "Гра на Three.js на весь екран. Без таб-бара і списків.",
+
+    // Game dimension
+    pref_opt_gameDimension_2d_label: "2D",
+    pref_opt_gameDimension_2d_desc: "Вид згори або збоку. Three.js з ортографічною камерою.",
+    pref_opt_gameDimension_3d_label: "3D",
+    pref_opt_gameDimension_3d_desc: "Перспективний або ізометричний світ. Воксельна або low-poly геометрія.",
+
+    // Game genre
+    pref_opt_gameGenre_arcade_label: "Аркада",
+    pref_opt_gameGenre_arcade_desc: "Короткі забіги, гонитва за рекордом, миттєвий рестарт.",
+    pref_opt_gameGenre_runner_label: "Раннер",
+    pref_opt_gameGenre_runner_desc: "Безкінечний рух уперед. Ухиляйся або стрибай. Crossy Road, Subway Surfers.",
+    pref_opt_gameGenre_puzzle_label: "Головоломка",
+    pref_opt_gameGenre_puzzle_desc: "Покрокова або сіткова логіка. 2048, Threes, match-3.",
+    pref_opt_gameGenre_shooter_label: "Шутер",
+    pref_opt_gameGenre_shooter_desc: "Цілься і стріляй. Згори або від першої особи. Смуги або вільний рух.",
+    pref_opt_gameGenre_platformer_label: "Платформер",
+    pref_opt_gameGenre_platformer_desc: "Стрибай по платформах. Сайд-скрол. У стилі Mario.",
+    pref_opt_gameGenre_sandbox_label: "Пісочниця",
+    pref_opt_gameGenre_sandbox_desc: "Будуй, став, досліджуй. Без поразки.",
+
+    // Game art style
+    pref_opt_gameArtStyle_voxel_label: "Воксель",
+    pref_opt_gameArtStyle_voxel_desc: "Кубики, яскрава палітра. Crossy Road, Minecraft.",
+    pref_opt_gameArtStyle_low_poly_label: "Low poly",
+    pref_opt_gameArtStyle_low_poly_desc: "Кутасті форми, плоске освітлення, м'яка палітра.",
+    pref_opt_gameArtStyle_flat_label: "Плоский",
+    pref_opt_gameArtStyle_flat_desc: "Без текстур, чисті кольори. Без освітлення. Вайб Geometry Wars.",
+    pref_opt_gameArtStyle_pixel_label: "Піксель",
+    pref_opt_gameArtStyle_pixel_desc: "Піксельні спрайти або піксель-арт UV на 3D-квадах.",
+    pref_opt_gameArtStyle_wireframe_label: "Каркас",
+    pref_opt_gameArtStyle_wireframe_desc: "Лише лінії. Tron / векторна аркада.",
+
+    // Game controls
+    pref_opt_gameControls_touch_label: "Тап",
+    pref_opt_gameControls_touch_desc: "Тап-зони на канвасі. Підходить для шутерів і клікалок.",
+    pref_opt_gameControls_swipe_label: "Свайп",
+    pref_opt_gameControls_swipe_desc: "Свайп вгору/вниз/вліво/вправо. У стилі Crossy Road.",
+    pref_opt_gameControls_dpad_label: "Екранний D-pad",
+    pref_opt_gameControls_dpad_desc: "Плаваючі напрямні кнопки в куті.",
+    pref_opt_gameControls_tilt_label: "Нахил",
+    pref_opt_gameControls_tilt_desc: "Керування нахилом пристрою через акселерометр.",
+
+    pref_opt_kind_textBot_label: "Текстовий бот",
+    pref_opt_kind_textBot_desc: "Без Mini App. Тільки Telegram-бот з командами та клавіатурами.",
+
+    pref_cat_botKeyboardStyle_label: "Стиль клавіатури",
+    pref_cat_botKeyboardStyle_prompt: "Як користувач взаємодіє з ботом?",
+    pref_opt_botKeyboardStyle_reply_label: "Reply-клавіатура",
+    pref_opt_botKeyboardStyle_reply_desc: "Великі зручні кнопки під полем вводу. Перемальовуються при кожній зміні стану.",
+    pref_opt_botKeyboardStyle_inline_label: "Inline-кнопки",
+    pref_opt_botKeyboardStyle_inline_desc: "Кнопки під повідомленнями. Найкраще для дій з конкретним елементом.",
+    pref_opt_botKeyboardStyle_commands_label: "Слеш-команди",
+    pref_opt_botKeyboardStyle_commands_desc: "Чистий CLI-стиль. /help, /start, /buy. Доступні в меню команд Telegram.",
+    pref_opt_botKeyboardStyle_mixed_label: "Змішаний",
+    pref_opt_botKeyboardStyle_mixed_desc: "Reply-клавіатура для навігації, inline — для дій усередині повідомлень.",
+
+    pref_modal_create_bot: "Спочатку створіть бота",
+    pref_modal_waiting_for_bot: "Очікую створення бота...",
+
+    chat_open_bot: "Відкрити бота",
   }
 };
 

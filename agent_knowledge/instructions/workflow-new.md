@@ -1,4 +1,23 @@
 WORKFLOW FOR NEW APP:
+0. Read the PREFERENCES block at the top of this prompt FIRST. The `Kind` field determines which workflow you follow:
+
+   **Kind = Game** — single-file Three.js build. See `preferences/kind/game.md`.
+   - The build is ONE file: `mini_app/index.html` with inline CSS and a single `<script type="module">` block. NO `app.js`, NO `styles.css`, NO `routes.js`, NO database, NO bot webhook.
+   - SKIP steps 5, 6, 7 below entirely (no backend, no separate frontend files, no `npm install`). The plan-before-code discipline in `preferences/kind/game.md` REPLACES step 4.
+   - Step 8 (`configure_bot`) still runs when `db.botToken` is set — the menu button just opens the game.
+   - Step 10 (`deploy_to_dev`) and step 11 (`finish`) still run as normal.
+   - If the game truly needs a server (multiplayer, server-side leaderboard), and only then, you MAY add `routes.js` — but document why in the plan.
+
+   **Kind = Text Bot** — backend-only, no Mini App. See `preferences/kind/textBot.md`.
+   - The build is ONLY `backend/routes.js`. NO `mini_app/index.html`, NO `app.js`, NO `styles.css`, NO HTML at all. If you generate any frontend file you have misunderstood the project.
+   - `routes.js` MUST export `router.post("/bot-webhook", async (req, res) => { ... })` (exact path) — the platform forwards every Telegram update there. See `agent_knowledge/skills/bot-management.md` for the full webhook contract; load it before writing the handler.
+   - SKIP step 6 entirely (no frontend files).
+   - SKIP step 7 unless an external library is genuinely required (use `fetch` against `https://api.telegram.org/bot${db.botToken}/...` directly).
+   - Step 8 (`configure_bot`): pass `menuButtonText: ""` so the chat menu stays on Telegram's default. The platform also force-clears any stale Mini App menu button when `kind === "textBot"`.
+   - Step 10 (`deploy_to_dev`) and step 11 (`finish`) still run as normal.
+   - The bot token is ALREADY linked when planning starts (the user created it in BotFather first), so `db.botToken` and `db.botUsername` are populated from turn 1 — use them.
+
+   **Kind = App** (or AUTO) — standard Mini App. Continue with steps 1-11 below.
 1. list_files + read existing files (parallel calls to understand current state)
 2. Decide: does this app need real-time? (chat, games, live updates → YES → load_skill('websocket'))
 3. Decide: does this app need custom bot behavior? (custom commands, /start <param> deep links, callback buttons, push notifications → YES → load_skill('bot-management'))

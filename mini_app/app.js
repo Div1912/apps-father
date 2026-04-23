@@ -499,7 +499,7 @@ async function createNewApp() {
 // already-built project.
 let linkBotPollTimer = null;
 
-function startLinkBotPolling(projectId) {
+function startLinkBotPolling(projectId, onLinked) {
   if (linkBotPollTimer) clearInterval(linkBotPollTimer);
   let attempts = 0;
   linkBotPollTimer = setInterval(async () => {
@@ -522,11 +522,15 @@ function startLinkBotPolling(projectId) {
         slots = data.slots || slots;
         if (currentProject && currentProject.id === projectId) {
           currentProject.botUsername = updated.botUsername;
-          document.getElementById('chat-app-status').textContent = `@${updated.botUsername}`;
+          const statusEl = document.getElementById('chat-app-status');
+          if (statusEl) statusEl.textContent = `@${updated.botUsername}`;
         }
         renderAppList();
         // Remove the "Link your bot" card if still visible
         document.getElementById('link-bot-card')?.remove();
+        if (typeof onLinked === 'function') {
+          try { onLinked(updated); } catch (e) { console.error('[link-bot] onLinked threw', e); }
+        }
       }
     } catch {}
   }, 3000);
@@ -1437,10 +1441,7 @@ function handleWSMessage(data) {
             <div class="changelog-card-arrow">›</div>
           </div>`;
         }
-        html += `<div class="result-actions">
-          <button class="result-action-btn result-action-test" onclick="openTestPreview('${chatProjectId}')">▶ ${t('chat_run_test')}</button>
-          <button class="result-action-btn result-action-release" onclick="releaseLatest()">${t('chat_release_update')}</button>
-        </div>`;
+        html += resultActionsHtml(chatProjectId);
         if (typeof data.costUsd === 'number') {
           html += `<div class="chat-progress-cost">${t('chat_cost')}: $${data.costUsd.toFixed(4)}${typeof data.balance === 'number' ? ` · ${t('chat_balance')}: $${data.balance.toFixed(2)}` : ''}</div>`;
         }
@@ -1457,6 +1458,31 @@ function handleWSMessage(data) {
     }
     return;
   }
+}
+
+/**
+ * Build the result-card action row. For Text Bot projects we drop the
+ * "Run Test" preview button (there's no Mini App to preview) and replace
+ * it with an "Open Bot" deep-link to the linked Telegram bot.
+ */
+function resultActionsHtml(projectId) {
+  const proj = (projects || []).find(p => p.id === projectId) || (currentProject && currentProject.id === projectId ? currentProject : null);
+  const isTextBot = proj?.preferences?.kind === 'textBot';
+  const releaseBtn = `<button class="result-action-btn result-action-release" onclick="releaseLatest()">${t('chat_release_update')}</button>`;
+  if (isTextBot) {
+    if (proj?.botUsername) {
+      const botUrl = `https://t.me/${proj.botUsername}`;
+      return `<div class="result-actions">
+        <button class="result-action-btn result-action-test" onclick="tg?.openTelegramLink('${botUrl}')">${t('chat_open_bot')}</button>
+        ${releaseBtn}
+      </div>`;
+    }
+    return `<div class="result-actions">${releaseBtn}</div>`;
+  }
+  return `<div class="result-actions">
+    <button class="result-action-btn result-action-test" onclick="openTestPreview('${projectId}')">▶ ${t('chat_run_test')}</button>
+    ${releaseBtn}
+  </div>`;
 }
 
 // Returns the HTML for the "Link your bot" card if the current project has no
@@ -1687,10 +1713,7 @@ function appendMessage(msg, animate = true) {
         <div class="changelog-card-arrow">›</div>
       </div>`;
     }
-    html += `<div class="result-actions">
-      <button class="result-action-btn result-action-test" onclick="openTestPreview('${msg.metadata?.projectId || chatProjectId}')">▶ ${t('chat_run_test')}</button>
-      <button class="result-action-btn result-action-release" onclick="releaseLatest()">${t('chat_release_update')}</button>
-    </div>`;
+    html += resultActionsHtml(msg.metadata?.projectId || chatProjectId);
     if (typeof msg.costUsd === 'number') {
       html += `<div class="chat-progress-cost">Cost: $${msg.costUsd.toFixed(4)}${typeof msg.balance === 'number' ? ` · Balance: $${msg.balance.toFixed(2)}` : ''}</div>`;
     }
@@ -2233,10 +2256,15 @@ async function openPreferencesModal({ initial, catalog, onSaved, userBubbleId, d
     onSaved,
     projectId: chatProjectId,
     stepIndex: 0,
+    visibleCatalog: [],
+    totalSteps: 0,
     userBubbleId: userBubbleId || null,
     description: description || '',
   };
 
+  // Drop any selections that don't belong under the current `kind` so the
+  // first render shows a clean state.
+  clearHiddenSelections();
   renderPreferencesModal();
   bindPrefModalChrome();
   goToPrefStep(0, { animate: false });
@@ -2297,6 +2325,53 @@ function restoreChromeColors() {
   try { if (typeof tg.setBottomBarColor === 'function') tg.setBottomBarColor(DEFAULT_CHROME); } catch {}
 }
 
+/**
+ * Resolve a gating value the same way the backend does (AUTO collapses to
+ * the catalog default — see `resolveGatingValue` in
+ * `src/services/preferences.catalog.ts`). Used by `isCatActive` below to
+ * gate game-only / app-only categories on the live selection.
+ */
+function prefDefaultFor(catId) {
+  const cat = (prefModalState && prefModalState.catalog.find((c) => c.id === catId));
+  if (!cat || !cat.options || !cat.options.length) return null;
+  // Prefer an explicit default; otherwise the first option keeps modal
+  // behaviour deterministic. The catalog ships `kind` first with `app`
+  // as its first option, which matches the backend default.
+  return cat.options[0].id;
+}
+
+function prefResolveGating(catId) {
+  if (!prefModalState) return null;
+  const v = prefModalState.selection[catId];
+  if (!v || v === PREF_AUTO_VALUE) return prefDefaultFor(catId);
+  return v;
+}
+
+function isCatActive(cat) {
+  if (!cat.appliesWhen) return true;
+  for (const [key, allowed] of Object.entries(cat.appliesWhen)) {
+    if (!Array.isArray(allowed) || allowed.length === 0) continue;
+    const actual = prefResolveGating(key);
+    if (!allowed.includes(actual)) return false;
+  }
+  return true;
+}
+
+/**
+ * Returns the live list of categories the user is actually walking through.
+ * Game-only categories disappear when Kind = App, and vice-versa.
+ *
+ * Caches on `prefModalState.visibleCatalog` so other helpers (step counter,
+ * navigation, submit) all read off the same array.
+ */
+function computeVisibleCatalog() {
+  if (!prefModalState) return [];
+  const visible = prefModalState.catalog.filter(isCatActive);
+  prefModalState.visibleCatalog = visible;
+  prefModalState.totalSteps = visible.length;
+  return visible;
+}
+
 function renderPreferencesModal() {
   if (!prefModalState) return;
   const stepsEl = document.getElementById('pref-steps');
@@ -2306,8 +2381,9 @@ function renderPreferencesModal() {
   stepsEl.innerHTML = '';
   if (progressEl) progressEl.innerHTML = '';
 
-  const total = prefModalState.catalog.length;
-  prefModalState.catalog.forEach((cat, idx) => {
+  const visible = computeVisibleCatalog();
+  const total = visible.length;
+  visible.forEach((cat, idx) => {
     const catLabel = prefCategoryLabel(cat);
     const catPrompt = prefCategoryPrompt(cat);
 
@@ -2380,13 +2456,10 @@ function renderPreferencesModal() {
     }
   });
 
-  // Total step count for the X/N badge.
-  prefModalState.totalSteps = total;
-
   // Translate the static modal chrome (submit / back labels).
   const submitBtn = document.getElementById('pref-modal-submit');
   if (submitBtn && !submitBtn.classList.contains('busy')) {
-    submitBtn.textContent = t('pref_modal_submit');
+    submitBtn.textContent = textBotNeedsBotFirst() ? t('pref_modal_create_bot') : t('pref_modal_submit');
   }
   const backBtn = document.getElementById('pref-modal-back');
   if (backBtn) backBtn.setAttribute('aria-label', t('pref_modal_back'));
@@ -2433,25 +2506,85 @@ function bindPrefModalChrome() {
   }
 }
 
+/**
+ * Categories whose `appliesWhen` references *this* category, i.e. which
+ * categories' visibility might change when the user picks a different
+ * value here. If a gating cat changes (e.g. `kind`), the whole modal must
+ * re-render because steps appear/disappear and indexes shift.
+ */
+function isGatingCategory(catId) {
+  if (!prefModalState) return false;
+  return prefModalState.catalog.some((c) => c.appliesWhen && Object.prototype.hasOwnProperty.call(c.appliesWhen, catId));
+}
+
+/**
+ * Wipe selections for any category that's no longer visible under the
+ * current gating, so they don't leak into the saved JSON or stale-cache
+ * the modal next time it opens.
+ */
+function clearHiddenSelections() {
+  if (!prefModalState) return;
+  const visible = prefModalState.catalog.filter(isCatActive);
+  const visibleIds = new Set(visible.map((c) => c.id));
+  for (const cat of prefModalState.catalog) {
+    if (!visibleIds.has(cat.id)) {
+      prefModalState.selection[cat.id] = PREF_AUTO_VALUE;
+    }
+  }
+}
+
 function onPrefCardPick(catId, optId, cardEl, stepEl, stepIdx) {
   if (!prefModalState) return;
+  const previous = prefModalState.selection[catId];
   prefModalState.selection[catId] = optId;
   stepEl.querySelectorAll('.pref-card').forEach((el) => el.classList.remove('selected'));
   cardEl.classList.add('selected');
   const autoBtn = stepEl.querySelector('.pref-auto-btn');
   if (autoBtn) autoBtn.classList.remove('selected');
 
+  // If this is a gating category (e.g. `kind`), the visible step list may
+  // have changed. Re-render and route to the next visible step.
+  if (isGatingCategory(catId) && previous !== optId) {
+    handleGatingChange(catId, stepIdx);
+    return;
+  }
+
   scheduleAutoAdvance(stepIdx);
 }
 
 function onPrefAutoPick(catId, stepEl, stepIdx) {
   if (!prefModalState) return;
+  const previous = prefModalState.selection[catId];
   prefModalState.selection[catId] = PREF_AUTO_VALUE;
   stepEl.querySelectorAll('.pref-card').forEach((el) => el.classList.remove('selected'));
   const autoBtn = stepEl.querySelector('.pref-auto-btn');
   if (autoBtn) autoBtn.classList.add('selected');
 
+  if (isGatingCategory(catId) && previous !== PREF_AUTO_VALUE) {
+    handleGatingChange(catId, stepIdx);
+    return;
+  }
+
   scheduleAutoAdvance(stepIdx);
+}
+
+/**
+ * The user just changed a gating category (e.g. flipped App → Game).
+ * Wipe stale selections for newly-hidden categories, re-render the modal,
+ * and auto-advance to whatever step now sits *after* the gating one.
+ */
+function handleGatingChange(gatingCatId, currentStepIdx) {
+  clearHiddenSelections();
+  renderPreferencesModal();
+  // Find where the gating category now lives in the visible list, then
+  // schedule the same auto-advance UX so the user keeps moving forward.
+  const visible = prefModalState.visibleCatalog || [];
+  const newIdx = visible.findIndex((c) => c.id === gatingCatId);
+  const targetIdx = newIdx >= 0 ? newIdx : Math.min(currentStepIdx, visible.length - 1);
+  // Keep the user on the gating step (so they see the click landed) and
+  // then auto-advance into the freshly-revealed branch.
+  goToPrefStep(targetIdx, { animate: false });
+  scheduleAutoAdvance(targetIdx);
 }
 
 function scheduleAutoAdvance(stepIdx) {
@@ -2473,7 +2606,8 @@ function scheduleAutoAdvance(stepIdx) {
 
 function goToPrefStep(idx, { animate = true } = {}) {
   if (!prefModalState) return;
-  const total = prefModalState.totalSteps || prefModalState.catalog.length;
+  const visible = prefModalState.visibleCatalog || computeVisibleCatalog();
+  const total = visible.length || 1;
   const clamped = Math.max(0, Math.min(total - 1, idx));
   prefModalState.stepIndex = clamped;
 
@@ -2533,9 +2667,403 @@ function renderPreferencePreview(opt) {
       return renderDensityPreviewCard(opt);
     case 'bottomMenu':
       return renderBottomMenuPreviewCard(opt);
+    case 'kind':
+      return renderKindPreviewCard(opt);
+    case 'gameDimension':
+      return renderGameDimensionPreviewCard(opt);
+    case 'gameGenre':
+      return renderGameGenrePreviewCard(opt);
+    case 'gameArtStyle':
+      return renderGameArtStylePreviewCard(opt);
+    case 'gameControls':
+      return renderGameControlsPreviewCard(opt);
+    case 'botKeyboardStyle':
+      return renderBotKeyboardStylePreviewCard(opt);
     default:
       return `<div class="pref-preview-fallback">${escapeHtml(opt.label)}</div>`;
   }
+}
+
+// ── Kind / Game preview cards ───────────────────────────────────────
+// Static SVG/CSS mocks only — no live Three.js inside the modal so the
+// preferences screen stays light and snappy on low-end devices.
+
+function renderKindPreviewCard(opt) {
+  const variant = opt.preview.variant;
+  if (variant === 'app') {
+    return `
+      <div class="gp-card gp-card-kind gp-card-kind-app">
+        <div class="gp-phone">
+          <div class="gp-phone-header"><span class="gp-bar"></span><span class="gp-bar gp-bar-sm"></span></div>
+          <div class="gp-phone-body">
+            <div class="gp-row"></div>
+            <div class="gp-row"></div>
+            <div class="gp-row"></div>
+            <div class="gp-row"></div>
+          </div>
+          <div class="gp-phone-tabs">
+            <span class="gp-dot active"></span><span class="gp-dot"></span><span class="gp-dot"></span><span class="gp-dot"></span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+  if (variant === 'textBot') {
+    // Tiny mock of a Telegram chat: bot avatar + bubble + chip row.
+    return `
+      <div class="gp-card gp-card-kind gp-card-kind-textbot">
+        <div class="tb-chat">
+          <div class="tb-msg tb-msg-bot">
+            <div class="tb-avatar">B</div>
+            <div class="tb-bubble">
+              <div class="tb-line"></div>
+              <div class="tb-line tb-line-sm"></div>
+            </div>
+          </div>
+          <div class="tb-chips">
+            <span class="tb-chip">/start</span>
+            <span class="tb-chip">/help</span>
+            <span class="tb-chip tb-chip-accent">Buy</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+  // game variant — full-bleed canvas mock with iso cubes
+  return `
+    <div class="gp-card gp-card-kind gp-card-kind-game">
+      <div class="gp-canvas">
+        ${renderIsoScene()}
+        <span class="gp-score">SCORE 0042</span>
+      </div>
+    </div>
+  `;
+}
+
+// ── Bot keyboard style previews ─────────────────────────────────────
+// Shown ONLY when kind === "textBot". Tiny static mocks of the four
+// Telegram-side UX patterns.
+function renderBotKeyboardStylePreviewCard(opt) {
+  const scheme = opt.preview.scheme;
+  if (scheme === 'reply') {
+    return `
+      <div class="gp-card gp-card-bks">
+        <div class="tb-chat tb-chat-compact">
+          <div class="tb-msg tb-msg-bot">
+            <div class="tb-bubble"><div class="tb-line"></div></div>
+          </div>
+          <div class="tb-replykb">
+            <div class="tb-replykb-row">
+              <span class="tb-replykb-btn">📦 Orders</span>
+              <span class="tb-replykb-btn">🛒 Catalog</span>
+            </div>
+            <div class="tb-replykb-row">
+              <span class="tb-replykb-btn">💰 Balance</span>
+              <span class="tb-replykb-btn">ℹ️ Help</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+  if (scheme === 'inline') {
+    return `
+      <div class="gp-card gp-card-bks">
+        <div class="tb-chat tb-chat-compact">
+          <div class="tb-msg tb-msg-bot">
+            <div class="tb-bubble">
+              <div class="tb-line"></div>
+              <div class="tb-line tb-line-sm"></div>
+              <div class="tb-inlinekb">
+                <span class="tb-inline-btn">🛒 Buy</span>
+                <span class="tb-inline-btn">← Back</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+  if (scheme === 'commands') {
+    return `
+      <div class="gp-card gp-card-bks">
+        <div class="tb-chat tb-chat-compact">
+          <div class="tb-cmdmenu">
+            <div class="tb-cmdmenu-row"><span class="tb-cmd">/start</span><span class="tb-cmd-desc">Start</span></div>
+            <div class="tb-cmdmenu-row"><span class="tb-cmd">/help</span><span class="tb-cmd-desc">Show all</span></div>
+            <div class="tb-cmdmenu-row"><span class="tb-cmd">/buy</span><span class="tb-cmd-desc">Buy item</span></div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+  // mixed — reply keyboard at bottom, inline buttons on a message above
+  return `
+    <div class="gp-card gp-card-bks">
+      <div class="tb-chat tb-chat-compact">
+        <div class="tb-msg tb-msg-bot">
+          <div class="tb-bubble">
+            <div class="tb-line"></div>
+            <div class="tb-inlinekb">
+              <span class="tb-inline-btn">🛒 Buy</span>
+            </div>
+          </div>
+        </div>
+        <div class="tb-replykb">
+          <div class="tb-replykb-row">
+            <span class="tb-replykb-btn">📦 Orders</span>
+            <span class="tb-replykb-btn">ℹ️ Help</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderIsoScene() {
+  // A tiny isometric scene: ground tile + 3 stacked cubes for "voxel" feel.
+  return `
+    <svg class="gp-iso" viewBox="0 0 120 90" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs>
+        <linearGradient id="gpSky" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#bde7ff"/>
+          <stop offset="1" stop-color="#88c8ff"/>
+        </linearGradient>
+      </defs>
+      <rect width="120" height="90" fill="url(#gpSky)"/>
+      <!-- ground tile -->
+      <polygon points="20,60 60,40 100,60 60,80" fill="#7cb342"/>
+      <polygon points="60,80 100,60 100,68 60,88" fill="#558b2f"/>
+      <polygon points="20,60 20,68 60,88 60,80" fill="#689f38"/>
+      <!-- voxel block -->
+      <polygon points="50,52 65,44 80,52 65,60" fill="#ffd54f"/>
+      <polygon points="65,60 80,52 80,62 65,70" fill="#f9a825"/>
+      <polygon points="50,52 50,62 65,70 65,60" fill="#fbc02d"/>
+      <!-- back tree -->
+      <polygon points="38,45 46,41 54,45 46,49" fill="#2e7d32"/>
+      <polygon points="46,49 54,45 54,52 46,56" fill="#1b5e20"/>
+      <polygon points="38,45 38,52 46,56 46,49" fill="#256527"/>
+    </svg>
+  `;
+}
+
+function renderGameDimensionPreviewCard(opt) {
+  const dim = opt.preview.dimension;
+  if (dim === '2d') {
+    return `
+      <div class="gp-card gp-card-dim gp-card-dim-2d">
+        <div class="gp-canvas">
+          <svg viewBox="0 0 120 90" xmlns="http://www.w3.org/2000/svg" class="gp-grid2d">
+            <rect width="120" height="90" fill="#0e1116"/>
+            ${gpGrid2dLines()}
+            <rect x="54" y="40" width="12" height="12" fill="#00e5ff"/>
+            <rect x="20" y="60" width="8" height="8" fill="#ff4081"/>
+            <rect x="92" y="20" width="8" height="8" fill="#ffeb3b"/>
+          </svg>
+          <span class="gp-tag">2D</span>
+        </div>
+      </div>
+    `;
+  }
+  return `
+    <div class="gp-card gp-card-dim gp-card-dim-3d">
+      <div class="gp-canvas">${renderIsoScene()}<span class="gp-tag">3D</span></div>
+    </div>
+  `;
+}
+
+function gpGrid2dLines() {
+  let out = '';
+  for (let x = 0; x <= 120; x += 12) {
+    out += `<line x1="${x}" y1="0" x2="${x}" y2="90" stroke="rgba(0,229,255,0.18)" stroke-width="0.5"/>`;
+  }
+  for (let y = 0; y <= 90; y += 12) {
+    out += `<line x1="0" y1="${y}" x2="120" y2="${y}" stroke="rgba(0,229,255,0.18)" stroke-width="0.5"/>`;
+  }
+  return out;
+}
+
+function renderGameGenrePreviewCard(opt) {
+  const genre = opt.preview.genre;
+  const palette = {
+    arcade: { bg: '#1a1a2e', fg: '#f9d342', accent: '#e94560' },
+    runner: { bg: '#88c8ff', fg: '#7cb342', accent: '#ff7043' },
+    puzzle: { bg: '#ede7f6', fg: '#5e35b1', accent: '#ff8a65' },
+    shooter: { bg: '#0e1116', fg: '#00e5ff', accent: '#ff4081' },
+    platformer: { bg: '#42a5f5', fg: '#43a047', accent: '#ffb300' },
+    sandbox: { bg: '#fff8e1', fg: '#6d4c41', accent: '#26a69a' },
+  }[genre] || { bg: '#222', fg: '#fff', accent: '#999' };
+
+  let inner = '';
+  if (genre === 'arcade') {
+    inner = `
+      <circle cx="60" cy="50" r="10" fill="${palette.fg}"/>
+      <circle cx="30" cy="30" r="4" fill="${palette.accent}"/>
+      <circle cx="92" cy="32" r="4" fill="${palette.accent}"/>
+      <circle cx="40" cy="68" r="4" fill="${palette.accent}"/>
+      <circle cx="84" cy="70" r="4" fill="${palette.accent}"/>
+    `;
+  } else if (genre === 'runner') {
+    inner = `
+      <rect x="0" y="60" width="120" height="30" fill="${palette.fg}"/>
+      <rect x="0" y="58" width="120" height="2" fill="rgba(0,0,0,0.18)"/>
+      <rect x="56" y="40" width="10" height="20" fill="${palette.accent}"/>
+      <rect x="22" y="48" width="10" height="12" fill="#5d4037"/>
+      <rect x="92" y="48" width="10" height="12" fill="#5d4037"/>
+    `;
+  } else if (genre === 'puzzle') {
+    inner = `
+      <rect x="20" y="20" width="20" height="20" fill="${palette.fg}" rx="3"/>
+      <rect x="50" y="20" width="20" height="20" fill="${palette.accent}" rx="3"/>
+      <rect x="80" y="20" width="20" height="20" fill="${palette.fg}" rx="3"/>
+      <rect x="20" y="50" width="20" height="20" fill="${palette.accent}" rx="3"/>
+      <rect x="50" y="50" width="20" height="20" fill="${palette.fg}" rx="3"/>
+      <rect x="80" y="50" width="20" height="20" fill="${palette.accent}" rx="3"/>
+    `;
+  } else if (genre === 'shooter') {
+    inner = `
+      <polygon points="60,68 56,76 64,76" fill="${palette.fg}"/>
+      <line x1="60" y1="60" x2="60" y2="20" stroke="${palette.accent}" stroke-width="2" stroke-dasharray="3 3"/>
+      <circle cx="30" cy="30" r="6" fill="${palette.accent}" opacity="0.7"/>
+      <circle cx="90" cy="40" r="6" fill="${palette.accent}" opacity="0.7"/>
+      <circle cx="60" cy="20" r="5" fill="${palette.accent}"/>
+    `;
+  } else if (genre === 'platformer') {
+    inner = `
+      <rect x="0" y="78" width="120" height="12" fill="${palette.fg}"/>
+      <rect x="20" y="58" width="24" height="6" fill="${palette.fg}"/>
+      <rect x="60" y="42" width="28" height="6" fill="${palette.fg}"/>
+      <rect x="92" y="60" width="20" height="6" fill="${palette.fg}"/>
+      <rect x="28" y="48" width="8" height="10" fill="${palette.accent}"/>
+    `;
+  } else if (genre === 'sandbox') {
+    inner = `
+      <rect x="20" y="50" width="14" height="14" fill="${palette.fg}"/>
+      <rect x="36" y="50" width="14" height="14" fill="${palette.accent}"/>
+      <rect x="52" y="50" width="14" height="14" fill="${palette.fg}"/>
+      <rect x="36" y="34" width="14" height="14" fill="${palette.accent}"/>
+      <rect x="76" y="44" width="14" height="20" fill="${palette.fg}"/>
+      <rect x="92" y="50" width="14" height="14" fill="${palette.accent}"/>
+    `;
+  }
+
+  return `
+    <div class="gp-card gp-card-genre">
+      <svg viewBox="0 0 120 90" xmlns="http://www.w3.org/2000/svg" class="gp-svg">
+        <rect width="120" height="90" fill="${palette.bg}"/>
+        ${inner}
+      </svg>
+    </div>
+  `;
+}
+
+function renderGameArtStylePreviewCard(opt) {
+  const art = opt.preview.art;
+  if (art === 'voxel') {
+    return `<div class="gp-card gp-card-art">${renderIsoScene()}</div>`;
+  }
+  if (art === 'low_poly') {
+    return `
+      <div class="gp-card gp-card-art">
+        <svg viewBox="0 0 120 90" xmlns="http://www.w3.org/2000/svg" class="gp-svg">
+          <rect width="120" height="90" fill="#a3c8e2"/>
+          <polygon points="0,90 40,60 80,80 120,55 120,90" fill="#3d7a3d"/>
+          <polygon points="40,60 70,30 100,55" fill="#6f4e37"/>
+          <polygon points="70,30 85,40 100,30 90,20" fill="#fff3d6"/>
+          <polygon points="20,80 30,68 40,80" fill="#2f5a2f"/>
+        </svg>
+      </div>
+    `;
+  }
+  if (art === 'flat') {
+    return `
+      <div class="gp-card gp-card-art">
+        <svg viewBox="0 0 120 90" xmlns="http://www.w3.org/2000/svg" class="gp-svg">
+          <rect width="120" height="90" fill="#0e1116"/>
+          <polygon points="60,20 78,55 42,55" fill="#00e5ff"/>
+          <circle cx="30" cy="68" r="10" fill="#ff4081"/>
+          <rect x="80" y="58" width="20" height="20" fill="#ffeb3b"/>
+        </svg>
+      </div>
+    `;
+  }
+  if (art === 'pixel') {
+    return `
+      <div class="gp-card gp-card-art">
+        <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg" class="gp-svg gp-pixel">
+          <rect width="16" height="12" fill="#1a1c2c"/>
+          <rect x="4" y="4" width="2" height="2" fill="#ffcd75"/>
+          <rect x="6" y="4" width="2" height="2" fill="#ef7d57"/>
+          <rect x="6" y="6" width="2" height="2" fill="#ef7d57"/>
+          <rect x="4" y="6" width="2" height="2" fill="#ef7d57"/>
+          <rect x="3" y="6" width="1" height="2" fill="#b13e53"/>
+          <rect x="8" y="6" width="1" height="2" fill="#b13e53"/>
+          <rect x="0" y="10" width="16" height="2" fill="#38b764"/>
+          <rect x="12" y="2" width="2" height="2" fill="#73eff7"/>
+        </svg>
+      </div>
+    `;
+  }
+  if (art === 'wireframe') {
+    return `
+      <div class="gp-card gp-card-art">
+        <svg viewBox="0 0 120 90" xmlns="http://www.w3.org/2000/svg" class="gp-svg">
+          <rect width="120" height="90" fill="#000"/>
+          <g stroke="#00ff66" stroke-width="1" fill="none">
+            <polygon points="60,20 90,40 90,70 60,80 30,70 30,40"/>
+            <line x1="60" y1="20" x2="60" y2="80"/>
+            <line x1="30" y1="40" x2="90" y2="70"/>
+            <line x1="90" y1="40" x2="30" y2="70"/>
+          </g>
+        </svg>
+      </div>
+    `;
+  }
+  return `<div class="pref-preview-fallback">${escapeHtml(opt.label)}</div>`;
+}
+
+function renderGameControlsPreviewCard(opt) {
+  const scheme = opt.preview.scheme;
+  let inner = '';
+  if (scheme === 'touch') {
+    inner = `
+      <circle cx="40" cy="50" r="14" fill="rgba(255,255,255,0.10)" stroke="rgba(255,255,255,0.5)" stroke-width="1"/>
+      <circle cx="40" cy="50" r="6" fill="#ffffff"/>
+      <circle cx="86" cy="38" r="10" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.3)"/>
+      <circle cx="86" cy="60" r="10" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.3)"/>
+    `;
+  } else if (scheme === 'swipe') {
+    inner = `
+      <circle cx="40" cy="55" r="6" fill="#ffffff"/>
+      <path d="M40 55 L92 30" stroke="#00e5ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+      <polygon points="92,30 86,30 90,36" fill="#00e5ff"/>
+      <path d="M40 55 L40 80" stroke="rgba(0,229,255,0.4)" stroke-width="2" stroke-dasharray="3 3"/>
+    `;
+  } else if (scheme === 'dpad') {
+    inner = `
+      <rect x="22" y="44" width="14" height="14" rx="3" fill="rgba(255,255,255,0.18)"/>
+      <rect x="38" y="28" width="14" height="14" rx="3" fill="rgba(255,255,255,0.18)"/>
+      <rect x="38" y="60" width="14" height="14" rx="3" fill="rgba(255,255,255,0.18)"/>
+      <rect x="54" y="44" width="14" height="14" rx="3" fill="rgba(255,255,255,0.18)"/>
+      <circle cx="92" cy="55" r="12" fill="#ff4081"/>
+    `;
+  } else if (scheme === 'tilt') {
+    inner = `
+      <g transform="translate(60 50) rotate(-12) translate(-30 -20)">
+        <rect x="0" y="0" width="60" height="40" rx="6" fill="rgba(255,255,255,0.15)" stroke="rgba(255,255,255,0.4)"/>
+        <circle cx="30" cy="20" r="4" fill="#00e5ff"/>
+      </g>
+      <path d="M30 75 Q60 85 90 75" stroke="rgba(255,255,255,0.4)" stroke-width="1" fill="none"/>
+    `;
+  }
+  return `
+    <div class="gp-card gp-card-controls">
+      <svg viewBox="0 0 120 90" xmlns="http://www.w3.org/2000/svg" class="gp-svg">
+        <rect width="120" height="90" fill="#1a1a2e"/>
+        ${inner}
+      </svg>
+    </div>
+  `;
 }
 
 // Each preview is a tiny, fully-rendered phone mockup so the option's
@@ -3285,11 +3813,33 @@ async function submitPreferences() {
       if (submitBtn) {
         submitBtn.disabled = false;
         submitBtn.classList.remove('busy');
-        submitBtn.textContent = t('pref_modal_submit');
+        submitBtn.textContent = textBotNeedsBotFirst() ? t('pref_modal_create_bot') : t('pref_modal_submit');
       }
       alert(t('pref_modal_save_failed'));
       return;
     }
+
+    // Text Bot fork: prefs persisted, but we cannot proceed to planning
+    // until the user actually creates the Telegram bot in BotFather.
+    // Open the deep link, switch the modal into a "waiting for bot..."
+    // state, and poll for the link. Once linked, close the modal and
+    // auto-resume planning with the user's original prompt.
+    if (textBotNeedsBotFirst()) {
+      const description = prefModalState.description || '';
+      const userBubbleId = prefModalState.userBubbleId || null;
+      const projectId = prefModalState.projectId;
+      const isDev = location.hostname === 'dev.apps-father.com';
+      const fatherBot = isDev ? 'apps_father_dev_bot' : 'apps_father_bot';
+      const newbotUrl = `https://t.me/newbot/${fatherBot}/username_bot`;
+      try { tg?.openTelegramLink(newbotUrl); } catch (e) { console.warn('[prefs] openTelegramLink failed', e); }
+      enterTextBotWaitingState();
+      startLinkBotPolling(projectId, () => {
+        closePreferencesModal();
+        resumePlanningAfterBotLink({ description, userBubbleId });
+      });
+      return;
+    }
+
     const onSaved = prefModalState.onSaved;
     closePreferencesModal();
     if (typeof onSaved === 'function') onSaved();
@@ -3298,9 +3848,55 @@ async function submitPreferences() {
     if (submitBtn) {
       submitBtn.disabled = false;
       submitBtn.classList.remove('busy');
-      submitBtn.textContent = t('pref_modal_submit');
+      submitBtn.textContent = textBotNeedsBotFirst() ? t('pref_modal_create_bot') : t('pref_modal_submit');
     }
   }
+}
+
+/**
+ * True iff the modal is on a Text Bot project AND the bot hasn't been
+ * linked yet. In that case the Submit button needs to launch BotFather
+ * before any planning can happen — the agent needs `db.botToken` from
+ * turn 1 because there's no Mini App fallback.
+ */
+function textBotNeedsBotFirst() {
+  if (!prefModalState) return false;
+  if (prefModalState.selection?.kind !== 'textBot') return false;
+  // currentProject reflects the chat's project; botUsername is set the
+  // moment managed_bot fires.
+  if (currentProject?.botUsername) return false;
+  return true;
+}
+
+/**
+ * Replace the Submit button label with the spinner-style "Waiting for
+ * bot..." state. The button itself stays disabled — we wait for the
+ * polling callback to close the modal.
+ */
+function enterTextBotWaitingState() {
+  const submitBtn = document.getElementById('pref-modal-submit');
+  if (!submitBtn) return;
+  submitBtn.disabled = true;
+  submitBtn.classList.add('busy', 'waiting-for-bot');
+  submitBtn.textContent = t('pref_modal_waiting_for_bot');
+}
+
+/**
+ * Re-emit the user's original prompt into the chat pipeline. Same path
+ * as if the user had just hit Send, but with `skipUserBubble` so the
+ * existing optimistic bubble is reused. Triggered after the bot has been
+ * linked to a Text Bot project.
+ */
+function resumePlanningAfterBotLink({ description, userBubbleId }) {
+  if (!description) return;
+  // sendPlanRequest will also re-check preferences (now persisted), and
+  // since `botUsername` is now set on `currentProject`, the textBot
+  // submit path is a no-op the next time around — planning runs normally.
+  sendPlanRequest(description, {
+    skipUserBubble: !!userBubbleId,
+    skipPrefsCheck: true,
+    userBubbleId,
+  });
 }
 
 function escapeHtml(s) {

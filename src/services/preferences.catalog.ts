@@ -27,6 +27,12 @@ const PREFERENCES_DIR = path.join(process.cwd(), "agent_knowledge", "preferences
 export const AUTO_PREFERENCE = "__auto__";
 
 export type PreferenceCategoryId =
+  | "kind"
+  | "gameDimension"
+  | "gameGenre"
+  | "gameArtStyle"
+  | "gameControls"
+  | "botKeyboardStyle"
   | "style"
   | "theme"
   | "header"
@@ -77,12 +83,60 @@ export interface BottomMenuPreviewSpec {
     | "none";
 }
 
+// Top-level "what are we building" gate.
+// - `app` keeps the whole existing pipeline (frontend + backend + Mini App)
+// - `game` switches the build agent to the Three.js single-file workflow
+// - `textBot` skips the Mini App entirely: backend-only `routes.js` with
+//   a `bot-webhook` handler and Telegram-keyboard-driven UX. The bot is
+//   linked BEFORE planning so the agent has a real `db.botToken` from
+//   turn 1.
+export interface KindPreviewSpec {
+  kind: "kind";
+  variant: "app" | "game" | "textBot";
+}
+
+// Keyboard shape the agent should use for a Text Bot. Static, illustrative
+// preview (a tiny bot bubble + chip row); no live Telegram WebApp inside
+// the modal.
+export interface BotKeyboardStylePreviewSpec {
+  kind: "botKeyboardStyle";
+  scheme: "reply" | "inline" | "commands" | "mixed";
+}
+
+// 2D vs 3D for games. The preview is a tiny static thumbnail (a flat grid
+// for 2D, an isometric cube for 3D) — no live Three.js inside the modal.
+export interface GameDimensionPreviewSpec {
+  kind: "gameDimension";
+  dimension: "2d" | "3d";
+}
+
+export interface GameGenrePreviewSpec {
+  kind: "gameGenre";
+  genre: "arcade" | "runner" | "puzzle" | "shooter" | "platformer" | "sandbox";
+}
+
+export interface GameArtStylePreviewSpec {
+  kind: "gameArtStyle";
+  art: "voxel" | "low_poly" | "flat" | "pixel" | "wireframe";
+}
+
+export interface GameControlsPreviewSpec {
+  kind: "gameControls";
+  scheme: "touch" | "swipe" | "dpad" | "tilt";
+}
+
 export type PreviewSpec =
   | StylePreviewSpec
   | ThemePreviewSpec
   | HeaderPreviewSpec
   | DensityPreviewSpec
-  | BottomMenuPreviewSpec;
+  | BottomMenuPreviewSpec
+  | KindPreviewSpec
+  | GameDimensionPreviewSpec
+  | GameGenrePreviewSpec
+  | GameArtStylePreviewSpec
+  | GameControlsPreviewSpec
+  | BotKeyboardStylePreviewSpec;
 
 export interface PreferenceOption {
   id: string;
@@ -96,9 +150,25 @@ export interface PreferenceCategory {
   label: string;
   prompt: string;
   options: PreferenceOption[];
+  /**
+   * Conditional gating. When set, this category is only shown in the modal
+   * (and only contributes to the prompt) if every listed key in the
+   * current selection matches one of the listed values. AUTO on a gating
+   * category falls back to that category's default value.
+   *
+   * Example: `{ kind: ["app"] }` means "only relevant when the user picks
+   * App (or leaves Kind on Auto, which defaults to App)".
+   */
+  appliesWhen?: Partial<Record<PreferenceCategoryId, string[]>>;
 }
 
 export interface ProjectPreferences {
+  kind: string;
+  gameDimension: string;
+  gameGenre: string;
+  gameArtStyle: string;
+  gameControls: string;
+  botKeyboardStyle: string;
   style: string;
   theme: string;
   header: string;
@@ -108,9 +178,126 @@ export interface ProjectPreferences {
 
 export const PREFERENCES_CATALOG: PreferenceCategory[] = [
   {
+    id: "kind",
+    label: "Kind",
+    prompt: "Are you building an app or a game?",
+    options: [
+      {
+        id: "app",
+        label: "App",
+        description: "Standard Telegram Mini App with screens, lists, and chrome.",
+        preview: { kind: "kind", variant: "app" },
+      },
+      {
+        id: "game",
+        label: "Game",
+        description: "Three.js game in a full-canvas viewport. No tab bars, no list rows.",
+        preview: { kind: "kind", variant: "game" },
+      },
+      {
+        id: "textBot",
+        label: "Text Bot",
+        description: "No Mini App. Just a Telegram bot driven by commands and keyboards.",
+        preview: { kind: "kind", variant: "textBot" },
+      },
+    ],
+  },
+  {
+    id: "botKeyboardStyle",
+    label: "Keyboard style",
+    prompt: "How does the user interact with the bot?",
+    appliesWhen: { kind: ["textBot"] },
+    options: [
+      {
+        id: "reply",
+        label: "Reply keyboard",
+        description: "Big touch-friendly buttons under the input. Re-rendered on every state change.",
+        preview: { kind: "botKeyboardStyle", scheme: "reply" },
+      },
+      {
+        id: "inline",
+        label: "Inline buttons",
+        description: "Buttons attached to messages. Best for actions on a specific item.",
+        preview: { kind: "botKeyboardStyle", scheme: "inline" },
+      },
+      {
+        id: "commands",
+        label: "Slash commands",
+        description: "Pure CLI feel. /help, /start, /buy. Listed in Telegram's command menu.",
+        preview: { kind: "botKeyboardStyle", scheme: "commands" },
+      },
+      {
+        id: "mixed",
+        label: "Mixed",
+        description: "Reply keyboard for top-level navigation, inline for actions inside messages.",
+        preview: { kind: "botKeyboardStyle", scheme: "mixed" },
+      },
+    ],
+  },
+  {
+    id: "gameDimension",
+    label: "Dimension",
+    prompt: "2D or 3D?",
+    appliesWhen: { kind: ["game"] },
+    options: [
+      {
+        id: "2d",
+        label: "2D",
+        description: "Top-down or side-scroll. Three.js with an orthographic camera.",
+        preview: { kind: "gameDimension", dimension: "2d" },
+      },
+      {
+        id: "3d",
+        label: "3D",
+        description: "Perspective or isometric world. Voxel or low-poly geometry.",
+        preview: { kind: "gameDimension", dimension: "3d" },
+      },
+    ],
+  },
+  {
+    id: "gameGenre",
+    label: "Genre",
+    prompt: "What kind of game is it?",
+    appliesWhen: { kind: ["game"] },
+    options: [
+      { id: "arcade", label: "Arcade", description: "Short loops, score chasing, instant restart.", preview: { kind: "gameGenre", genre: "arcade" } },
+      { id: "runner", label: "Runner", description: "Endless forward motion. Dodge or hop. Crossy Road, Subway Surfers.", preview: { kind: "gameGenre", genre: "runner" } },
+      { id: "puzzle", label: "Puzzle", description: "Turn-based or grid logic. 2048, Threes, match-3.", preview: { kind: "gameGenre", genre: "puzzle" } },
+      { id: "shooter", label: "Shooter", description: "Aim and fire. Top-down or first-person. Fixed lanes or free movement.", preview: { kind: "gameGenre", genre: "shooter" } },
+      { id: "platformer", label: "Platformer", description: "Jump between platforms. Side-scroll. Mario-style.", preview: { kind: "gameGenre", genre: "platformer" } },
+      { id: "sandbox", label: "Sandbox", description: "Build, place, explore. No fail state.", preview: { kind: "gameGenre", genre: "sandbox" } },
+    ],
+  },
+  {
+    id: "gameArtStyle",
+    label: "Art style",
+    prompt: "How should the game look?",
+    appliesWhen: { kind: ["game"] },
+    options: [
+      { id: "voxel", label: "Voxel", description: "Chunky cubes, bright saturated palette. Crossy Road, Minecraft.", preview: { kind: "gameArtStyle", art: "voxel" } },
+      { id: "low_poly", label: "Low poly", description: "Faceted shapes, flat shading, soft palette.", preview: { kind: "gameArtStyle", art: "low_poly" } },
+      { id: "flat", label: "Flat", description: "Untextured solid colors. No lighting. Geometry Wars feel.", preview: { kind: "gameArtStyle", art: "flat" } },
+      { id: "pixel", label: "Pixel", description: "Pixelated sprites or pixel-art UVs on 3D quads.", preview: { kind: "gameArtStyle", art: "pixel" } },
+      { id: "wireframe", label: "Wireframe", description: "Lines only. Tron / vector arcade.", preview: { kind: "gameArtStyle", art: "wireframe" } },
+    ],
+  },
+  {
+    id: "gameControls",
+    label: "Controls",
+    prompt: "How does the player control the game on mobile?",
+    appliesWhen: { kind: ["game"] },
+    options: [
+      { id: "touch", label: "Touch", description: "Tap zones on the canvas. Best for shooters and click-based games.", preview: { kind: "gameControls", scheme: "touch" } },
+      { id: "swipe", label: "Swipe", description: "Swipe up/down/left/right to move. Crossy Road style.", preview: { kind: "gameControls", scheme: "swipe" } },
+      { id: "dpad", label: "On-screen D-pad", description: "Floating directional buttons in the corner.", preview: { kind: "gameControls", scheme: "dpad" } },
+      { id: "tilt", label: "Tilt", description: "Device orientation. Steers via accelerometer.", preview: { kind: "gameControls", scheme: "tilt" } },
+    ],
+  },
+  {
     id: "style",
     label: "Style",
     prompt: "Pick the overall look & feel",
+    appliesWhen: { kind: ["app"] },
     options: [
       {
         id: "basic",
@@ -398,6 +585,7 @@ export const PREFERENCES_CATALOG: PreferenceCategory[] = [
     id: "theme",
     label: "Theme",
     prompt: "Light, dark, or follow Telegram",
+    appliesWhen: { kind: ["app"] },
     options: [
       { id: "light", label: "Light", description: "Always render the light palette of the chosen style.", preview: { kind: "theme", mode: "light" } },
       { id: "dark", label: "Dark", description: "Always render the dark palette of the chosen style.", preview: { kind: "theme", mode: "dark" } },
@@ -408,6 +596,7 @@ export const PREFERENCES_CATALOG: PreferenceCategory[] = [
     id: "header",
     label: "Header",
     prompt: "How should the top of every screen look?",
+    appliesWhen: { kind: ["app"] },
     options: [
       { id: "minimal", label: "Minimal", description: "Title only, no chrome.", preview: { kind: "header", layout: "minimal" } },
       { id: "branded", label: "Branded", description: "Logo + title + action.", preview: { kind: "header", layout: "branded" } },
@@ -418,6 +607,7 @@ export const PREFERENCES_CATALOG: PreferenceCategory[] = [
     id: "density",
     label: "Density",
     prompt: "How tightly packed should lists feel?",
+    appliesWhen: { kind: ["app"] },
     options: [
       { id: "compact", label: "Compact", description: "More content per screen.", preview: { kind: "density", rowHeight: 44, gap: 8 } },
       { id: "comfortable", label: "Comfortable", description: "Roomy spacing, easier to tap.", preview: { kind: "density", rowHeight: 64, gap: 16 } },
@@ -427,6 +617,7 @@ export const PREFERENCES_CATALOG: PreferenceCategory[] = [
     id: "bottomMenu",
     label: "Bottom menu",
     prompt: "How does the user navigate between sections?",
+    appliesWhen: { kind: ["app"] },
     options: [
       { id: "tabbar", label: "Flat tab bar", description: "Honest fixed bar — 4-5 icon+label tabs welded to the bottom edge.", preview: { kind: "bottomMenu", layout: "tabbar" } },
       { id: "tabbar_pill", label: "Floating pill", description: "Detached capsule that floats above the safe-area; active tab expands into a pill.", preview: { kind: "bottomMenu", layout: "tabbar_pill" } },
@@ -440,6 +631,18 @@ export const PREFERENCES_CATALOG: PreferenceCategory[] = [
 ];
 
 export const DEFAULT_PREFERENCES: ProjectPreferences = {
+  // Default to App so legacy projects without `kind` keep behaving like
+  // standard mini apps. AUTO on `kind` also resolves to "app" via
+  // `resolveGatingValue` below.
+  kind: "app",
+  // Game-only categories default to AUTO so they're inert until the user
+  // actually flips Kind to Game in the modal.
+  gameDimension: AUTO_PREFERENCE,
+  gameGenre: AUTO_PREFERENCE,
+  gameArtStyle: AUTO_PREFERENCE,
+  gameControls: AUTO_PREFERENCE,
+  // Text-bot-only category, same AUTO-by-default reasoning.
+  botKeyboardStyle: AUTO_PREFERENCE,
   style: "basic",
   theme: "auto",
   header: "minimal",
@@ -448,6 +651,12 @@ export const DEFAULT_PREFERENCES: ProjectPreferences = {
 };
 
 const CATEGORY_KEYS: PreferenceCategoryId[] = [
+  "kind",
+  "gameDimension",
+  "gameGenre",
+  "gameArtStyle",
+  "gameControls",
+  "botKeyboardStyle",
   "style",
   "theme",
   "header",
@@ -463,6 +672,40 @@ function findOption(
   const cat = PREFERENCES_CATALOG.find((c) => c.id === catId);
   if (!cat) return undefined;
   return cat.options.find((o) => o.id === optId);
+}
+
+/**
+ * Resolve a gating-key value, normalising AUTO to the category default so
+ * "Kind = AUTO" still gates Game-only categories off (defaults to App).
+ */
+function resolveGatingValue(
+  catId: PreferenceCategoryId,
+  prefs: ProjectPreferences,
+): string {
+  const v = prefs[catId];
+  if (!v || v === AUTO_PREFERENCE) {
+    return DEFAULT_PREFERENCES[catId];
+  }
+  return v;
+}
+
+/**
+ * True when this category's `appliesWhen` constraint (if any) is satisfied
+ * by the current selection. Used by both `buildPreferencesPrompt` and the
+ * frontend modal (mirrored in `mini_app/app.js`).
+ */
+export function isCategoryActive(
+  cat: PreferenceCategory,
+  prefs: ProjectPreferences,
+): boolean {
+  if (!cat.appliesWhen) return true;
+  for (const [keyRaw, allowedValues] of Object.entries(cat.appliesWhen)) {
+    if (!allowedValues || allowedValues.length === 0) continue;
+    const key = keyRaw as PreferenceCategoryId;
+    const actual = resolveGatingValue(key, prefs);
+    if (!allowedValues.includes(actual)) return false;
+  }
+  return true;
 }
 
 // Cache for `agent_knowledge/preferences/<cat>/<opt>.md`. Restart the
@@ -567,6 +810,10 @@ export function buildPreferencesPrompt(
   const sections: string[] = [];
   const autoCategories: string[] = [];
   for (const cat of PREFERENCES_CATALOG) {
+    // Skip categories whose gating doesn't match. e.g. with `kind = game`
+    // we don't want to spam the agent with bottom-menu / header / density
+    // rules — those would just confuse a Three.js single-file build.
+    if (!isCategoryActive(cat, safe)) continue;
     const value = safe[cat.id];
     if (value === AUTO_PREFERENCE) {
       autoCategories.push(cat.label);

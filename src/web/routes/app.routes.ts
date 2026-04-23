@@ -39,6 +39,16 @@ router.get("/:projectId/{*filePath}", async (req: Request, res: Response) => {
         res.type("html").send(html);
         return;
       }
+      // No frontend at all → check whether this is a Text Bot project
+      // (which is allowed not to have one) and serve a friendly fallback
+      // pointing the user at the bot in Telegram. The Mini App menu
+      // button is force-cleared by the configure_bot guard, so the only
+      // way to land here is via stale links / direct URLs.
+      const fallback = await maybeRenderTextBotFallback(projectId);
+      if (fallback) {
+        res.type("html").send(fallback);
+        return;
+      }
     }
     res.status(404).send("Not found");
     return;
@@ -150,6 +160,45 @@ async function injectSplash(projectId: string, htmlPath: string): Promise<string
     html += inject;
   }
   return html;
+}
+
+/**
+ * For Text Bot projects there is no `mini_app/` and therefore no
+ * `release/frontend/index.html`. If someone hits `/app/{projectId}/`
+ * anyway (stale link, BotFather indexing, manual paste), render a tiny
+ * "open the bot in Telegram" splash instead of a bare 404.
+ *
+ * Returns null when the project isn't a Text Bot — fall through to 404.
+ */
+async function maybeRenderTextBotFallback(projectId: string): Promise<string | null> {
+  try {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { preferences: true, botUsername: true, name: true },
+    });
+    if (!project) return null;
+    let kind: string | null = null;
+    try {
+      const prefs = project.preferences ? JSON.parse(project.preferences) : null;
+      kind = prefs?.kind ?? null;
+    } catch {}
+    if (kind !== "textBot") return null;
+    const safeName = (project.name || "Telegram bot").replace(/[<>"']/g, "");
+    const botLink = project.botUsername ? `https://t.me/${project.botUsername}` : null;
+    const cta = botLink
+      ? `<a href="${botLink}" style="display:inline-block;margin-top:24px;padding:14px 28px;background:#3390ec;color:#fff;border-radius:12px;font-weight:600;text-decoration:none">Open in Telegram</a>`
+      : `<div style="margin-top:24px;color:#71717a;font-size:13px">Bot is not linked yet.</div>`;
+    return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${safeName}</title></head>
+<body style="margin:0;background:#0F1011;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center">
+<div style="text-align:center;padding:32px;max-width:420px">
+<div style="font-size:64px;margin-bottom:16px">💬</div>
+<div style="font-size:22px;font-weight:700;margin-bottom:8px">${safeName}</div>
+<div style="font-size:14px;color:#a1a1aa;line-height:1.5">This is a chat bot, not a Mini App.<br>Open it in Telegram to start chatting.</div>
+${cta}
+</div></body></html>`;
+  } catch {
+    return null;
+  }
 }
 
 router.get("/:projectId", (req: Request, res: Response) => {

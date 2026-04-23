@@ -15,7 +15,7 @@ import { commitService } from "./commit.service";
 import { MODEL_PRICING } from "./billing.service";
 import { abortedProjects } from "../bot/processing";
 import { ConventionExtractor } from "./convention-extractor";
-import { parseProjectPreferences, buildPreferencesPrompt } from "./preferences.catalog";
+import { parseProjectPreferences, buildPreferencesPrompt, DEFAULT_PREFERENCES } from "./preferences.catalog";
 import { forceReloadProjectWs } from "../web/ws-manager";
 
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
@@ -799,12 +799,19 @@ ${langInstruction}`;
 
     let botToken = "";
     let qualityTier = 1;
+    // Load the project's preferences once so the configure_bot tool below can
+    // gate behaviour on `kind` (e.g. text-bot projects must NEVER ship a Mini
+    // App menu button — see preferences.kind === "textBot" guard inside the
+    // tool handler).
+    let runPrefs = { ...DEFAULT_PREFERENCES };
     try {
       const project = await projectService.getProject(projectId);
       if (project?.botTokenEncrypted) {
         botToken = decryptToken(project.botTokenEncrypted);
       }
       qualityTier = (project as any)?.qualityTier || 1;
+      const parsed = parseProjectPreferences((project as any)?.preferences ?? null);
+      if (parsed) runPrefs = parsed;
     } catch {}
 
     const tierConfig = QUALITY_TIERS[qualityTier] || QUALITY_TIERS[1];
@@ -1585,7 +1592,14 @@ The user will visually verify. If this was your final action, in your NEXT turn 
               const name = (args.name || "").toString().trim().substring(0, 64);
               const description = (args.description || "").toString().substring(0, 512);
               const shortDescription = (args.shortDescription || "").toString().substring(0, 120);
-              const menuButtonText = (args.menuButtonText || "Launch App").toString().substring(0, 32);
+              // Text Bot projects must NEVER expose a Mini App menu button —
+              // there's no `mini_app/` deployed for them, so a `web_app` button
+              // would 404 (or hit the textBot fallback page). Force-clear the
+              // menu button instead, regardless of what the agent passed in.
+              // The textBot.md rules also tell the agent to send `""`, but the
+              // platform is the source of truth here.
+              const isTextBot = runPrefs.kind === "textBot";
+              const menuButtonText = (args.menuButtonText ?? "Launch App").toString().substring(0, 32);
               const appUrl = `${config.baseUrl}/app/${projectId}/`;
               const callApi = async (method: string, params: any) => {
                 const resp = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {
@@ -1596,12 +1610,13 @@ The user will visually verify. If this was your final action, in your NEXT turn 
                 return { method, status: resp.status, body: await resp.text() };
               };
               try {
+                const menuButtonPayload = isTextBot
+                  ? { menu_button: { type: "default" as const } }
+                  : { menu_button: { type: "web_app" as const, text: menuButtonText, web_app: { url: appUrl } } };
                 const calls: Array<Promise<{ method: string; status: number; body: string }>> = [
                   callApi("setMyDescription", { description }),
                   callApi("setMyShortDescription", { short_description: shortDescription }),
-                  callApi("setChatMenuButton", {
-                    menu_button: { type: "web_app", text: menuButtonText, web_app: { url: appUrl } },
-                  }),
+                  callApi("setChatMenuButton", menuButtonPayload),
                 ];
                 if (name) {
                   calls.push(callApi("setMyName", { name }));
