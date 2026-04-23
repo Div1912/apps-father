@@ -154,6 +154,13 @@ export class ProjectService {
     });
   }
 
+  async updateProjectName(projectId: string, name: string) {
+    return prisma.project.update({
+      where: { id: projectId },
+      data: { name },
+    });
+  }
+
   async getProject(projectId: string) {
     return prisma.project.findUnique({ where: { id: projectId } });
   }
@@ -168,6 +175,15 @@ export class ProjectService {
   async getProjectByBotUserId(botUserId: number) {
     return prisma.project.findFirst({
       where: { botUserId: BigInt(botUserId) },
+    });
+  }
+
+  /** Returns the user's most-recently-updated project that has no bot linked yet.
+   *  Used by the managed_bot handler to link a newly-created bot to an already-built project. */
+  async getUnbottedProject(userId: number) {
+    return prisma.project.findFirst({
+      where: { userId, botTokenEncrypted: null },
+      orderBy: { updatedAt: "desc" },
     });
   }
 

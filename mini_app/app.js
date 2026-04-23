@@ -231,9 +231,27 @@ function getGradient(name) {
 }
 
 function getInitials(name) {
-  const parts = name.trim().split(/\s+/);
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-  return name.substring(0, 2).toUpperCase();
+  const parts = (name || '').trim().split(/\s+/);
+  let raw;
+  if (parts.length >= 2 && parts[0] && parts[1]) {
+    raw = (parts[0][0] + parts[1][0]).toUpperCase();
+  } else {
+    raw = (name || '').substring(0, 2).toUpperCase();
+  }
+  // CRITICAL: every caller drops this result into an HTML template string
+  // (avatar gradient div, admin user/project rows, etc.). If a user's
+  // firstName starts with HTML-significant chars like <, >, &, ", ' the
+  // raw initials break the parent <a> tag (browsers auto-close <a> when
+  // they encounter another <a>, and stray < eats the next attributes),
+  // so the row visibly collapses into just an avatar in the admin list.
+  // Escape here so callers can stay terse.
+  return raw.replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[ch]);
 }
 
 function avatarSvgDataUri(name) {
@@ -245,12 +263,16 @@ function avatarSvgDataUri(name) {
 }
 
 function userAvatarHtml(name, username) {
+  const safeName = name || 'User';
   if (username) {
-    const clean = username.replace(/^@/, '');
-    return `<img class="tm-row-pic tm-row-pic-user" src="https://t.me/i/userpic/320/${clean}.svg" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" style="object-fit:cover;"><div class="tm-row-pic tm-row-pic-user avatar-gradient" style="display:none;background:linear-gradient(135deg,${getGradient(name).join(',')})">${getInitials(name)}</div>`;
+    // Telegram usernames are constrained to [A-Za-z0-9_], but strip
+    // anything else just to be safe before injecting into the URL.
+    const clean = String(username).replace(/^@/, '').replace(/[^A-Za-z0-9_]/g, '');
+    const [g1, g2] = getGradient(safeName);
+    return `<img class="tm-row-pic tm-row-pic-user" src="https://t.me/i/userpic/320/${clean}.svg" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" style="object-fit:cover;"><div class="tm-row-pic tm-row-pic-user avatar-gradient" style="display:none;background:linear-gradient(135deg,${g1},${g2})">${getInitials(safeName)}</div>`;
   }
-  const [c1, c2] = getGradient(name);
-  return `<div class="tm-row-pic tm-row-pic-user avatar-gradient" style="background:linear-gradient(135deg,${c1},${c2})">${getInitials(name)}</div>`;
+  const [c1, c2] = getGradient(safeName);
+  return `<div class="tm-row-pic tm-row-pic-user avatar-gradient" style="background:linear-gradient(135deg,${c1},${c2})">${getInitials(safeName)}</div>`;
 }
 
 function statusLabel(status) {
@@ -436,68 +458,75 @@ function renderAppList(filter) {
 }
 
 // ── Create New App ──
+// New flow: create a project row immediately (no bot yet), then open the chat
+// so the user can describe their app and build it right away. The bot is
+// created and linked after the first build via the managed_bot event.
 
-let createPollTimer = null;
-
-function createNewApp() {
+async function createNewApp() {
   if (slots.used >= slots.total) {
     openSlotsFull();
     return;
   }
   const btn = document.getElementById('btn-create-app');
-  if (btn) {
-    const icon = btn.querySelector('.tm-icon');
-    if (icon) { icon.className = 'loader'; icon.style.cssText = 'width:20px;height:20px;margin-right:4px'; }
+  const icon = btn?.querySelector('.tm-icon');
+  if (icon) { icon.className = 'loader'; icon.style.cssText = 'width:20px;height:20px;margin-right:4px'; }
+  if (btn) btn.style.pointerEvents = 'none';
+
+  try {
+    const res = await fetch(`${API_BASE}/projects/create`, {
+      method: 'POST',
+      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      if (err.error === 'slot_limit') { openSlotsFull(); return; }
+      throw new Error('create failed');
+    }
+    const { projectId } = await res.json();
+    await loadProjects();
+    openChat(projectId);
+  } catch (err) {
+    showToast(t('error_generic') || 'Something went wrong', 'error');
+  } finally {
+    if (icon) { icon.className = 'tm-icon'; icon.style.cssText = ''; }
+    if (btn) btn.style.pointerEvents = '';
   }
-  const prevCount = projects.length;
-  // location.hostname (not .host) — drops port; we only ever care about the
-  // domain when picking the bot. Was previously using `=` (assignment!) which
-  // always evaluated truthy and routed everyone to the dev bot.
-  const isDev = location.hostname === "dev.apps-father.com";
-  const botUsername = isDev ? 'apps_father_dev_bot' : 'apps_father_bot';
-  tg?.openTelegramLink(`https://t.me/newbot/${botUsername}/username_bot`);
-  startCreatePolling(prevCount);
 }
 
-function startCreatePolling(prevCount) {
-  if (createPollTimer) clearInterval(createPollTimer);
+// ── Poll for bot linking after the "Create Bot" button is clicked ──
+// Replaces the old pollForNewApp (which waited for managed_bot to create the
+// project). Now this only runs while waiting for the user to link a bot to an
+// already-built project.
+let linkBotPollTimer = null;
 
-  const onVisible = async () => {
-    if (document.visibilityState !== 'visible') return;
-    document.removeEventListener('visibilitychange', onVisible);
-    pollForNewApp(prevCount);
-  };
-  document.addEventListener('visibilitychange', onVisible);
-
-  pollForNewApp(prevCount);
-}
-
-function pollForNewApp(prevCount) {
-  if (createPollTimer) clearInterval(createPollTimer);
+function startLinkBotPolling(projectId) {
+  if (linkBotPollTimer) clearInterval(linkBotPollTimer);
   let attempts = 0;
-  createPollTimer = setInterval(async () => {
+  linkBotPollTimer = setInterval(async () => {
     attempts++;
-    if (attempts > 60) {
-      clearInterval(createPollTimer);
-      createPollTimer = null;
+    if (attempts > 80) { // ~4 min
+      clearInterval(linkBotPollTimer);
+      linkBotPollTimer = null;
       return;
     }
     try {
       const res = await fetch(`${API_BASE}/projects`, { headers: apiHeaders() });
       if (!res.ok) return;
       const data = await res.json();
-      const newProjects = data.projects || data;
-      if (newProjects.length > prevCount) {
-        clearInterval(createPollTimer);
-        createPollTimer = null;
-        const oldIds = new Set(projects.map(p => p.id));
-        projects = newProjects;
-        slots = data.slots || { used: newProjects.length, total: slots.total };
-        renderAppList();
-        const newest = newProjects.find(p => !oldIds.has(p.id)) || newProjects[newProjects.length - 1];
-        if (newest) {
-          openChat(newest.id);
+      const updated = (data.projects || data).find(p => p.id === projectId);
+      if (updated?.botUsername) {
+        clearInterval(linkBotPollTimer);
+        linkBotPollTimer = null;
+        // Update local state so the header and app list reflect the new bot
+        projects = data.projects || data;
+        slots = data.slots || slots;
+        if (currentProject && currentProject.id === projectId) {
+          currentProject.botUsername = updated.botUsername;
+          document.getElementById('chat-app-status').textContent = `@${updated.botUsername}`;
         }
+        renderAppList();
+        // Remove the "Link your bot" card if still visible
+        document.getElementById('link-bot-card')?.remove();
       }
     } catch {}
   }, 3000);
@@ -1415,6 +1444,7 @@ function handleWSMessage(data) {
         if (typeof data.costUsd === 'number') {
           html += `<div class="chat-progress-cost">${t('chat_cost')}: $${data.costUsd.toFixed(4)}${typeof data.balance === 'number' ? ` · ${t('chat_balance')}: $${data.balance.toFixed(2)}` : ''}</div>`;
         }
+        html += linkBotCardHtml(chatProjectId);
         el.innerHTML = html;
         scrollToBottom();
       };
@@ -1427,6 +1457,24 @@ function handleWSMessage(data) {
     }
     return;
   }
+}
+
+// Returns the HTML for the "Link your bot" card if the current project has no
+// bot yet. Injected into result cards after every successful build.
+function linkBotCardHtml(projectId) {
+  if (currentProject?.botUsername) return '';
+  const isDev = location.hostname === 'dev.apps-father.com';
+  const fatherBot = isDev ? 'apps_father_dev_bot' : 'apps_father_bot';
+  const newbotUrl = `https://t.me/newbot/${fatherBot}/username_bot`;
+  // Escape single quotes in projectId (UUIDs are safe, but be defensive)
+  const safeId = (projectId || '').replace(/'/g, '');
+  return `<div class="link-bot-card" id="link-bot-card">
+    <div class="link-bot-title">${t('link_bot_title')}</div>
+    <div class="link-bot-sub">${t('link_bot_sub')}</div>
+    <button class="link-bot-btn" onclick="tg?.openTelegramLink('${newbotUrl}'); startLinkBotPolling('${safeId}')">
+      ${t('link_bot_btn')}
+    </button>
+  </div>`;
 }
 
 // Smoothly drives the progress bubble from its current % up to 100%, ticks
@@ -1646,6 +1694,7 @@ function appendMessage(msg, animate = true) {
     if (typeof msg.costUsd === 'number') {
       html += `<div class="chat-progress-cost">Cost: $${msg.costUsd.toFixed(4)}${typeof msg.balance === 'number' ? ` · Balance: $${msg.balance.toFixed(2)}` : ''}</div>`;
     }
+    html += linkBotCardHtml(msg.metadata?.projectId || chatProjectId);
     html += `<div class="chat-bubble-time">${timeStr(msg.timestamp)}</div>`;
     el.innerHTML = html;
   } else if (msg.type === 'plan') {
@@ -4239,6 +4288,132 @@ function initEditPhoto() {
     avatarEl.style.backgroundSize = 'cover';
     avatarEl.style.backgroundPosition = 'center';
   });
+
+  const aiBtn = document.getElementById('btn-generate-avatar');
+  if (aiBtn) {
+    aiBtn.addEventListener('click', () => generateAiAvatar());
+  }
+}
+
+// ── Generate Avatar with AI ──
+// Two-step UX matching the backend split:
+//   1. POST /generate-avatar — runs ~30 s and charges $0.10 on success.
+//   2. After the user confirms, POST /apply-avatar — uploads to Telegram.
+async function generateAiAvatar() {
+  if (!currentProject) return;
+  if (!currentProject.botUsername) {
+    showToast(t('ai_avatar_no_bot') || 'Link a bot first to set its avatar.', 'info');
+    return;
+  }
+
+  const btn = document.getElementById('btn-generate-avatar');
+  if (!btn || btn.disabled) return;
+  const originalHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.classList.add('is-loading');
+  btn.innerHTML = `<span class="ai-avatar-spinner"></span><span class="ai-avatar-btn-text">${t('ai_avatar_generating') || 'Generating…'}</span>`;
+  tg?.HapticFeedback?.impactOccurred?.('light');
+
+  try {
+    const res = await fetch(`${API_BASE}/projects/${currentProject.id}/generate-avatar`, {
+      method: 'POST',
+      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (data.error === 'insufficient_balance') {
+        showToast(t('ai_avatar_low_balance') || 'Insufficient balance for AI avatar ($0.10)', 'error');
+      } else {
+        showToast(data.error || t('ai_avatar_failed') || 'Avatar generation failed', 'error');
+      }
+      return;
+    }
+
+    const imageUrl = data.imageUrl;
+    if (!imageUrl) {
+      showToast(t('ai_avatar_failed') || 'Avatar generation failed', 'error');
+      return;
+    }
+
+    // Refresh balance immediately so the user sees the $0.10 deduction.
+    if (typeof data.newBalance === 'number') {
+      const balEl = document.getElementById('balance-amount');
+      if (balEl) balEl.textContent = `$${Number(data.newBalance).toFixed(2)}`;
+    }
+
+    showAiAvatarPreview(imageUrl);
+  } catch (err) {
+    showToast(t('ai_avatar_failed') || 'Avatar generation failed', 'error');
+    console.error('[AI Avatar] generation error:', err);
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove('is-loading');
+    btn.innerHTML = originalHtml;
+  }
+}
+
+// Show the freshly-generated image and ask the user to confirm replacement.
+function showAiAvatarPreview(imageUrl) {
+  // Preload — gives the confirm dialog instant feedback when the user accepts.
+  const img = new Image();
+  img.src = imageUrl;
+
+  // Update the preview avatar so the user sees what they'd get.
+  const avatarEl = document.getElementById('edit-avatar');
+  const previousBg = avatarEl?.style.backgroundImage || '';
+  if (avatarEl) {
+    avatarEl.textContent = '';
+    avatarEl.style.backgroundImage = `url(${imageUrl})`;
+    avatarEl.style.backgroundSize = 'cover';
+    avatarEl.style.backgroundPosition = 'center';
+  }
+
+  const message = t('ai_avatar_confirm') || 'Do you want to replace the actual avatar for this bot?';
+  const onAnswer = (ok) => {
+    if (!ok) {
+      // Revert preview if the user declined.
+      if (avatarEl) avatarEl.style.backgroundImage = previousBg;
+      return;
+    }
+    applyAiAvatar(imageUrl, previousBg);
+  };
+
+  if (tg?.showConfirm) {
+    tg.showConfirm(message, onAnswer);
+  } else {
+    onAnswer(window.confirm(message));
+  }
+}
+
+async function applyAiAvatar(imageUrl, previousBg) {
+  if (!currentProject) return;
+  tg?.MainButton?.showProgress?.();
+  try {
+    const res = await fetch(`${API_BASE}/projects/${currentProject.id}/apply-avatar`, {
+      method: 'POST',
+      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ imageUrl }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      const avatarEl = document.getElementById('edit-avatar');
+      if (avatarEl && previousBg !== undefined) avatarEl.style.backgroundImage = previousBg;
+      showToast(data.error || t('ai_avatar_apply_failed') || 'Failed to set avatar', 'error');
+      return;
+    }
+    showToast(t('ai_avatar_applied') || 'Avatar updated!', 'success');
+    // Reload list so the new avatar shows up everywhere; pulls a fresh URL.
+    await loadProjects();
+    const fresh = projects.find(p => p.id === currentProject.id);
+    if (fresh) {
+      currentProject.avatarUrl = fresh.avatarUrl;
+    }
+  } catch (err) {
+    console.error('[AI Avatar] apply error:', err);
+    showToast(t('ai_avatar_apply_failed') || 'Failed to set avatar', 'error');
+  } finally {
+    tg?.MainButton?.hideProgress?.();
+  }
 }
 
 // ── Token actions ──
@@ -4851,9 +5026,9 @@ function admSourceCard(block) {
 
       <div class="adm-src-funnel">
         <div class="adm-funnel-row">
-          <div class="adm-funnel-label">Created Bot</div>
-          <div class="adm-funnel-bar"><div class="adm-funnel-fill bot" style="width:${funnelPct(block.createdBot)}%"></div></div>
-          <div class="adm-funnel-val">${block.createdBot} <span>·</span> ${funnelPct(block.createdBot)}%</div>
+          <div class="adm-funnel-label">Created App</div>
+          <div class="adm-funnel-bar"><div class="adm-funnel-fill bot" style="width:${funnelPct(block.createdApp)}%"></div></div>
+          <div class="adm-funnel-val">${block.createdApp} <span>·</span> ${funnelPct(block.createdApp)}%</div>
         </div>
         <div class="adm-funnel-row">
           <div class="adm-funnel-label">Created Plan</div>
@@ -4861,9 +5036,9 @@ function admSourceCard(block) {
           <div class="adm-funnel-val">${block.createdPlan} <span>·</span> ${funnelPct(block.createdPlan)}%</div>
         </div>
         <div class="adm-funnel-row">
-          <div class="adm-funnel-label">Created App</div>
-          <div class="adm-funnel-bar"><div class="adm-funnel-fill app" style="width:${funnelPct(block.createdApp)}%"></div></div>
-          <div class="adm-funnel-val">${block.createdApp} <span>·</span> ${funnelPct(block.createdApp)}%</div>
+          <div class="adm-funnel-label">Built App</div>
+          <div class="adm-funnel-bar"><div class="adm-funnel-fill app" style="width:${funnelPct(block.builtApp)}%"></div></div>
+          <div class="adm-funnel-val">${block.builtApp} <span>·</span> ${funnelPct(block.builtApp)}%</div>
         </div>
         <div class="adm-funnel-row">
           <div class="adm-funnel-label">Paying</div>
@@ -5098,9 +5273,9 @@ function admRenderSourceUsers(data) {
     const name = u.username || u.firstName || 'User ' + u.id;
     const avatar = userAvatarHtml(name, u.username);
     const flags = [
-      u.hasBot  ? 'bot'  : null,
-      u.hasPlan ? 'plan' : null,
-      u.hasApp  ? 'app'  : null,
+      u.hasApp   ? 'app'   : null,
+      u.hasPlan  ? 'plan'  : null,
+      u.hasBuilt ? 'built' : null,
       u.revenue > 0 ? `$${u.revenue.toFixed(2)}` : null,
     ].filter(Boolean).join(' · ') || 'no activity';
     html += `<a class="tm-row tm-row-link" data-user-id="${u.id}">` +

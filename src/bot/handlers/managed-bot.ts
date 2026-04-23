@@ -7,6 +7,38 @@ import { trackEvent } from "../../services/analytics.service";
 import { EMOJI, ce } from "../emoji";
 import { Lang, t } from "../i18n";
 
+/** Directly configure bot profile (description, short description, menu button)
+ *  using the Telegram Bot API.  Called after linking a bot to an already-built
+ *  project so the agent doesn't need to re-run configure_bot. */
+async function configureBotProfile(botToken: string, appUrl: string): Promise<void> {
+  const base = `https://api.telegram.org/bot${botToken}`;
+  const description = "Telegram Mini App powered by Apps Father";
+  const shortDescription = "Open the app below";
+  await Promise.all([
+    fetch(`${base}/setMyDescription`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description }),
+    }),
+    fetch(`${base}/setMyShortDescription`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ short_description: shortDescription }),
+    }),
+    fetch(`${base}/setChatMenuButton`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        menu_button: {
+          type: "web_app",
+          text: "Open App",
+          web_app: { url: appUrl },
+        },
+      }),
+    }),
+  ]);
+}
+
 const processingBots = new Set<number>();
 
 export function registerManagedBotHandlers(bot: Bot<BotContext>) {
@@ -58,15 +90,28 @@ async function handleManagedBotAsync(bot: Bot<BotContext>, creator: any, newBot:
       return;
     }
 
-    const canCreate = await projectService.canCreateApp(user.id);
-    if (!canCreate) {
-      const { used, total } = await projectService.getUserSlotInfo(user.id);
-      await sendToUser(
-        `${ce(EMOJI.indicator_error)} <b>${t(lang, "managed_bot_slot_limit", { used, total })}</b>\n\n` +
-        t(lang, "managed_bot_slot_body"),
-        { parse_mode: "HTML" }
-      );
-      return;
+    // Look for an existing project the user already created (new flow: project
+    // exists before bot is linked). If found, link this bot to it. Otherwise
+    // we need a free slot to create a fresh project.
+    const unbotted = await projectService.getUnbottedProject(user.id);
+
+    // Slot limit only applies when we'd CREATE a new project. Linking a bot
+    // to an existing botless project does not consume a new slot — the slot
+    // was already counted when the project was created. Without this guard,
+    // a user with their last slot occupied by a botless project gets the
+    // "slot limit reached" error during bot creation and the bot is never
+    // linked to their just-built app (bug).
+    if (!unbotted) {
+      const canCreate = await projectService.canCreateApp(user.id);
+      if (!canCreate) {
+        const { used, total } = await projectService.getUserSlotInfo(user.id);
+        await sendToUser(
+          `${ce(EMOJI.indicator_error)} <b>${t(lang, "managed_bot_slot_limit", { used, total })}</b>\n\n` +
+          t(lang, "managed_bot_slot_body"),
+          { parse_mode: "HTML" }
+        );
+        return;
+      }
     }
 
     let botToken: string;
@@ -84,8 +129,19 @@ async function handleManagedBotAsync(bot: Bot<BotContext>, creator: any, newBot:
       return;
     }
 
-    const projectName = newBot.first_name || newBot.username || "New Project";
-    const project = await projectService.createProject(user.id, projectName);
+    let project: { id: string; description: string | null };
+    let isExisting = false;
+
+    if (unbotted) {
+      console.log(`[ManagedBot] Linking bot @${newBot.username} to existing project ${unbotted.id}`);
+      project = unbotted;
+      isExisting = true;
+    } else {
+      const projectName = newBot.first_name || newBot.username || "New Project";
+      project = await projectService.createProject(user.id, projectName);
+      console.log(`[ManagedBot] Created new project ${project.id} for bot @${newBot.username}`);
+    }
+
     await projectService.setProjectBot(
       project.id,
       newBot.id,
@@ -95,9 +151,17 @@ async function handleManagedBotAsync(bot: Bot<BotContext>, creator: any, newBot:
 
     void trackEvent(creator.id, "app_created", {
       project_id: project.id,
-      project_name: projectName,
       bot_username: newBot.username || "",
     });
+
+    // If the app is already built, configure the bot profile now (no need to
+    // wait for the agent to call configure_bot during the next build).
+    if (isExisting) {
+      const appUrl = `${config.domain.startsWith("dev.") ? "https://dev.apps-father.com" : "https://apps-father.com"}/app/${project.id}/`;
+      void configureBotProfile(botToken, appUrl).catch(err =>
+        console.error(`[ManagedBot] configure_bot failed for @${newBot.username}:`, err)
+      );
+    }
 
     // sendOwnerWelcome=true: the moment the webhook is live, push the
     // "Good job, bot created" card directly to the owner. Mobile Telegram

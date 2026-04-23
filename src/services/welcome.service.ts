@@ -42,20 +42,32 @@ export async function sendBotWelcome(
     });
     if (!r.ok) {
       const txt = await r.text().catch(() => "");
-      // Fall back to text-only welcome if photo fails (e.g. wrong content-type)
-      if (txt.includes("PHOTO") || txt.includes("photo")) {
-        await fetch(`${TG_API}/sendMessage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: telegramId,
-            text: caption,
-            parse_mode: "HTML",
-            reply_markup: replyMarkup,
-          }),
-        }).catch(() => {});
-      } else {
-        console.warn(`[Welcome] sendPhoto failed for ${telegramId}: ${r.status} ${txt}`);
+      // 403 = user hasn't started the bot yet (or blocked it). Nothing we can
+      // do — they'll see the welcome the next time they /start the bot.
+      if (r.status === 403) {
+        console.log(`[Welcome] sendPhoto skipped for ${telegramId}: ${txt}`);
+        return;
+      }
+      // Any other failure (bad URL, invalid photo dims, wrong content-type,
+      // chat_not_found backed by retry, etc.) → fall back to a plain
+      // sendMessage so the user still sees the welcome card. The previous
+      // "PHOTO/photo in error text" gate missed errors like
+      // "failed to get HTTP URL content" and the user got no message at all.
+      console.warn(`[Welcome] sendPhoto failed for ${telegramId}: ${r.status} ${txt} — falling back to text`);
+      const fallback = await fetch(`${TG_API}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: telegramId,
+          text: caption,
+          parse_mode: "HTML",
+          reply_markup: replyMarkup,
+          link_preview_options: { is_disabled: true },
+        }),
+      }).catch(() => null);
+      if (fallback && !fallback.ok) {
+        const ftxt = await fallback.text().catch(() => "");
+        console.warn(`[Welcome] sendMessage fallback failed for ${telegramId}: ${fallback.status} ${ftxt}`);
       }
     }
   } catch (err) {

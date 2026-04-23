@@ -53,7 +53,12 @@ export function createWebServer() {
   app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-  app.use("/assets", express.static(path.join(__dirname, "..", "assets")));
+  // /assets serves files from the repo-root /assets folder (logos, welcome
+  // image, etc.). __dirname at runtime is dist/web, so we go ../.. to land
+  // at the repo root. The previous "..", "assets" resolved to dist/assets
+  // (which doesn't exist) and any URL fetch — including Telegram's
+  // sendPhoto for the /start welcome card — silently 404'd.
+  app.use("/assets", express.static(path.join(__dirname, "..", "..", "assets")));
 
   // ── Landing page (apps-father.com) ──
   // Static marketing site served at the root. Files live in /landing at the
@@ -401,6 +406,25 @@ export function createWebServer() {
     } catch (err: any) {
       console.error("[MiniApp API] Init error:", err);
       res.status(500).json({ error: "Internal error" });
+    }
+  });
+
+  // Create a new project without a bot — the bot is linked later, after the
+  // first build, via the managed_bot event. This replaces the old flow where
+  // the user had to go through BotFather before describing their app.
+  app.post("/telegram-mini-app/api/projects/create", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const canCreate = await projectService.canCreateApp(user.id);
+      if (!canCreate) { res.status(403).json({ error: "slot_limit" }); return; }
+      const project = await projectService.createProject(user.id, "New App");
+      console.log(`[MiniApp] Created botless project ${project.id} for user ${user.id}`);
+      res.json({ projectId: project.id });
+    } catch (err) {
+      console.error("[MiniApp] Create project error:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
@@ -2146,6 +2170,140 @@ export function createWebServer() {
     }
   });
 
+  // ── AI Avatar generation (Edit Info → "Generate Avatar with AI") ──
+  // Two-step UX:
+  //   1. POST /generate-avatar → returns { imageUrl } (charges $0.10).
+  //   2. POST /apply-avatar    → uploads the chosen URL to Telegram as the
+  //      bot's profile photo. Split so the user can confirm before replacing.
+  const AVATAR_GEN_PRICE = 0.10;
+
+  app.post("/telegram-mini-app/api/projects/:projectId/generate-avatar", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const projectId = req.params.projectId as string;
+      const project = await projectService.getProject(projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      const balance = await billingService.getUserBalance(user.id);
+      if (balance < AVATAR_GEN_PRICE) {
+        res.status(402).json({ error: "insufficient_balance", required: AVATAR_GEN_PRICE, balance });
+        return;
+      }
+
+      const { generateAvatarUrl } = await import("../services/avatar-generator.service");
+      const { imageUrl, prompt } = await generateAvatarUrl(
+        project.description || project.name || "",
+        project.name || undefined,
+      );
+
+      // Charge only on success — failures (timeout/upstream error) stay free
+      // for the user. Use a transaction + UsageLog so admin views show the
+      // spend alongside other project costs.
+      const result = await prisma.$transaction(async (tx) => {
+        await tx.usageLog.create({
+          data: {
+            userId: user.id,
+            projectId,
+            inputTokens: 0,
+            outputTokens: 0,
+            costUsd: new Decimal(AVATAR_GEN_PRICE.toFixed(4)),
+            operation: "avatar_generation",
+          },
+        });
+        const updated = await tx.user.update({
+          where: { id: user.id },
+          data: { balance: { decrement: new Decimal(AVATAR_GEN_PRICE.toFixed(4)) } },
+        });
+        await tx.project.update({
+          where: { id: projectId },
+          data: { totalCostUsd: { increment: new Decimal(AVATAR_GEN_PRICE.toFixed(4)) } },
+        });
+        return { newBalance: Number(updated.balance) };
+      });
+
+      void trackEvent(auth.telegramId!, "avatar_generated", {
+        project_id: projectId,
+        cost: AVATAR_GEN_PRICE,
+      });
+
+      res.json({
+        imageUrl,
+        prompt,
+        cost: AVATAR_GEN_PRICE,
+        newBalance: result.newBalance,
+      });
+    } catch (err: any) {
+      console.error("[MiniApp API] Avatar generation error:", err);
+      const msg = err?.message || "generation_failed";
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  app.post("/telegram-mini-app/api/projects/:projectId/apply-avatar", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const projectId = req.params.projectId as string;
+      const project = await projectService.getProject(projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+      if (!project.botTokenEncrypted) {
+        res.status(400).json({ error: "no_bot" });
+        return;
+      }
+
+      const { imageUrl } = req.body as { imageUrl?: string };
+      if (!imageUrl || typeof imageUrl !== "string") {
+        res.status(400).json({ error: "imageUrl required" });
+        return;
+      }
+      // Only allow URLs from our known image provider — guards against using
+      // this endpoint as an arbitrary fetch proxy.
+      if (!/^https:\/\/cdn\.apipass\.dev\//i.test(imageUrl)) {
+        res.status(400).json({ error: "invalid_image_source" });
+        return;
+      }
+
+      const token = decryptToken(project.botTokenEncrypted);
+
+      const imgRes = await fetch(imageUrl);
+      if (!imgRes.ok) {
+        res.status(502).json({ error: `image_fetch_failed_${imgRes.status}` });
+        return;
+      }
+      const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
+      const blob = new Blob([imgBuffer], { type: "image/jpeg" });
+
+      const formData = new (globalThis as any).FormData();
+      formData.set("photo", JSON.stringify({ type: "static", photo: "attach://photo_file" }));
+      formData.set("photo_file", blob, "avatar.jpg");
+
+      const tgRes = await fetch(`https://api.telegram.org/bot${token}/setMyProfilePhoto`, {
+        method: "POST",
+        body: formData,
+      });
+      const tgData = (await tgRes.json()) as any;
+      if (!tgData.ok) {
+        res.status(502).json({ error: tgData.description || "telegram_set_photo_failed" });
+        return;
+      }
+
+      avatarCache.delete(projectId);
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error("[MiniApp API] Apply avatar error:", err);
+      res.status(500).json({ error: err?.message || "Internal server error" });
+    }
+  });
+
   // ── Features API ──
 
   app.get("/telegram-mini-app/api/features/:projectId", async (req, res) => {
@@ -2388,14 +2546,23 @@ export function createWebServer() {
       const fromDate = parseIso(req.query.from);
       const toDate = parseIso(req.query.to);
 
-      // One pass: user-level aggregate (cheap on admin scale)
+      // One pass: user-level aggregate (cheap on admin scale).
+      //
+      // Funnel reflects the new "create-project-first" flow (project is
+      // created BEFORE the bot is linked):
+      //   has_app   — user has any project at all (was "has_bot" before).
+      //   has_plan  — at least one project has a plan generated.
+      //   has_built — at least one project finished a build (deployed/released).
+      //
+      // Old name "has_bot" no longer makes sense for the funnel because most
+      // projects start botless and only get a bot after the first build.
       const userAgg = await prisma.$queryRawUnsafe<Array<{
         id: number;
         utm_source: string | null;
         referred_by: bigint | null;
-        has_bot: boolean;
-        has_plan: boolean;
         has_app: boolean;
+        has_plan: boolean;
+        has_built: boolean;
         revenue: any;
       }>>(`
         SELECT
@@ -2404,8 +2571,8 @@ export function createWebServer() {
           u.referred_by,
           EXISTS (
             SELECT 1 FROM projects p
-            WHERE p.user_id = u.id AND p.bot_username IS NOT NULL
-          ) AS has_bot,
+            WHERE p.user_id = u.id
+          ) AS has_app,
           EXISTS (
             SELECT 1 FROM projects p
             WHERE p.user_id = u.id AND p.plan IS NOT NULL
@@ -2413,7 +2580,7 @@ export function createWebServer() {
           EXISTS (
             SELECT 1 FROM projects p
             WHERE p.user_id = u.id AND p.status IN ('deployed', 'released')
-          ) AS has_app,
+          ) AS has_built,
           COALESCE((
             SELECT SUM(pm.amount_usd) FROM payments pm
             WHERE pm.user_id = u.id AND pm.status = 'confirmed'
@@ -2424,17 +2591,17 @@ export function createWebServer() {
       `, fromDate, toDate);
 
       type Metrics = {
-        users: number; createdBot: number; createdPlan: number; createdApp: number;
+        users: number; createdApp: number; createdPlan: number; builtApp: number;
         payingUsers: number; revenue: number;
       };
       const emptyMetrics = (): Metrics => ({
-        users: 0, createdBot: 0, createdPlan: 0, createdApp: 0, payingUsers: 0, revenue: 0,
+        users: 0, createdApp: 0, createdPlan: 0, builtApp: 0, payingUsers: 0, revenue: 0,
       });
       const addUser = (m: Metrics, r: (typeof userAgg)[number]) => {
         m.users++;
-        if (r.has_bot) m.createdBot++;
-        if (r.has_plan) m.createdPlan++;
         if (r.has_app) m.createdApp++;
+        if (r.has_plan) m.createdPlan++;
+        if (r.has_built) m.builtApp++;
         const rev = Number(r.revenue);
         if (rev > 0) m.payingUsers++;
         m.revenue += rev;
@@ -2616,25 +2783,26 @@ export function createWebServer() {
       });
 
       // Funnel + revenue per user (matches /stats/sources columns so the
-      // drill-down feels consistent with the parent card).
+      // drill-down feels consistent with the parent card). Same renaming as
+      // /stats/sources: hasApp = "has any project", hasBuilt = "deployed/released".
       const userIds = users.map(u => u.id);
-      let funnels = new Map<number, { hasBot: boolean; hasPlan: boolean; hasApp: boolean; revenue: number }>();
+      let funnels = new Map<number, { hasApp: boolean; hasPlan: boolean; hasBuilt: boolean; revenue: number }>();
       if (userIds.length > 0) {
         const rows = await prisma.$queryRawUnsafe<Array<{
-          id: number; has_bot: boolean; has_plan: boolean; has_app: boolean; revenue: any;
+          id: number; has_app: boolean; has_plan: boolean; has_built: boolean; revenue: any;
         }>>(`
           SELECT
             u.id,
-            EXISTS (SELECT 1 FROM projects p WHERE p.user_id = u.id AND p.bot_username IS NOT NULL) AS has_bot,
+            EXISTS (SELECT 1 FROM projects p WHERE p.user_id = u.id)                                AS has_app,
             EXISTS (SELECT 1 FROM projects p WHERE p.user_id = u.id AND p.plan IS NOT NULL)        AS has_plan,
-            EXISTS (SELECT 1 FROM projects p WHERE p.user_id = u.id AND p.status IN ('deployed','released')) AS has_app,
+            EXISTS (SELECT 1 FROM projects p WHERE p.user_id = u.id AND p.status IN ('deployed','released')) AS has_built,
             COALESCE((SELECT SUM(pm.amount_usd) FROM payments pm WHERE pm.user_id = u.id AND pm.status = 'confirmed'), 0) AS revenue
           FROM users u
           WHERE u.id = ANY($1::int[])
         `, userIds);
         for (const r of rows) {
           funnels.set(r.id, {
-            hasBot: r.has_bot, hasPlan: r.has_plan, hasApp: r.has_app,
+            hasApp: r.has_app, hasPlan: r.has_plan, hasBuilt: r.has_built,
             revenue: Number(r.revenue),
           });
         }
@@ -2660,9 +2828,9 @@ export function createWebServer() {
             createdAt: u.createdAt,
             utmSource: u.utmSource,
             referredBy: u.referredBy?.toString() || null,
-            hasBot: f?.hasBot ?? false,
-            hasPlan: f?.hasPlan ?? false,
             hasApp: f?.hasApp ?? false,
+            hasPlan: f?.hasPlan ?? false,
+            hasBuilt: f?.hasBuilt ?? false,
             revenue: f?.revenue ?? 0,
           };
         }),
@@ -3008,6 +3176,46 @@ export function createWebServer() {
       await prisma.voucher.delete({ where: { id } });
       res.json({ ok: true });
     } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ── Telegram deep-link redirect ──────────────────────────────────────────
+  // GET /redirect/create?startapp=<param>
+  //   → 302 Location: tg://resolve?domain=apps_father_bot&appname=app&startapp=<param>
+  //   + <meta http-equiv="refresh"> fallback for browsers that don't honour 302
+  //     to a non-http scheme.
+  //
+  // The route is intentionally unauthenticated — it's meant to be the
+  // landing target for ad campaigns, QR codes, and short links where the
+  // user isn't yet in a Telegram context.
+  app.get("/redirect/create", (req, res) => {
+    const BOT  = config.domain.startsWith("dev.") ? "apps_father_dev_bot" : "apps_father_bot";
+    const APP  = "app";
+
+    // Sanitise: Telegram only accepts A-Z a-z 0-9 _ - (max 64 chars) for startapp.
+    const raw = typeof req.query.startapp === "string" ? req.query.startapp : "";
+    const sa  = raw.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
+
+    const tgUrl = sa
+      ? `tg://resolve?domain=${BOT}&appname=${APP}&startapp=${encodeURIComponent(sa)}`
+      : `tg://resolve?domain=${BOT}&appname=${APP}`;
+
+    const displayUrl = tgUrl.replace(/&/g, "&amp;");
+
+    res.setHeader("Cache-Control", "no-cache, private");
+    res.setHeader("Location", tgUrl);
+    res.status(302).send(
+      `<!DOCTYPE html>\n` +
+      `<html>\n` +
+      `<head>\n` +
+      `  <meta charset="UTF-8" />\n` +
+      `  <meta http-equiv="refresh" content="0;url='${displayUrl}'" />\n` +
+      `  <title>Redirecting to Apps Father</title>\n` +
+      `</head>\n` +
+      `<body>\n` +
+      `  Redirecting to <a href="${displayUrl}">${displayUrl}</a>.\n` +
+      `</body>\n` +
+      `</html>`,
+    );
   });
 
   // Serve index.html with OpenPanel clientId injected as data attribute.

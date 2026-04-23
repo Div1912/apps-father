@@ -31,6 +31,11 @@ const I18N = {
     topup_stars: "Telegram Stars",
     topup_note: "Your balance will be credited after payment confirmation.",
 
+    // Link your bot (shown after first build when no bot is linked yet)
+    link_bot_title: "Your app is ready! Give it a Telegram bot.",
+    link_bot_sub: "Create a bot in BotFather — Apps Father will connect it automatically.",
+    link_bot_btn: "Create Bot",
+
     // Slots full
     slots_full_title: "App Slots Full",
 
@@ -167,6 +172,7 @@ const I18N = {
 
     // Edit info
     edit_set_photo: "Set New Photo",
+    edit_generate_avatar: "Generate Avatar with AI",
     edit_info: "Info",
     edit_bot_name: "Bot Name",
     edit_about: "About (Optional)",
@@ -175,6 +181,15 @@ const I18N = {
     edit_welcome_placeholder: "Enter bot description",
     edit_welcome_help: "People will see the description when they open a chat with your bot, in a block titled 'What can this bot do?'.",
     edit_update: "Update",
+
+    // AI avatar
+    ai_avatar_generating: "Generating…",
+    ai_avatar_confirm: "Do you want to replace the actual avatar for this bot?",
+    ai_avatar_low_balance: "Insufficient balance for AI avatar ($0.10)",
+    ai_avatar_failed: "Avatar generation failed. Please try again.",
+    ai_avatar_apply_failed: "Failed to set the new avatar. Please try again.",
+    ai_avatar_applied: "Avatar updated!",
+    ai_avatar_no_bot: "Link a bot first to set its avatar.",
 
     // Transfer
     transfer_title: "Transfer Ownership",
@@ -380,6 +395,10 @@ const I18N = {
     topup_stars: "Telegram Stars",
     topup_note: "Баланс будет зачислен после подтверждения платежа.",
 
+    link_bot_title: "Приложение готово! Привяжите Telegram бота.",
+    link_bot_sub: "Создайте бота в BotFather — Apps Father подключит его автоматически.",
+    link_bot_btn: "Создать бота",
+
     slots_full_title: "Слоты заполнены",
 
     referral_title: "Реферальная программа",
@@ -506,6 +525,7 @@ const I18N = {
     quality_subtitle: "Выберите качество ИИ-модели для сборки и обновления",
 
     edit_set_photo: "Установить фото",
+    edit_generate_avatar: "Сгенерировать аватар (ИИ)",
     edit_info: "Информация",
     edit_bot_name: "Имя бота",
     edit_about: "О боте (необязательно)",
@@ -513,6 +533,14 @@ const I18N = {
     edit_welcome: "Приветственное сообщение",
     edit_welcome_placeholder: "Введите описание бота",
     edit_welcome_help: "Это описание увидят при открытии чата с ботом в блоке «Что может этот бот?».",
+
+    ai_avatar_generating: "Генерация…",
+    ai_avatar_confirm: "Заменить текущий аватар бота на новый?",
+    ai_avatar_low_balance: "Недостаточно средств на ИИ-аватар ($0.10)",
+    ai_avatar_failed: "Не удалось сгенерировать аватар. Попробуйте ещё раз.",
+    ai_avatar_apply_failed: "Не удалось установить новый аватар. Попробуйте ещё раз.",
+    ai_avatar_applied: "Аватар обновлён!",
+    ai_avatar_no_bot: "Сначала привяжите бота, чтобы задать аватар.",
     edit_update: "Сохранить",
 
     transfer_title: "Передача владения",
@@ -713,6 +741,10 @@ const I18N = {
     topup_stars: "Telegram Stars",
     topup_note: "Баланс буде зараховано після підтвердження платежу.",
 
+    link_bot_title: "Застосунок готовий! Прив'яжіть Telegram бота.",
+    link_bot_sub: "Створіть бота в BotFather — Apps Father підключить його автоматично.",
+    link_bot_btn: "Створити бота",
+
     slots_full_title: "Слоти заповнені",
 
     referral_title: "Реферальна програма",
@@ -839,6 +871,7 @@ const I18N = {
     quality_subtitle: "Оберіть якість ШІ-моделі для збірки та оновлення",
 
     edit_set_photo: "Встановити фото",
+    edit_generate_avatar: "Згенерувати аватар (ШІ)",
     edit_info: "Інформація",
     edit_bot_name: "Ім'я бота",
     edit_about: "Про бота (необов'язково)",
@@ -847,6 +880,14 @@ const I18N = {
     edit_welcome_placeholder: "Введіть опис бота",
     edit_welcome_help: "Цей опис побачать при відкритті чату з ботом у блоці «Що може цей бот?».",
     edit_update: "Зберегти",
+
+    ai_avatar_generating: "Генерація…",
+    ai_avatar_confirm: "Замінити поточний аватар бота на новий?",
+    ai_avatar_low_balance: "Недостатньо коштів на ШІ-аватар ($0.10)",
+    ai_avatar_failed: "Не вдалося згенерувати аватар. Спробуйте ще раз.",
+    ai_avatar_apply_failed: "Не вдалося встановити новий аватар. Спробуйте ще раз.",
+    ai_avatar_applied: "Аватар оновлено!",
+    ai_avatar_no_bot: "Спочатку прив'яжіть бота, щоб задати аватар.",
 
     transfer_title: "Передача власності",
     transfer_desc: "Передайте додаток іншому користувачу Apps Father. Новий власник має бути зареєстрований.",

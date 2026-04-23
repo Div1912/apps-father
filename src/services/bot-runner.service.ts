@@ -77,14 +77,12 @@ export class BotRunnerService {
       const senderTelegramId = ctx.from?.id;
       const isOwner = !!senderTelegramId && BigInt(senderTelegramId) === project.user.telegramId;
 
-      if (!isReleased) {
-        // App still being built / not deployed yet. Mobile Telegram clients
-        // bounce the user straight into the freshly-created bot and they
-        // hit /start out of habit — without this, they see nothing and get
-        // confused. We only respond to the owner; random visitors get no
-        // reply because the bot literally has no app to launch yet.
-        if (!isOwner) return;
-
+      // Owner always gets the "back to Apps Father" nudge on /start —
+      // they don't need a Launch App button in their own bot, they need
+      // to get back into Apps Father to keep iterating on the app.
+      // Under the new flow the project is already deployed when the bot
+      // is linked, but the nudge is still the right surface for the owner.
+      if (isOwner) {
         const lang = (project.user.language as Lang) || "en";
         const fatherBot = getFatherBotUsername();
         const backUrl = `https://t.me/${fatherBot}/app?startapp=open_dialog`;
@@ -101,6 +99,11 @@ export class BotRunnerService {
         );
         return;
       }
+
+      // Non-owner /start. If the app isn't deployed yet there's nothing
+      // to launch, so stay silent. Otherwise hand them the standard
+      // "Launch App" card.
+      if (!isReleased) return;
 
       await ctx.reply(
         `Welcome! Tap the button below to launch the app.`,
@@ -274,9 +277,12 @@ export class BotRunnerService {
       },
     });
     if (!project) return;
-    // After the app has been deployed there's nothing to nudge them about —
-    // the standard /start "Launch App" card already handles that surface.
-    if (project.releaseCommit !== null && project.releaseCommit !== undefined) return;
+    // We deliberately push regardless of releaseCommit: under the new flow
+    // (bot creation happens AFTER the first build) the project is already
+    // deployed when the bot is linked, but the owner still needs the
+    // "back to Apps Father" nudge to continue editing / managing the app.
+    // The legacy assumption that "deployed = nothing to nudge about" no
+    // longer holds.
 
     const lang = (project.user.language as Lang) || "en";
     const fatherBot = getFatherBotUsername();

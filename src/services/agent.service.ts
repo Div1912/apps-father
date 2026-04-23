@@ -391,15 +391,16 @@ const TOOLS: Anthropic.Tool[] = [
   // to split these across 3 iterations (~$0.20 wasted per first build).
   {
     name: "configure_bot",
-    description: "Atomically configure the bot's description, short description, and menu button — all in ONE call. ONLY use on FIRST build, never on updates. Use this INSTEAD of telegram_api(setMyDescription) etc. The menu button URL is auto-generated from the project URL.",
+    description: "Atomically configure the bot's name, description, short description, and menu button — all in ONE call. ONLY use on FIRST build, never on updates. Use this INSTEAD of telegram_api(setMyName/setMyDescription) etc. The menu button URL is auto-generated from the project URL. The provided name is also saved as the app's name in Apps Father.",
     input_schema: {
       type: "object" as const,
       properties: {
+        name: { type: "string" as const, description: "Bot display name (up to 64 chars). Also becomes the app name in Apps Father." },
         description: { type: "string" as const, description: "Bot description shown in profile (up to 512 chars)" },
         shortDescription: { type: "string" as const, description: "Short bot description shown in chat list (up to 120 chars)" },
         menuButtonText: { type: "string" as const, description: "Text for the menu button (e.g. 'Launch App'). Default: 'Launch App'" },
       },
-      required: ["description", "shortDescription"],
+      required: ["name", "description", "shortDescription"],
     },
   },
   
@@ -1570,13 +1571,18 @@ The user will visually verify. If this was your final action, in your NEXT turn 
             }
 
             case "configure_bot": {
-              // Atomic 3 telegram_api calls. Replaces the model splitting them
-              // across 3 iterations (~$0.20 wasted on each first build).
+              // Atomic telegram_api calls. Replaces the model splitting them
+              // across 3-4 iterations (~$0.20 wasted on each first build).
+              // Also mirrors the chosen `name` into the project row so the
+              // mini-app's app list shows the meaningful name (e.g. "Crypto
+              // Wallet") instead of the placeholder used at project creation
+              // time ("New App").
               if (!botToken) {
                 result = "Error: bot token not available for this project";
                 break;
               }
-              await progress({ action: "🤖 Configuring bot", detail: "description + menu", percent: currentPercent });
+              await progress({ action: "🤖 Configuring bot", detail: "name + description + menu", percent: currentPercent });
+              const name = (args.name || "").toString().trim().substring(0, 64);
               const description = (args.description || "").toString().substring(0, 512);
               const shortDescription = (args.shortDescription || "").toString().substring(0, 120);
               const menuButtonText = (args.menuButtonText || "Launch App").toString().substring(0, 32);
@@ -1590,14 +1596,31 @@ The user will visually verify. If this was your final action, in your NEXT turn 
                 return { method, status: resp.status, body: await resp.text() };
               };
               try {
-                const results = await Promise.all([
+                const calls: Array<Promise<{ method: string; status: number; body: string }>> = [
                   callApi("setMyDescription", { description }),
                   callApi("setMyShortDescription", { short_description: shortDescription }),
                   callApi("setChatMenuButton", {
                     menu_button: { type: "web_app", text: menuButtonText, web_app: { url: appUrl } },
                   }),
-                ]);
+                ];
+                if (name) {
+                  calls.push(callApi("setMyName", { name }));
+                }
+                const results = await Promise.all(calls);
                 const lines = results.map(r => `${r.method}: ${r.status} ${r.body.substring(0, 200)}`);
+
+                // Mirror name to Apps Father DB so the project list shows it.
+                // Failure here must not fail the whole tool — telegram side is
+                // authoritative for the bot, our DB is just a cached display.
+                if (name) {
+                  try {
+                    await projectService.updateProjectName(projectId, name);
+                    lines.push(`db.project.name updated to "${name}"`);
+                  } catch (dbErr: any) {
+                    lines.push(`db.project.name update failed: ${dbErr.message}`);
+                  }
+                }
+
                 result = `OK: Bot configured atomically.\n${lines.join("\n")}`;
               } catch (err: any) {
                 result = `Error configuring bot: ${err.message}`;
@@ -1913,7 +1936,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
       case "create_todo": return `${(args.items || []).length} items`;
       case "ask_user": return (args.question || "").substring(0, 60);
       case "finish": return (args.shortSummary || "").split("\n")[0].substring(0, 80);
-      case "configure_bot": return `desc=${(args.description || "").substring(0, 30)}..., menu=${args.menuButtonText || "Launch App"}`;
+      case "configure_bot": return `name=${args.name || "(none)"}, desc=${(args.description || "").substring(0, 30)}..., menu=${args.menuButtonText || "Launch App"}`;
       case "done": return (args.summary || "").substring(0, 80);
       case "short_summary": return (args.text || "").substring(0, 80);
       case "summary": return (args.text || "").substring(0, 80);

@@ -21,6 +21,8 @@ export const config = {
   openPanelClientSecret: process.env.OPENPANEL_CLIENT_SECRET || "",
   // Same key for dev and prod (provided by product). Override via env if needed.
   elevenLabsApiKey: process.env.ELEVENLABS_API_KEY || "sk_d8d1894ac4e643e5c4aa20e97649837f96d62408da2e96e2",
+  // ApiPass — used for nano-banana image generation (AI avatar feature).
+  apiPassKey: process.env.APIPASS_KEY || "apk_47d643e413f208561ea96fca31692455e1b6745c1ccab4ce9873ca8cd67250bf",
 
   get baseUrl(): string {
     if (this.nodeEnv === "development") {

@@ -2611,7 +2611,7 @@ img.tm-row-pic-user {
   transform: translateY(-50%);
   font-size: 11px;
   font-weight: 600;
-  color: var(--tg-theme-hint-color, #8d96a3);
+  color: #708499;
   background: rgba(255,255,255,0.06);
   padding: 4px 8px;
   border-radius: 8px;
@@ -2643,7 +2643,7 @@ img.tm-row-pic-user {
 .ton-wallet-address {
   font-size: 13px;
   font-weight: 500;
-  color: var(--tg-theme-text-color, #fff);
+  color: #fff;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4150,6 +4150,47 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
   flex-shrink: 0;
 }
 
+/* ── Link Your Bot card (shown after first build when no bot is linked) ── */
+.link-bot-card {
+  margin: 14px 0 4px;
+  padding: 16px;
+  background: linear-gradient(135deg, rgba(100,160,255,0.10) 0%, rgba(80,200,160,0.08) 100%);
+  border: 1px solid rgba(100,180,255,0.25);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.link-bot-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1.3;
+}
+.link-bot-sub {
+  font-size: 12px;
+  color: var(--description-text-color, #8e9baa);
+  line-height: 1.4;
+}
+.link-bot-btn {
+  margin-top: 8px;
+  width: 100%;
+  padding: 11px 16px;
+  background: linear-gradient(135deg, #5ba3f5 0%, #3dd6b0 100%);
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+}
+.link-bot-btn:active {
+  opacity: 0.85;
+  transform: scale(0.98);
+}
+
 .result-actions {
   display: flex;
   gap: 8px;
@@ -4259,7 +4300,81 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
 }
 #view-edit-info .set-photo-button {
   cursor: pointer;
-  margin: 0 auto 16px auto;
+  margin: 0 auto 12px auto;
+}
+
+/* ── Generate Avatar with AI button ── */
+.ai-avatar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 0 auto 18px auto;
+  padding: 11px 22px;
+  background: linear-gradient(135deg, #6a5af9 0%, #d66efd 50%, #ff8b5e 100%);
+  background-size: 200% 200%;
+  animation: ai-avatar-gradient 6s ease infinite;
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: 0 4px 18px rgba(106, 90, 249, 0.35);
+  transition: transform 0.12s ease, box-shadow 0.18s ease, opacity 0.15s;
+}
+.ai-avatar-btn:hover { box-shadow: 0 6px 22px rgba(106, 90, 249, 0.45); }
+.ai-avatar-btn:active { transform: scale(0.97); }
+.ai-avatar-btn:disabled {
+  opacity: 0.7;
+  cursor: progress;
+  box-shadow: none;
+}
+.ai-avatar-btn.is-loading {
+  animation: ai-avatar-gradient 1.6s ease infinite;
+}
+.ai-avatar-btn-icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  filter: drop-shadow(0 0 4px rgba(255,255,255,0.55));
+}
+.ai-avatar-btn-icon svg {
+  width: 100%;
+  height: 100%;
+}
+.ai-avatar-btn-text {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  white-space: nowrap;
+}
+.ai-avatar-btn-price {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.22);
+  color: #fff;
+}
+@keyframes ai-avatar-gradient {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+/* When generating, swap label for spinner */
+.ai-avatar-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255,255,255,0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: ai-avatar-spin 0.7s linear infinite;
+  display: inline-block;
+}
+@keyframes ai-avatar-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* ── Features ── */
@@ -5470,7 +5585,7 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
 .app-modal-title {
   font-size: 17px;
   font-weight: 600;
-  color: var(--tg-theme-text-color, #fff);
+  color: #fff;
   margin: 0;
 }
 .app-modal-close {
@@ -5503,7 +5618,7 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
 .app-modal-balance-value {
   font-size: 32px;
   font-weight: 700;
-  color: var(--tg-theme-text-color, #fff);
+  color: #fff;
 }
 .app-modal-input-group {
   margin-bottom: 16px;
@@ -5546,7 +5661,7 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
 }
 .app-modal-btn-secondary {
   background: rgba(255,255,255,0.08);
-  color: var(--tg-theme-text-color, #fff);
+  color: #fff;
 }
 .app-modal-note {
   font-size: 12px;
@@ -6186,15 +6301,15 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
   padding: 14px 16px calc(12px + env(safe-area-inset-top, 0px));
   padding-top: calc(14px + env(safe-area-inset-top, 0px));
   background: #0F1011;
-  border-bottom: 1px solid color-mix(in srgb, var(--tg-theme-text-color, #f1f5f9) 8%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, #fff 8%, transparent);
 }
 .pref-modal-back {
   width: 36px;
   height: 36px;
   border: 0;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--tg-theme-text-color, #f1f5f9) 8%, transparent);
-  color: var(--tg-theme-text-color, #f1f5f9);
+  background: color-mix(in srgb, #fff 8%, transparent);
+  color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -6219,7 +6334,7 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
   max-width: 28px;
   height: 4px;
   border-radius: 2px;
-  background: color-mix(in srgb, var(--tg-theme-text-color, #f1f5f9) 14%, transparent);
+  background: #f1f5f92b;
   cursor: pointer;
   transition: background 0.2s, transform 0.15s;
 }
@@ -6233,7 +6348,7 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
 .pref-modal-step-counter {
   font-size: 12px;
   font-weight: 600;
-  color: var(--tg-theme-hint-color, #8b95a5);
+  color: #708499;
   font-variant-numeric: tabular-nums;
   min-width: 28px;
   text-align: right;
@@ -6248,7 +6363,7 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
 .pref-modal-footer {
   padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
   background: #0F1011;
-  border-top: 1px solid color-mix(in srgb, var(--tg-theme-text-color, #f1f5f9) 8%, transparent);
+  border-top: 1px solid color-mix(in srgb, #fff 8%, transparent);
 }
 .pref-modal-submit {
   width: 100%;
@@ -6321,7 +6436,7 @@ body.pref-modal-open { overflow: hidden; }
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: var(--tg-theme-hint-color, #8b95a5);
+  color: #708499;
   font-weight: 700;
 }
 .pref-step-title {
@@ -6330,7 +6445,7 @@ body.pref-modal-open { overflow: hidden; }
   line-height: 1.25;
   font-weight: 700;
   letter-spacing: -0.01em;
-  color: var(--tg-theme-text-color, #f1f5f9);
+  color: #f5f5f5;
 }
 
 /* ── Auto button: top of every step, "let the AI choose" shortcut ── */
@@ -6342,10 +6457,10 @@ body.pref-modal-open { overflow: hidden; }
   width: 100%;
   margin: 0 0 14px;
   padding: 12px 16px;
-  border: 1px dashed color-mix(in srgb, var(--tg-theme-text-color, #f1f5f9) 18%, transparent);
+  border: 1px dashed color-mix(in srgb, #fff 18%, transparent);
   border-radius: 16px;
-  background: color-mix(in srgb, var(--tg-theme-text-color, #f1f5f9) 3%, transparent);
-  color: var(--tg-theme-text-color, #f1f5f9);
+  background: color-mix(in srgb, #fff 3%, transparent);
+  color: #fff;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   font: inherit;
@@ -6367,8 +6482,8 @@ body.pref-modal-open { overflow: hidden; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: color-mix(in srgb, var(--tg-theme-text-color, #f1f5f9) 8%, transparent);
-  color: var(--tg-theme-text-color, #f1f5f9);
+  background: color-mix(in srgb, #fff 8%, transparent);
+  color: #fff;
 }
 .pref-auto-btn.selected .pref-auto-btn-icon {
   background: #1AA6FE;
@@ -6385,12 +6500,12 @@ body.pref-modal-open { overflow: hidden; }
   font-size: 14px;
   font-weight: 700;
   letter-spacing: -0.005em;
-  color: var(--tg-theme-text-color, #f1f5f9);
+  color: #fff;
 }
 .pref-auto-btn-sub {
   font-size: 12px;
   line-height: 1.3;
-  color: var(--tg-theme-hint-color, #8b95a5);
+  color: #708499;
 }
 .pref-auto-btn-check {
   flex: 0 0 auto;
@@ -6423,11 +6538,11 @@ body.pref-modal-open { overflow: hidden; }
   position: relative;
   background:
     linear-gradient(180deg,
-      color-mix(in srgb, var(--tg-theme-text-color, #f1f5f9) 4%, transparent) 0%,
-      color-mix(in srgb, var(--tg-theme-text-color, #f1f5f9) 1%, transparent) 100%);
+      color-mix(in srgb, #fff 4%, transparent) 0%,
+      color-mix(in srgb, #fff 1%, transparent) 100%);
   backdrop-filter: blur(20px) saturate(140%);
   -webkit-backdrop-filter: blur(20px) saturate(140%);
-  border: 1px solid color-mix(in srgb, var(--tg-theme-text-color, #f1f5f9) 8%, transparent);
+  border: 1px solid color-mix(in srgb, #fff 8%, transparent);
   border-radius: 22px;
   padding: 0;
   text-align: left;
@@ -6461,14 +6576,14 @@ body.pref-modal-open { overflow: hidden; }
 .pref-card-label {
   font-size: 14px;
   font-weight: 700;
-  color: var(--tg-theme-text-color, #f1f5f9);
+  color: #fff;
   margin-bottom: 3px;
   letter-spacing: -0.005em;
 }
 .pref-card-desc {
   font-size: 11.5px;
   line-height: 1.35;
-  color: var(--tg-theme-hint-color, #8b95a5);
+  color: #708499;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;

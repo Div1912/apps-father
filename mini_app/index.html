@@ -15,7 +15,7 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <link href="bootstrap.min.css" rel="stylesheet">
   <link href="bootstrap-extra.css" rel="stylesheet">
-  <link href="styles.css?r=203" rel="stylesheet">
+  <link href="styles.css?r=206" rel="stylesheet">
   <script>
     window.op=window.op||function(){var n=[];return new Proxy(function(){arguments.length&&n.push([].slice.call(arguments))},{get:function(t,r){return"q"===r?n:function(){n.push([r].concat([].slice.call(arguments)))}} ,has:function(t,r){return"q"===r}}) }();
     window.op('init', {
@@ -865,6 +865,19 @@
           <div class="set-photo-button" id="btn-set-photo">
             <span data-i18n="edit_set_photo">Set New Photo</span>
           </div>
+          <button type="button" class="ai-avatar-btn" id="btn-generate-avatar">
+            <span class="ai-avatar-btn-icon" aria-hidden="true">
+              <svg viewBox="0 0 20 20" fill="currentColor">
+                <path d="M10 1.5l1.4 3.5 3.6.3-2.7 2.4.8 3.5L10 9.4l-3.1 1.8.8-3.5L5 5.3l3.6-.3L10 1.5z"/>
+                <circle cx="15.5" cy="14.5" r="1.5"/>
+                <circle cx="4" cy="13" r="1"/>
+              </svg>
+            </span>
+            <span class="ai-avatar-btn-text">
+              <span data-i18n="edit_generate_avatar">Generate Avatar with AI</span>
+              <span class="ai-avatar-btn-price">$0.10</span>
+            </span>
+          </button>
           <input type="file" id="edit-photo-input" accept="image/*" style="display:none">
         </section>
 
@@ -1038,8 +1051,8 @@
     </div>
   </div>
 
-  <script src="i18n.js?r=205" defer></script>
-  <script src="app.js?r=207" defer></script>
+  <script src="i18n.js?r=207" defer></script>
+  <script src="app.js?r=211" defer></script>
   <script>
       function initAnalytics() {
         window.telegramAnalytics.init({
