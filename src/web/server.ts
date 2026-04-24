@@ -2315,7 +2315,7 @@ export function createWebServer() {
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
-      const { getProjectFeatures, PAID_FEATURES } = await import("../services/features.service");
+      const { getProjectFeatures, PAID_FEATURES, getBundleQuote } = await import("../services/features.service");
       const owned = await getProjectFeatures(projectId);
       const balance = await billingService.getUserBalance(user.id);
 
@@ -2327,7 +2327,19 @@ export function createWebServer() {
         owned: owned.includes(f.id),
       }));
 
-      res.json({ features, balance });
+      // Bundle stays visible until ALL bundle features are owned. When some
+      // are already owned, the price covers only the still-missing ones at
+      // 50% off (getBundleQuote handles the math).
+      const quote = getBundleQuote(owned);
+      const bundle = {
+        id: "bundle_all",
+        price: quote.bundlePrice,
+        fullPrice: quote.fullPrice,
+        featureIds: quote.missingIds,
+        available: quote.available,
+      };
+
+      res.json({ features, balance, bundle });
     } catch (err) {
       console.error("[MiniApp API] Features error:", err);
       res.status(500).json({ error: "Internal server error" });
@@ -2363,6 +2375,34 @@ export function createWebServer() {
       res.json({ success: true, newBalance, featureId });
     } catch (err: any) {
       console.error("[MiniApp API] Feature purchase error:", err);
+      res.status(400).json({ error: err.message || "Purchase failed" });
+    }
+  });
+
+  app.post("/telegram-mini-app/api/features/:projectId/buy-bundle", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const projectId = req.params.projectId as string;
+      const project = await projectService.getProject(projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
+
+      const { purchaseBundle } = await import("../services/features.service");
+      const { newBalance, granted, charged } = await purchaseBundle(user.id, projectId);
+
+      void trackEvent(auth.telegramId!, "purchase", {
+        type: "bundle",
+        feature_id: "bundle_all",
+        feature_label: "All-Access Bundle",
+        amount: charged,
+        granted_features: granted,
+        project_id: projectId,
+      });
+
+      res.json({ success: true, newBalance, granted, charged });
+    } catch (err: any) {
+      console.error("[MiniApp API] Bundle purchase error:", err);
       res.status(400).json({ error: err.message || "Purchase failed" });
     }
   });

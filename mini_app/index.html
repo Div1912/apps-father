@@ -15,7 +15,7 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <link href="bootstrap.min.css" rel="stylesheet">
   <link href="bootstrap-extra.css" rel="stylesheet">
-  <link href="styles.css?r=208" rel="stylesheet">
+  <link href="styles.css?r=212" rel="stylesheet">
   <script>
     window.op=window.op||function(){var n=[];return new Proxy(function(){arguments.length&&n.push([].slice.call(arguments))},{get:function(t,r){return"q"===r?n:function(){n.push([r].concat([].slice.call(arguments)))}} ,has:function(t,r){return"q"===r}}) }();
     window.op('init', {
@@ -830,12 +830,11 @@
       <main class="tm-main">
         <section class="tm-main-intro">
           <h1 class="tm-main-intro-header" data-i18n="features_title">Premium Features</h1>
-          <p class="tm-main-intro-text" id="features-balance" style="max-width:312px;"></p>
+          <p class="tm-main-intro-text" data-i18n="features_subtitle" style="max-width:340px;">Optional add-ons that unlock extra capabilities for this app. Buy once — they stay unlocked forever.</p>
+          <p class="tm-main-intro-text" id="features-balance" style="max-width:340px;margin-top:6px;opacity:0.85;"></p>
         </section>
         <section class="tm-section">
-          <div id="features-list" style="
-              width: 100%;
-          "></div>
+          <div id="features-list" style="width:100%;"></div>
         </section>
       </main>
     </div>
@@ -1051,8 +1050,8 @@
     </div>
   </div>
 
-  <script src="i18n.js?r=209" defer></script>
-  <script src="app.js?r=213" defer></script>
+  <script src="i18n.js?r=211" defer></script>
+  <script src="app.js?r=216" defer></script>
   <script>
       function initAnalytics() {
         window.telegramAnalytics.init({

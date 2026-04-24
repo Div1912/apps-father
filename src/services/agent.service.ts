@@ -180,13 +180,13 @@ const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "read_file",
-    description: "Read a file from the project. Supports optional line range to read only specific lines (1-indexed). Returns numbered lines.",
+    description: "Read a TEXT file from the project. Supports optional line range to read only specific lines (1-indexed). Returns numbered lines. NEVER call on binary files (images .png/.jpg/.jpeg/.gif/.webp, video, audio, fonts, archives, .pdf, .db, etc.) — they will be refused. Reference image assets directly in HTML/CSS via their path (e.g. <img src=\"assets/foo.jpg\">) without reading them. For text files >256KB you MUST pass offset+limit; full reads are capped.",
     input_schema: {
       type: "object" as const,
       properties: {
-        path: { type: "string" as const, description: "File path relative to project root" },
+        path: { type: "string" as const, description: "File path relative to project root. Must point to a text file." },
         offset: { type: "number" as const, description: "Start line number (1-indexed, optional)" },
-        limit: { type: "number" as const, description: "Number of lines to read (optional)" },
+        limit: { type: "number" as const, description: "Number of lines to read (optional). Required for files larger than 256KB." },
       },
       required: ["path"],
     },
@@ -718,7 +718,7 @@ Create all necessary files (frontend/index.html, frontend/styles.css, frontend/a
       const lines = attachments.map(a =>
         `- ${a.projectPath} (original: ${a.originalName})${a.caption ? ` — "${a.caption}"` : ""}`
       );
-      attachmentInfo = `\nATTACHED FILES (already saved to project):\n${lines.join("\n")}\nThe user uploaded these files for you to use in the app. Reference them in your code (e.g. in <img src="assets/filename.jpg"> or as needed). Use read_file to inspect non-image files if needed.\n`;
+      attachmentInfo = `\nATTACHED FILES (already saved to project):\n${lines.join("\n")}\nThe user uploaded these files for you to use in the app. Reference them in your code by path (e.g. <img src="assets/filename.jpg">). DO NOT call read_file on image/audio/video/font/binary files — the tool will refuse and the path alone is enough to use them. read_file is only for text files (json, csv, txt, md, etc.) you actually need to inspect.\n`;
     }
 
     const context = contextParts.length > 0 ? contextParts.join("\n\n") + "\n\n" : "";
@@ -1078,6 +1078,63 @@ FINAL STEP (internal — never put in the checklist): After your last code chang
               const filePath = this.safePath(projectDir, args.path);
               if (!filePath) { result = "Error: Invalid path"; break; }
               if (!fs.existsSync(filePath)) { result = "Error: File not found"; break; }
+
+              const stat = fs.statSync(filePath);
+              if (stat.isDirectory()) {
+                result = `Error: ${args.path} is a directory, not a file. Use list_files to inspect the project tree.`;
+                break;
+              }
+
+              const ext = path.extname(args.path).toLowerCase();
+              const sizeKB = (stat.size / 1024).toFixed(1);
+
+              // Refuse binary files outright — reading them as UTF-8 floods the
+              // context with garbage tokens (every byte ≈ 1 token).
+              if (AgentService.BINARY_EXTS.has(ext)) {
+                result = `Error: ${args.path} is a binary file (${ext}, ${sizeKB}KB) and cannot be read as text. ` +
+                  `Reading it would inject ~${Math.round(stat.size / 4)} junk tokens into context. ` +
+                  `If this is an image/audio/video asset, reference it directly in your HTML/CSS by path ` +
+                  `(e.g. <img src="${args.path.replace(/^.*?(assets\/.*)$/, "$1")}">) without reading its contents. ` +
+                  `Do NOT retry read_file on this path.`;
+                console.warn(`[Agent] 🚫 read_file refused binary: ${args.path} (${sizeKB}KB)`);
+                logger.toolResult(name, result);
+                await progress({ action: "🚫 Skipped binary", detail: `${args.path} (${sizeKB}KB)`, percent: currentPercent });
+                break;
+              }
+
+              // Hard size cap for full reads.
+              if (!args.offset && !args.limit && stat.size > AgentService.READ_FILE_SOFT_CAP_BYTES) {
+                result = `Error: ${args.path} is ${sizeKB}KB which exceeds the 256KB full-read cap. ` +
+                  `Use offset+limit to page through it (e.g. read_file({path, offset: 1, limit: 500})), ` +
+                  `or run grep first to locate the specific section you need.`;
+                break;
+              }
+              if (stat.size > AgentService.READ_FILE_MAX_BYTES) {
+                result = `Error: ${args.path} is ${sizeKB}KB which exceeds the 512KB hard cap. ` +
+                  `Files this large must be inspected with grep, not read_file.`;
+                break;
+              }
+
+              // Sniff for binary content (NUL bytes in the first 4KB) — catches
+              // unknown extensions and prevents a recurrence of the JPEG fiasco.
+              const sniffSize = Math.min(stat.size, 4096);
+              if (sniffSize > 0) {
+                const fd = fs.openSync(filePath, "r");
+                const sniffBuf = Buffer.alloc(sniffSize);
+                fs.readSync(fd, sniffBuf, 0, sniffSize, 0);
+                fs.closeSync(fd);
+                let nulCount = 0;
+                for (let i = 0; i < sniffBuf.length; i++) {
+                  if (sniffBuf[i] === 0) { nulCount++; if (nulCount > 2) break; }
+                }
+                if (nulCount > 2) {
+                  result = `Error: ${args.path} (${sizeKB}KB) appears to be a binary file (contains NUL bytes) and cannot be read as text. ` +
+                    `Do NOT retry read_file on this path.`;
+                  console.warn(`[Agent] 🚫 read_file refused binary-by-sniff: ${args.path}`);
+                  break;
+                }
+              }
+
               const content = fs.readFileSync(filePath, "utf-8");
               const lines = content.split("\n");
 
@@ -1085,7 +1142,13 @@ FINAL STEP (internal — never put in the checklist): After your last code chang
                 const start = Math.max(0, (args.offset || 1) - 1);
                 const end = args.limit ? start + args.limit : lines.length;
                 const slice = lines.slice(start, end);
-                result = slice.map((l, i) => `${start + i + 1}|${l}`).join("\n");
+                let body = slice.map((l, i) => `${start + i + 1}|${l}`).join("\n");
+                // Truncate by bytes if the slice is still huge.
+                if (Buffer.byteLength(body, "utf-8") > AgentService.READ_FILE_SOFT_CAP_BYTES) {
+                  body = body.slice(0, AgentService.READ_FILE_SOFT_CAP_BYTES) +
+                    `\n... [truncated: result exceeded 256KB cap; narrow the range with smaller limit]`;
+                }
+                result = body;
                 await progress({ action: "📖 Reading", detail: `${args.path} lines ${start + 1}-${Math.min(end, lines.length)}`, percent: currentPercent });
               } else {
                 result = lines.map((l, i) => `${i + 1}|${l}`).join("\n");
@@ -1978,6 +2041,32 @@ The user will visually verify. If this was your final action, in your NEXT turn 
   private static readonly SKIP_EXTS = new Set([
     ".mp3", ".png", ".jpg", ".jpeg", ".gif", ".wav", ".mp4", ".webp", ".db",
   ]);
+  // Binary / non-text file extensions that must NEVER be read as UTF-8.
+  // Reading these as text injects ~1 token per byte of garbage into the LLM
+  // context (a 626KB JPEG = ~419k tokens). Always refuse with a structured note.
+  private static readonly BINARY_EXTS = new Set([
+    // images
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tiff", ".tif",
+    ".heic", ".heif", ".avif", ".psd", ".raw",
+    // video
+    ".mp4", ".mov", ".webm", ".avi", ".mkv", ".m4v", ".flv", ".wmv",
+    // audio
+    ".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a", ".opus", ".wma",
+    // fonts
+    ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    // archives / binaries
+    ".zip", ".tar", ".gz", ".tgz", ".rar", ".7z", ".bz2", ".xz",
+    ".exe", ".dll", ".so", ".dylib", ".bin", ".dat", ".db", ".sqlite", ".sqlite3",
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".class", ".jar", ".pyc", ".o", ".a", ".node", ".wasm",
+  ]);
+  // Hard cap on bytes read by read_file. Anything larger gets refused with
+  // guidance to use offset/limit. 512KB ≈ ~130k tokens worst case for ASCII —
+  // already huge but bounded.
+  private static readonly READ_FILE_MAX_BYTES = 512 * 1024;
+  // Lower cap on bytes returned per call (truncation threshold for offset/limit).
+  // Keeps any single read well below 100k tokens.
+  private static readonly READ_FILE_SOFT_CAP_BYTES = 256 * 1024;
 
   private walkDirWithStats(dir: string, base: string): string[] {
     const results: string[] = [];
@@ -1990,16 +2079,25 @@ The user will visually verify. If this was your final action, in your NEXT turn 
         results.push(...this.walkDirWithStats(fullPath, base));
       } else {
         const ext = path.extname(entry.name).toLowerCase();
-        if (AgentService.SKIP_EXTS.has(ext)) continue;
+        const relPath = path.relative(base, fullPath).replace(/\\/g, "/");
         try {
           const stat = fs.statSync(fullPath);
+          const sizeKB = (stat.size / 1024).toFixed(1);
+          // Show binary assets in the listing so the agent knows they exist,
+          // but tag them so it doesn't try to read_file them as text.
+          if (AgentService.BINARY_EXTS.has(ext) || AgentService.SKIP_EXTS.has(ext)) {
+            results.push(`${relPath} (${sizeKB}KB, binary — do not read_file)`);
+            continue;
+          }
+          // Avoid loading huge text files into memory just for line counts.
+          if (stat.size > AgentService.READ_FILE_MAX_BYTES) {
+            results.push(`${relPath} (${sizeKB}KB, large — use grep / paged read_file)`);
+            continue;
+          }
           const content = fs.readFileSync(fullPath, "utf-8");
           const lineCount = content.split("\n").length;
-          const sizeKB = (stat.size / 1024).toFixed(1);
-          const relPath = path.relative(base, fullPath).replace(/\\/g, "/");
           results.push(`${relPath} (${lineCount} lines, ${sizeKB}KB)`);
         } catch {
-          const relPath = path.relative(base, fullPath).replace(/\\/g, "/");
           results.push(relPath);
         }
       }

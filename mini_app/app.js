@@ -5221,36 +5221,262 @@ function openVersionDetail(versionNum) {
 
 // ── Features ──
 
+// Inline SVG illustrations per feature id. Kept as pure SVG (no external assets)
+// so they inherit theme colors and stay crisp on any DPI.
+const FEATURE_ICONS = {
+  stars_payment: `
+    <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs>
+        <linearGradient id="fi-stars-bg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#FFD66B"/>
+          <stop offset="100%" stop-color="#FF9A3C"/>
+        </linearGradient>
+      </defs>
+      <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#fi-stars-bg)"/>
+      <path d="M32 14l4.6 10.5 11.4 1.1-8.6 7.7 2.6 11.2L32 38.7l-10 5.8 2.6-11.2-8.6-7.7 11.4-1.1L32 14z"
+            fill="#fff" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/>
+      <circle cx="48" cy="18" r="2.4" fill="#fff" opacity="0.85"/>
+      <circle cx="16" cy="46" r="1.8" fill="#fff" opacity="0.7"/>
+    </svg>`,
+  ton_payment: `
+    <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs>
+        <linearGradient id="fi-ton-bg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#3CB6FF"/>
+          <stop offset="100%" stop-color="#1F6FE0"/>
+        </linearGradient>
+      </defs>
+      <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#fi-ton-bg)"/>
+      <!-- Diamond / gem outline -->
+      <path d="M32 50 L14 24 L24 18 H40 L50 24 Z"
+            fill="#fff" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/>
+      <!-- Inner facets: two diagonals from top corners meeting at center, then down -->
+      <path d="M24 18 L32 30 L40 18 M14 24 L32 30 L50 24 M32 30 V50"
+            stroke="#1F6FE0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </svg>`,
+  admin_panel: `
+    <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs>
+        <linearGradient id="fi-admin-bg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#A07BFF"/>
+          <stop offset="100%" stop-color="#5B3DDB"/>
+        </linearGradient>
+      </defs>
+      <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#fi-admin-bg)"/>
+      <rect x="12" y="16" width="40" height="32" rx="4" fill="#fff" opacity="0.95"/>
+      <rect x="12" y="16" width="40" height="7" rx="4" fill="#fff"/>
+      <circle cx="16.5" cy="19.5" r="1.2" fill="#5B3DDB"/>
+      <circle cx="20.5" cy="19.5" r="1.2" fill="#5B3DDB"/>
+      <circle cx="24.5" cy="19.5" r="1.2" fill="#5B3DDB"/>
+      <rect x="16" y="28" width="14" height="4" rx="1.5" fill="#5B3DDB"/>
+      <rect x="16" y="34" width="22" height="3" rx="1.5" fill="#A07BFF"/>
+      <rect x="16" y="39" width="18" height="3" rx="1.5" fill="#A07BFF"/>
+      <rect x="38" y="28" width="10" height="14" rx="2" fill="#5B3DDB"/>
+    </svg>`,
+  disable_splash: `
+    <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs>
+        <linearGradient id="fi-splash-bg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#3FE0A2"/>
+          <stop offset="100%" stop-color="#1A9F70"/>
+        </linearGradient>
+      </defs>
+      <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#fi-splash-bg)"/>
+      <rect x="18" y="12" width="28" height="40" rx="5" fill="#fff"/>
+      <rect x="22" y="18" width="20" height="22" rx="2" fill="#1A9F70" opacity="0.18"/>
+      <circle cx="32" cy="46" r="2" fill="#1A9F70" opacity="0.4"/>
+      <path d="M14 14l36 36" stroke="#fff" stroke-width="4" stroke-linecap="round"/>
+      <path d="M14 14l36 36" stroke="#E94B4B" stroke-width="2.4" stroke-linecap="round"/>
+    </svg>`,
+  get_code: `
+    <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs>
+        <linearGradient id="fi-code-bg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#2AB7CA"/>
+          <stop offset="100%" stop-color="#1668B0"/>
+        </linearGradient>
+      </defs>
+      <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#fi-code-bg)"/>
+      <rect x="9" y="14" width="46" height="36" rx="4" fill="#0E2A45"/>
+      <rect x="9" y="14" width="46" height="7" rx="4" fill="#1668B0"/>
+      <circle cx="13.5" cy="17.5" r="1.1" fill="#FF6B6B"/>
+      <circle cx="17.5" cy="17.5" r="1.1" fill="#FFD166"/>
+      <circle cx="21.5" cy="17.5" r="1.1" fill="#3FE0A2"/>
+      <path d="M22 30l-5 5 5 5M42 30l5 5-5 5M36 28l-8 14"
+            stroke="#7FE7FF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </svg>`,
+};
+const FEATURE_ICON_FALLBACK = `
+    <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <rect x="2" y="2" width="60" height="60" rx="16" fill="#3a3a3a"/>
+      <path d="M32 18v22M21 29h22" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+    </svg>`;
+
+function featureLabel(f) {
+  const key = `feature_${f.id}_label`;
+  const localized = t(key);
+  return localized && localized !== key ? localized : (f.label || f.id);
+}
+
+function featureDescription(f) {
+  const key = `feature_${f.id}_desc`;
+  const localized = t(key);
+  return localized && localized !== key ? localized : (f.description || '');
+}
+
+function fmtBalance(amount) {
+  const v = Number(amount).toFixed(2);
+  const tpl = t('features_balance');
+  if (tpl && tpl.includes('{amount}')) return tpl.replace('{amount}', v);
+  return `Balance: $${v}`;
+}
+
+function fmtTemplate(key, vars) {
+  let s = t(key);
+  if (!s) return '';
+  for (const k of Object.keys(vars)) {
+    s = s.split(`{${k}}`).join(vars[k]);
+  }
+  return s;
+}
+
+function renderBundleCard(bundle) {
+  if (!bundle || !bundle.available) return '';
+  const price = Number(bundle.price);
+  const full = Number(bundle.fullPrice);
+  const save = Math.max(0, full - price);
+  const tag = esc(t('bundle_offer_tag'));
+  const title = esc(t('bundle_title'));
+  const subtitle = esc(t('bundle_subtitle'));
+  const cta = esc(fmtTemplate('bundle_cta', { price: price.toFixed(0) }) || `Unlock all for $${price}`);
+  const saveText = esc(fmtTemplate('bundle_save', { amount: save.toFixed(0) }) || `save $${save}`);
+  return `
+    <button type="button" class="feature-bundle" data-bundle="1"
+            data-price="${esc(String(price))}" data-full="${esc(String(full))}">
+      <span class="feature-bundle-tag">${tag}</span>
+      <div class="feature-bundle-body">
+        <div class="feature-bundle-icon" aria-hidden="true">
+          <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="fb-gift" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="#FFE680"/>
+                <stop offset="100%" stop-color="#FF8A3D"/>
+              </linearGradient>
+            </defs>
+            <rect x="8" y="22" width="48" height="34" rx="5" fill="url(#fb-gift)"/>
+            <rect x="8" y="22" width="48" height="10" rx="5" fill="#fff" opacity="0.35"/>
+            <rect x="29" y="22" width="6" height="34" fill="#fff" opacity="0.85"/>
+            <path d="M32 22c-6-8-16-2-12 4 2 3 8 3 12 0z" fill="#fff" opacity="0.85"/>
+            <path d="M32 22c6-8 16-2 12 4-2 3-8 3-12 0z" fill="#fff" opacity="0.85"/>
+            <circle cx="14" cy="14" r="2" fill="#fff" opacity="0.7"/>
+            <circle cx="54" cy="48" r="1.6" fill="#fff" opacity="0.6"/>
+            <path d="M50 14l1.5 3 3 .4-2.2 2 .5 3-2.8-1.5-2.8 1.5.5-3-2.2-2 3-.4z" fill="#fff" opacity="0.85"/>
+          </svg>
+        </div>
+        <div class="feature-bundle-text">
+          <div class="feature-bundle-title">${title}</div>
+          <div class="feature-bundle-subtitle">${subtitle}</div>
+          <div class="feature-bundle-pricing">
+            <span class="feature-bundle-price">$${price}</span>
+            <span class="feature-bundle-strike">$${full}</span>
+            <span class="feature-bundle-save">${saveText}</span>
+          </div>
+        </div>
+      </div>
+      <div class="feature-bundle-cta">${cta}</div>
+    </button>`;
+}
+
 async function openFeatures(projectId) {
   try {
     const res = await fetch(`${API_BASE}/features/${projectId}`, { headers: apiHeaders() });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
-    document.getElementById('features-balance').textContent = `Balance: $${Number(data.balance).toFixed(2)}`;
+    document.getElementById('features-balance').textContent = fmtBalance(data.balance);
 
     const listEl = document.getElementById('features-list');
-    let html = '';
-    for (const f of data.features) {
-      if (f.id === 'admin_panel') continue;
-      const statusText = f.owned
-        ? '<span class="feature-status feature-status--owned">Unlocked</span>'
-        : `<span class="feature-status feature-status--price">$${f.price}</span>`;
-      html += `<a style="padding: 14px 14px;" class="tm-row tm-row-link feature-row${f.owned ? ' feature-row--owned' : ''}" data-feature="${f.id}" data-price="${f.price}" data-label="${esc(f.label)}" data-owned="${f.owned}">` +
-        `<div style="flex:1;min-width:0;">` +
-        `<div class="tm-row-value">${esc(f.label)} — ${statusText}</div>` +
-        `<div class="tm-row-description">${esc(f.description)}</div>` +
-        `</div></a>`;
-    }
-    listEl.innerHTML = `<div class="tm-table-wrap">${html}</div>`;
+    const visible = data.features.filter(f => f.id !== 'admin_panel');
+    const cards = visible.map(f => {
+      const label = featureLabel(f);
+      const desc = featureDescription(f);
+      const icon = FEATURE_ICONS[f.id] || FEATURE_ICON_FALLBACK;
+      // Status pill always lives in the same slot below the description so
+      // owned and locked cards share an identical layout regardless of how
+      // long the title is. Owned → green check pill. Locked → blue CTA pill.
+      const status = f.owned
+        ? `<div class="feature-card-cta feature-card-cta--owned">
+             <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+             <span>${esc(t('feature_status_unlocked'))}</span>
+           </div>`
+        : `<div class="feature-card-cta">${esc(t('feature_status_unlock'))} · $${esc(String(f.price))}</div>`;
+      return `
+        <button type="button" class="feature-card${f.owned ? ' feature-card--owned' : ''}"
+                data-feature="${esc(f.id)}" data-price="${esc(String(f.price))}"
+                data-label="${esc(label)}" data-owned="${f.owned ? 'true' : 'false'}">
+          <div class="feature-card-icon">${icon}</div>
+          <div class="feature-card-body">
+            <div class="feature-card-head">
+              <div class="feature-card-title">${esc(label)}</div>
+            </div>
+            <div class="feature-card-desc">${esc(desc)}</div>
+            ${status}
+          </div>
+        </button>`;
+    }).join('');
+    const bundleHtml = renderBundleCard(data.bundle);
+    listEl.innerHTML = `<div class="feature-card-grid">${bundleHtml}${cards}</div>`;
 
-    listEl.querySelectorAll('.feature-row').forEach(row => {
+    const refreshOwnedCache = (newlyOwnedIds) => {
+      if (!currentProject) return;
+      let owned = [];
+      try { owned = JSON.parse(currentProject.features || '[]'); } catch (_) {}
+      for (const id of newlyOwnedIds) if (!owned.includes(id)) owned.push(id);
+      currentProject.features = JSON.stringify(owned);
+      const p = projects.find(pp => pp.id === projectId);
+      if (p) p.features = currentProject.features;
+    };
+
+    const bundleEl = listEl.querySelector('.feature-bundle');
+    if (bundleEl) {
+      bundleEl.addEventListener('click', () => {
+        const price = bundleEl.dataset.price;
+        const full = bundleEl.dataset.full;
+        const msg = fmtTemplate('bundle_confirm', { price, full })
+          || `Unlock all premium features for $${price} (regular price $${full})?`;
+        const doBuy = async () => {
+          try {
+            const r = await fetch(`${API_BASE}/features/${projectId}/buy-bundle`, {
+              method: 'POST',
+              headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+              body: '{}',
+            });
+            const d = await r.json();
+            if (!r.ok) throw new Error(d.error || 'Purchase failed');
+            showToast(t('bundle_unlocked_toast') || 'All premium features unlocked!', 'success');
+            refreshOwnedCache(d.granted || []);
+            openFeatures(projectId);
+          } catch (err) {
+            console.error('Bundle purchase error:', err);
+            showToast(err.message || t('feature_purchase_failed') || 'Failed to purchase.', 'error');
+          }
+        };
+        if (tg?.showConfirm) {
+          tg.showConfirm(msg, (ok) => { if (ok) doBuy(); });
+        } else if (confirm(msg)) {
+          doBuy();
+        }
+      });
+    }
+
+    listEl.querySelectorAll('.feature-card').forEach(row => {
       if (row.dataset.owned === 'true') return;
       row.addEventListener('click', () => {
         const featureId = row.dataset.feature;
         const price = row.dataset.price;
         const label = row.dataset.label;
-        const msg = `Unlock "${label}" for $${price}?`;
+        const msg = fmtTemplate('feature_unlock_confirm', { label, price })
+          || `Unlock "${label}" for $${price}?`;
         const doBuy = async () => {
           try {
             const r = await fetch(`${API_BASE}/features/${projectId}/buy`, {
@@ -5260,18 +5486,13 @@ async function openFeatures(projectId) {
             });
             const d = await r.json();
             if (!r.ok) throw new Error(d.error || 'Purchase failed');
-            showToast(`${label} unlocked!`, 'success');
-            if (currentProject) {
-              const owned = JSON.parse(currentProject.features || '[]');
-              owned.push(featureId);
-              currentProject.features = JSON.stringify(owned);
-              const p = projects.find(pp => pp.id === projectId);
-              if (p) p.features = currentProject.features;
-            }
+            const okMsg = fmtTemplate('feature_unlocked_toast', { label }) || `${label} unlocked!`;
+            showToast(okMsg, 'success');
+            refreshOwnedCache([featureId]);
             openFeatures(projectId);
           } catch (err) {
             console.error('Purchase error:', err);
-            showToast(err.message || 'Failed to purchase.', 'error');
+            showToast(err.message || t('feature_purchase_failed') || 'Failed to purchase.', 'error');
           }
         };
         if (tg?.showConfirm) {
@@ -5285,7 +5506,7 @@ async function openFeatures(projectId) {
     showView('features');
   } catch (err) {
     console.error('Failed to load features:', err);
-    showToast('Failed to load features.', 'error');
+    showToast(t('feature_load_failed') || 'Failed to load features.', 'error');
   }
 }
 
