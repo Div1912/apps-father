@@ -1,4 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
+import { getModelPricing, getOpenRouterClient, toOpenAITool } from "./openrouter.service";
 import { exec } from "child_process";
 import { promisify } from "util";
 import fs from "fs";
@@ -17,6 +18,7 @@ import { abortedProjects } from "../bot/processing";
 import { ConventionExtractor } from "./convention-extractor";
 import { parseProjectPreferences, buildPreferencesPrompt, DEFAULT_PREFERENCES } from "./preferences.catalog";
 import { forceReloadProjectWs } from "../web/ws-manager";
+import { runWithProject } from "./console-tagger.service";
 
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
 const KNOWLEDGE_DIR = path.join(process.cwd(), "agent_knowledge");
@@ -168,7 +170,8 @@ function getAvailableSkills(): string[] {
 
 
 
-const TOOLS: Anthropic.Tool[] = [
+// Tool definitions in Anthropic schema format — converted to OpenAI format at call time.
+const TOOLS_DEFS: Array<{ name: string; description: string; input_schema: Record<string, any> }> = [
   {
     name: "list_files",
     description: "List all files in the project directory with sizes. Returns lines like 'frontend/app.js (340 lines, 12KB)'.",
@@ -403,8 +406,10 @@ const TOOLS: Anthropic.Tool[] = [
       required: ["name", "description", "shortDescription"],
     },
   },
-  
 ];
+
+// Pre-converted OpenAI-format tools (computed once at startup).
+const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = TOOLS_DEFS.map(toOpenAITool);
 
 // Commands that must never run
 const BLOCKED_COMMANDS = [
@@ -450,25 +455,64 @@ export interface AgentResult {
   commitDir?: string;
 }
 
-export const QUALITY_TIERS: Record<number, { model: string; thinking: number; maxIterations: number }> = {
-  1: { model: "claude-sonnet-4-6", thinking: 2000, maxIterations: 60 },
-  2: { model: "claude-sonnet-4-6", thinking: 4000, maxIterations: 80 },
-  3: { model: "claude-opus-4-7", thinking: 2000, maxIterations: 50 },
-  4: { model: "claude-opus-4-7", thinking: 4000, maxIterations: 70 },
-};
-
 export class AgentService {
-  private client: Anthropic;
-
-  constructor() {
-    this.client = new Anthropic({ apiKey: config.anthropicApiKey });
+  private isEmptyResponse(response: OpenAI.Chat.Completions.ChatCompletion): boolean {
+    const msg = response.choices[0]?.message as any;
+    const toolCalls = msg?.tool_calls || [];
+    const content = typeof msg?.content === "string" ? msg.content : "";
+    const reasoning = msg?.reasoning_content || msg?.reasoning || "";
+    const completionTokens = (response.usage as any)?.completion_tokens || 0;
+    return toolCalls.length === 0 && !content.trim() && !String(reasoning || "").trim() && completionTokens === 0;
   }
 
-  private async callWithRetry(params: any, maxRetries = 3): Promise<Anthropic.Message> {
+  private getProviderRouting(modelId: string, provider?: string): any | undefined {
+    const selectedProvider = provider?.trim();
+    if (selectedProvider) {
+      return { only: [selectedProvider], allow_fallbacks: false };
+    }
+    if (modelId.toLowerCase().startsWith("minimax/")) {
+      return { only: ["Minimax"], allow_fallbacks: false };
+    }
+    return undefined;
+  }
+
+  private validateBackendRoutes(projectDir: string, projectId: string): string | null {
+    const routesPath = path.join(projectDir, "backend", "routes.js");
+    if (!fs.existsSync(routesPath)) return null;
+
+    const content = fs.readFileSync(routesPath, "utf-8");
+    const hasPlatformExport = /module\.exports\s*=\s*function\s*\(\s*router\s*,\s*db\s*,\s*projectId\s*\)/.test(content);
+    if (!hasPlatformExport) {
+      return `backend/routes.js has invalid Apps Father format. It must export exactly: module.exports = function(router, db, projectId) { ... }. Do not export a route map/object.`;
+    }
+    if (/module\.exports\s*=\s*routes\b/.test(content) || /^\s*const\s+routes\s*=\s*\{/m.test(content)) {
+      return `backend/routes.js uses object-style routes. Rewrite with Express router calls inside module.exports = function(router, db, projectId) { router.get('/path', ...); }.`;
+    }
+    if (/['"`]\s*(GET|POST|PUT|PATCH|DELETE)\s+\/api\//i.test(content)) {
+      return `backend/routes.js contains object-style API route keys like "GET /api/...". Use router.get('/path', ...) and never include /api/{projectId} in backend route paths.`;
+    }
+    const escapedProjectId = projectId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`/api/${escapedProjectId}(?:/|['"\`])`).test(content) || /\/api\/[0-9a-f]{8}-[0-9a-f-]{27,}/i.test(content)) {
+      return `backend/routes.js hardcodes /api/{projectId}. Backend routes must be relative, for example router.get('/videos', ...).`;
+    }
+    return null;
+  }
+
+  private async callWithRetry(params: any, maxRetries = 3): Promise<OpenAI.Chat.Completions.ChatCompletion> {
+    const client = getOpenRouterClient();
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        const stream = this.client.messages.stream(params);
-        return await stream.finalMessage();
+        const response = await client.chat.completions.create(params);
+        if (this.isEmptyResponse(response) && attempt < maxRetries) {
+          const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
+          console.warn(`[Agent] Empty model response. Retry ${attempt + 1}/${maxRetries} after ${delay}ms`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        if (this.isEmptyResponse(response)) {
+          throw new Error(`Empty model response from ${params.model}`);
+        }
+        return response;
       } catch (err: any) {
         const status = err?.status || err?.error?.status;
         if (status === 429 && attempt < maxRetries) {
@@ -548,25 +592,38 @@ ${dbSummary ? `DB KEYS SUMMARY:\n${dbSummary}\n` : ""}`;
     }
     messages.push({ role: "user", content: question });
 
-    const stream = this.client.messages.stream({
-      model: "claude-sonnet-4-6",
-      max_tokens: 2048,
-      system: systemPrompt,
-      messages,
-    });
+    const modelCfg = runtimeConfig.getModelConfig("ask");
+    const client = getOpenRouterClient();
+    const stream = await client.chat.completions.create({
+      model: modelCfg.modelId,
+      max_tokens: modelCfg.maxTokens,
+      messages: [
+        { role: "system", content: systemPrompt },
+        ...messages,
+      ],
+      ...(this.getProviderRouting(modelCfg.modelId, modelCfg.provider) ? { provider: this.getProviderRouting(modelCfg.modelId, modelCfg.provider) } : {}),
+      stream: true,
+    } as any) as any;
 
     let fullText = "";
-    stream.on("text", (chunk) => {
-      fullText += chunk;
-      onChunk(chunk, fullText);
-    });
+    let inputTokens = 0;
+    let outputTokens = 0;
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content;
+      if (delta) {
+        fullText += delta;
+        onChunk(delta, fullText);
+      }
+      if (chunk.usage) {
+        inputTokens = chunk.usage.prompt_tokens || 0;
+        outputTokens = chunk.usage.completion_tokens || 0;
+      }
+    }
 
-    const finalMessage = await stream.finalMessage();
-    const text = finalMessage.content[0]?.type === "text" ? finalMessage.content[0].text : fullText || "Unable to answer.";
     return {
-      text,
-      inputTokens: finalMessage.usage?.input_tokens || 0,
-      outputTokens: finalMessage.usage?.output_tokens || 0,
+      text: fullText || "Unable to answer.",
+      inputTokens,
+      outputTokens,
     };
   }
 
@@ -604,13 +661,16 @@ Focus on:
 
 Keep suggestions practical and specific to THIS app.${langInstruction}`;
 
-    const response = await this.client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 1500,
+    const modelCfg = runtimeConfig.getModelConfig("suggestions");
+    const client = getOpenRouterClient();
+    const response = await client.chat.completions.create({
+      model: modelCfg.modelId,
+      max_tokens: modelCfg.maxTokens,
       messages: [{ role: "user", content: prompt }],
-    });
+      ...(this.getProviderRouting(modelCfg.modelId, modelCfg.provider) ? { provider: this.getProviderRouting(modelCfg.modelId, modelCfg.provider) } : {}),
+    } as any);
 
-    const text = response.content[0]?.type === "text" ? response.content[0].text : "";
+    const text = response.choices[0]?.message?.content || "";
     try {
       const match = text.match(/\[[\s\S]*\]/);
       if (match) return JSON.parse(match[0]);
@@ -650,6 +710,12 @@ Keep suggestions practical and specific to THIS app.${langInstruction}`;
     lang?: string,
     userBalance?: number,
   ): Promise<AgentResult> {
+    // Run the entire agent loop (and every transitive console.log inside
+    // claude/builder/commit/ws-manager) under an ALS context tagged with
+    // this project's id. The console tagger then prefixes lines with
+    // `[app:<id>]` and the persistent log capture (app-log.service.ts)
+    // attributes them to the project instead of "core".
+    return runWithProject(projectId, async () => {
     const featureGating = await this.buildFeatureGating(projectId);
     const langInstruction = lang && lang !== "en"
       ? `\n\nIMPORTANT: All user-facing text in the app (UI labels, buttons, messages, placeholders, titles) must be written in ${lang === "ru" ? "Russian" : "Ukrainian"}. The code, comments, and variable names should stay in English.`
@@ -675,6 +741,7 @@ ${featureGating}
 Create all necessary files (frontend/index.html, frontend/styles.css, frontend/app.js, backend/routes.js) and configure the bot. Database is handled via db.get/db.set in routes.js — no schema setup needed. Make it beautiful and functional. Use deploy_to_dev() to deploy and test your code via the Dev URLs. In frontend code, use /api/${projectId}/ as the API base URL (this will be rewritten to /devapi/ in dev mode automatically).${langInstruction}`;
 
     return this.runAgent(projectId, prompt, onProgress, onAskUser, onCreateTodo, onCheckTodo, userBalance, undefined, "new");
+    }); // end runWithProject
   }
 
   async updateApp(
@@ -688,6 +755,10 @@ Create all necessary files (frontend/index.html, frontend/styles.css, frontend/a
     lang?: string,
     userBalance?: number,
   ): Promise<AgentResult> {
+    // See note in `buildApp`: wrap the whole agent run in an ALS context so
+    // every transitive log line (`[Agent]`, `[Builder]`, claude streams, …)
+    // is tagged with this project's id and persisted under it.
+    return runWithProject(projectId, async () => {
     const project: any = await projectService.getProject(projectId);
     const contextParts: string[] = [];
 
@@ -758,6 +829,7 @@ Use deploy_to_dev() to deploy and test your changes via the Dev URLs.
 ${langInstruction}`;
 
     return this.runAgent(projectId, prompt, onProgress, onAskUser, onCreateTodo, onCheckTodo, userBalance, attachments, "update");
+    }); // end runWithProject
   }
 
   private async runAgent(
@@ -798,7 +870,6 @@ ${langInstruction}`;
     const logger = new AgentLogger(projectId);
 
     let botToken = "";
-    let qualityTier = 1;
     // Load the project's preferences once so the configure_bot tool below can
     // gate behaviour on `kind` (e.g. text-bot projects must NEVER ship a Mini
     // App menu button — see preferences.kind === "textBot" guard inside the
@@ -809,12 +880,13 @@ ${langInstruction}`;
       if (project?.botTokenEncrypted) {
         botToken = decryptToken(project.botTokenEncrypted);
       }
-      qualityTier = (project as any)?.qualityTier || 1;
       const parsed = parseProjectPreferences((project as any)?.preferences ?? null);
       if (parsed) runPrefs = parsed;
     } catch {}
 
-    const tierConfig = QUALITY_TIERS[qualityTier] || QUALITY_TIERS[1];
+    // Project quality tiers are disabled. Builds and updates now use one
+    // runtime-configurable Code Gen model/limits profile.
+    const tierConfig = runtimeConfig.getModelConfig("codegen");
 
     let finalPrompt = userPrompt;
     const checklistDone = new Set<number>();
@@ -829,20 +901,22 @@ ${langInstruction}`;
 
 FINAL STEP (internal — never put in the checklist): After your last code change, call deploy_to_dev() once more, then call finish(shortSummary, summary). That single finish() call replaces the old short_summary/summary/done sequence. There are NO separate short_summary/summary/done tools any more.`;
 
-    logger.header(tierConfig.model, finalPrompt);
+    logger.header(tierConfig.modelId, finalPrompt);
 
     const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
     const MIME_MAP: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif" };
-    const imageBlocks: any[] = [];
+    // Build OpenAI-format content parts (text + optional image_url blocks)
+    const imageContentParts: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [];
     if (attachments && attachments.length > 0) {
       for (const att of attachments) {
         const ext = path.extname(att.originalName).toLowerCase();
         if (IMAGE_EXTS.has(ext) && fs.existsSync(att.localPath)) {
           try {
             const data = fs.readFileSync(att.localPath).toString("base64");
-            imageBlocks.push({
-              type: "image",
-              source: { type: "base64", media_type: MIME_MAP[ext] || "image/png", data },
+            const mimeType = MIME_MAP[ext] || "image/png";
+            imageContentParts.push({
+              type: "image_url",
+              image_url: { url: `data:${mimeType};base64,${data}` },
             });
             console.log(`[Agent] 🖼️ Attached image for vision: ${att.originalName} (${ext})`);
           } catch (err) {
@@ -852,12 +926,14 @@ FINAL STEP (internal — never put in the checklist): After your last code chang
       }
     }
 
-    const firstMessageContent: any = imageBlocks.length > 0
-      ? [...imageBlocks, { type: "text", text: finalPrompt }]
-      : finalPrompt;
+    const firstUserContent: OpenAI.Chat.Completions.ChatCompletionContentPart[] | string =
+      imageContentParts.length > 0
+        ? [...imageContentParts, { type: "text", text: finalPrompt }]
+        : finalPrompt;
 
-    const messages: Anthropic.MessageParam[] = [
-      { role: "user", content: firstMessageContent },
+    // Messages array in OpenAI format.
+    const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+      { role: "user", content: firstUserContent },
     ];
 
     let summary = "";
@@ -891,50 +967,45 @@ FINAL STEP (internal — never put in the checklist): After your last code chang
     let deployCount = 0;
     let consecutiveNoWrite = 0;
 
-    const maxIterations = tierConfig.maxIterations;
+    const maxIterations = tierConfig.maxIterations ?? 60;
+    const staticModelPricing = MODEL_PRICING[tierConfig.modelId] || MODEL_PRICING["anthropic/claude-sonnet-4-5"] || { input: 0, output: 0, cache_write: 0, cache_read: 0 };
+    const liveModelPricing = await getModelPricing(tierConfig.modelId);
+    const agentPricing = {
+      input: liveModelPricing?.promptPerToken ?? staticModelPricing.input,
+      output: liveModelPricing?.completionPerToken ?? staticModelPricing.output,
+      cache_write: liveModelPricing?.promptPerToken ?? staticModelPricing.cache_write,
+      cache_read: liveModelPricing?.promptPerToken ?? staticModelPricing.cache_read,
+    };
     while (iterations < maxIterations) {
       if (abortedProjects.has(projectId)) {
         abortedProjects.delete(projectId);
         logger.done("ABORTED by user", iterations, totalInputTokens, totalOutputTokens);
         writeDetailedLog("aborted");
         console.log(`[Agent] ⛔ Aborted by user after ${iterations} iterations | Tokens: in=${totalInputTokens} out=${totalOutputTokens}`);
-        throw new AgentAbortedError(tierConfig.model, totalInputTokens, totalOutputTokens, totalCacheWriteTokens, totalCacheReadTokens);
+        throw new AgentAbortedError(tierConfig.modelId, totalInputTokens, totalOutputTokens, totalCacheWriteTokens, totalCacheReadTokens);
       }
       iterations++;
 
-      // Cache breakpoints: system prompt, tools, and sliding message history.
-      // Anthropic allows up to 4 breakpoints — we use 3 fixed + 1 dynamic.
-      const cachedTools = TOOLS.map((tool, i) =>
-        i === TOOLS.length - 1
-          ? { ...tool, cache_control: { type: "ephemeral" as const } }
-          : tool
-      );
-
-      // Put a cache breakpoint on the last "stable" message — anything older
-      // than the last 2 iterations is considered stable. This way 80%+ of
-      // message history is served from cache on every subsequent call.
-      const cachedMessages = this.applyCacheBreakpoint(messages);
-
-      const requestPayload = {
-        model: tierConfig.model,
-        max_tokens: tierConfig.thinking + 16000,
-        thinking: { type: "enabled", budget_tokens: tierConfig.thinking },
-        system: [
-          {
-            type: "text",
-            text: systemPrompt,
-            cache_control: { type: "ephemeral" },
-          },
+      // Build OpenAI-format request. Thinking is passed via extra_body for
+      // Claude models on OpenRouter — non-Claude models ignore it gracefully.
+      const thinkingBudget = tierConfig.thinkingBudget ?? 0;
+      const requestPayload: any = {
+        model: tierConfig.modelId,
+        max_tokens: tierConfig.maxTokens,
+        messages: [
+          { role: "system", content: systemPrompt },
+          ...messages,
         ],
-        tools: [
-          ...cachedTools,
-          { type: "web_search_20260209", name: "web_search", max_uses: 5 } as any
-        ],
-        messages: cachedMessages,
+        tools: TOOLS,
+        tool_choice: "auto" as const,
+        ...(this.getProviderRouting(tierConfig.modelId, tierConfig.provider) ? { provider: this.getProviderRouting(tierConfig.modelId, tierConfig.provider) } : {}),
+        ...(thinkingBudget > 0 ? {
+          extra_body: { thinking: { type: "enabled", budget_tokens: thinkingBudget } },
+        } : {}),
       };
-      let response: Anthropic.Message;
+      let response: OpenAI.Chat.Completions.ChatCompletion;
       try {
-        response = await this.callWithRetry(requestPayload as any);
+        response = await this.callWithRetry(requestPayload);
       } catch (apiErr: any) {
         try {
           const cloneSafe = (v: any) => {
@@ -952,9 +1023,6 @@ FINAL STEP (internal — never put in the checklist): After your last code chang
         writeDetailedLog("api_error");
         throw apiErr;
       }
-      // Append the full request+response to the detailed admin log. Cloning is
-      // intentional so later mutations to `messages` / `cachedTools` don't leak
-      // back into this entry. Use structuredClone if available, JSON otherwise.
       try {
         const clone = (v: any) => (typeof structuredClone === "function"
           ? structuredClone(v)
@@ -970,87 +1038,88 @@ FINAL STEP (internal — never put in the checklist): After your last code chang
       }
 
       const usage = response.usage as any;
-      const iterIn = usage?.input_tokens || 0;
-      const iterOut = usage?.output_tokens || 0;
-      const cached = usage?.cache_read_input_tokens || 0;
-      const cacheCreated = usage?.cache_creation_input_tokens || 0;
+      const iterIn = usage?.prompt_tokens || 0;
+      const iterOut = usage?.completion_tokens || 0;
+      // OpenRouter may report cached token counts in non-standard fields
+      const cached = usage?.prompt_tokens_details?.cached_tokens || 0;
+      const cacheCreated = 0;
       totalInputTokens += iterIn;
       totalOutputTokens += iterOut;
       totalCacheReadTokens += cached;
-      totalCacheWriteTokens += cacheCreated;
-      if (cached > 0 || cacheCreated > 0) {
-        console.log(`[Agent] 💾 Cache: ${cached} read, ${cacheCreated} written`);
-      }
+      // totalCacheWriteTokens stays 0 — OpenRouter handles caching transparently
 
-      const pricing = MODEL_PRICING[tierConfig.model] || MODEL_PRICING["claude-sonnet-4-6"];
+      const markupMultiplier = tierConfig.markupMultiplier ?? runtimeConfig.getMarkupMultiplier();
       liveCostUsd =
-        (totalInputTokens * pricing.input +
-        totalOutputTokens * pricing.output +
-        totalCacheWriteTokens * pricing.cache_write +
-        totalCacheReadTokens * pricing.cache_read) *
-        runtimeConfig.getMarkupMultiplier();
+        (totalInputTokens * agentPricing.input +
+        totalOutputTokens * agentPricing.output +
+        totalCacheWriteTokens * agentPricing.cache_write +
+        totalCacheReadTokens * agentPricing.cache_read) *
+        markupMultiplier;
 
-      const assistantContent: Anthropic.ContentBlock[] = response.content;
-      messages.push({ role: "assistant", content: assistantContent });
+      const assistantMsg = response.choices[0]?.message;
+      const assistantToolCalls = assistantMsg?.tool_calls || [];
+      const assistantText = assistantMsg?.content || "";
+      // Thinking may come back as reasoning_content from OpenRouter for Claude models
+      const reasoning = (assistantMsg as any)?.reasoning_content || (assistantMsg as any)?.reasoning || "";
 
-      logger.iteration(iterations, tierConfig.model);
+      // Push the full assistant message back into the conversation.
+      messages.push({
+        role: "assistant",
+        content: assistantText,
+        tool_calls: assistantToolCalls.length > 0 ? assistantToolCalls : undefined,
+      } as any);
+
+      logger.iteration(iterations, tierConfig.modelId);
       logger.tokens(totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens, iterIn, iterOut, cached, cacheCreated, liveCostUsd);
 
-      const thinkingBlocks = assistantContent.filter(b => (b as any).type === "thinking");
-      const textBlocks = assistantContent.filter(b => b.type === "text");
-      const toolBlocks = assistantContent.filter(b => b.type === "tool_use");
-      for (const tb of thinkingBlocks) {
-        const thinking = (tb as any).thinking || "";
-        if (thinking.trim()) {
-          logger.thinking(thinking);
-          console.log(`[Agent] 🧠 Thinking: ${thinking.substring(0, 300).replace(/\n/g, " ")}${thinking.length > 300 ? "..." : ""}`);
-        }
+      if (reasoning?.trim()) {
+        logger.thinking(reasoning);
+        console.log(`[Agent] 🧠 Thinking: ${reasoning.substring(0, 300).replace(/\n/g, " ")}${reasoning.length > 300 ? "..." : ""}`);
       }
-      for (const tb of textBlocks) {
-        if (tb.type === "text" && tb.text.trim()) {
-          logger.claudeMessage(tb.text);
-          console.log(`[Agent] 💬 Claude says: ${tb.text.substring(0, 500)}`);
-        }
+      if (assistantText?.trim()) {
+        logger.claudeMessage(assistantText);
+        console.log(`[Agent] 💬 Claude says: ${assistantText.substring(0, 500)}`);
       }
-      if (toolBlocks.length > 0) {
-        const toolNames = toolBlocks.map(b => b.type === "tool_use" ? b.name : "").join(", ");
-        console.log(`[Agent] 🔧 Iteration ${iterations} | Tools: [${toolNames}] | Tokens so far: in=${totalInputTokens} out=${totalOutputTokens} | stop=${response.stop_reason}`);
+      if (assistantToolCalls.length > 0) {
+        const toolNames = assistantToolCalls.map((tc: any) => tc.function?.name).join(", ");
+        console.log(`[Agent] 🔧 Iteration ${iterations} | Tools: [${toolNames}] | Tokens so far: in=${totalInputTokens} out=${totalOutputTokens} | finish=${response.choices[0]?.finish_reason}`);
       }
 
-      if (response.stop_reason === "end_turn" || !assistantContent.some(b => b.type === "tool_use")) {
-        const textBlock = assistantContent.find(b => b.type === "text");
-        if (textBlock && textBlock.type === "text") {
-          summary = textBlock.text;
-        }
+      const finishReason = response.choices[0]?.finish_reason;
+      if (finishReason === "stop" || (finishReason as string) === "end_turn" || assistantToolCalls.length === 0) {
+        if (assistantText) summary = assistantText;
         logger.done(summary, iterations, totalInputTokens, totalOutputTokens);
         writeDetailedLog("end_turn_no_tools");
         console.log(`[Agent] ⏹️ Agent finished after ${iterations} iterations | Total tokens: in=${totalInputTokens} out=${totalOutputTokens}`);
         break;
       }
 
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
+      // Tool results in OpenAI format: each gets its own { role: "tool" } message.
+      const toolResults: Array<{ role: "tool"; tool_call_id: string; content: string }> = [];
 
       // Process all tool_use blocks, but force terminal tools (`done`, `finish`)
       // to be processed LAST so the model can safely batch UI work + finish in
       // a single turn without losing earlier writes (`done`/`finish` return immediately).
       const TERMINAL_TOOLS = new Set(["done", "finish"]);
-      const orderedTools = [
-        ...assistantContent.filter(b => b.type === "tool_use" && !TERMINAL_TOOLS.has((b as any).name)),
-        ...assistantContent.filter(b => b.type === "tool_use" && TERMINAL_TOOLS.has((b as any).name)),
+      const orderedToolCalls = [
+        ...assistantToolCalls.filter((tc: any) => !TERMINAL_TOOLS.has((tc as any).function?.name)),
+        ...assistantToolCalls.filter((tc: any) => TERMINAL_TOOLS.has((tc as any).function?.name)),
       ];
 
       // HARD REJECT for UI-only batches: check_todo / set_progress are allowed
-      // ONLY when the same turn also contains a real action. If not, we don't
-      // execute them at all — the tool returns ERROR and the model has to retry
-      // with proper batching. This eliminates the prompt-rule-ignored problem.
+      // ONLY when the same turn also contains a real action.
       const ALLOWED_WITH_UI = new Set(["write_file", "edit_file", "deploy_to_dev", "shell"]);
-      const turnHasAllowedAction = toolBlocks.some((b: any) => ALLOWED_WITH_UI.has(b.name));
+      const turnHasAllowedAction = assistantToolCalls.some((tc: any) => ALLOWED_WITH_UI.has((tc as any).function?.name));
 
-      for (const block of orderedTools) {
-        if (block.type !== "tool_use") continue;
-
-        const { id, name, input } = block;
-        const args = input as any;
+      for (const toolCall of orderedToolCalls) {
+        const id = (toolCall as any).id as string;
+        const name = (toolCall as any).function?.name as string;
+        let args: any;
+        try {
+          args = JSON.parse((toolCall as any).function?.arguments || "{}");
+        } catch {
+          args = {};
+        }
         let result = "";
         const argsSummary = this.summarizeArgs(name, args);
         logger.toolCall(name, args);
@@ -1416,6 +1485,12 @@ Pick one and proceed.`;
                 await progress({ action: "🚀 Deploying to dev", detail: `(${deployCount}/4)`, percent: currentPercent });
               }
               try {
+                const routeError = this.validateBackendRoutes(projectDir, projectId);
+                if (routeError) {
+                  result = `Error: ${routeError} Fix backend/routes.js, then call deploy_to_dev() again.`;
+                  deployCount--;
+                  break;
+                }
                 commitService.syncToDev(projectId, projectDir);
                 // Force-reload the dev WS so background timers and game loops
                 // pick up the new routes.js without requiring clients to reconnect.
@@ -1571,6 +1646,12 @@ The user will visually verify. If this was your final action, in your NEXT turn 
                 } catch {}
               }
 
+              const routeError = this.validateBackendRoutes(projectDir, projectId);
+              if (routeError) {
+                result = `Error: ${routeError} Fix backend/routes.js, deploy to dev, then call finish(shortSummary, summary) again.`;
+                break;
+              }
+
               try {
                 const code = this.getProjectCode(projectDir);
                 await projectService.storeGeneratedCode(projectId, code);
@@ -1578,13 +1659,13 @@ The user will visually verify. If this was your final action, in your NEXT turn 
 
               bustCache(projectDir);
               try { commitService.syncToDev(projectId, projectDir); } catch {}
-              toolResults.push({ type: "tool_result", tool_use_id: id, content: "OK" });
-              messages.push({ role: "user", content: toolResults });
+              toolResults.push({ role: "tool", tool_call_id: id, content: "OK" });
+              for (const tr of toolResults) messages.push(tr as any);
               logger.done(summary, iterations, totalInputTokens, totalOutputTokens);
               writeDetailedLog("done");
               const logFilePath = logger.getLogPath();
               logger.close();
-              return { summary, shortSummary, model: tierConfig.model, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath, commitNum, commitDir };
+              return { summary, shortSummary, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath, commitNum, commitDir };
             }
 
             case "finish": {
@@ -1624,6 +1705,12 @@ The user will visually verify. If this was your final action, in your NEXT turn 
                 } catch {}
               }
 
+              const routeError = this.validateBackendRoutes(projectDir, projectId);
+              if (routeError) {
+                result = `Error: ${routeError} Fix backend/routes.js, deploy to dev, then call finish(shortSummary, summary) again.`;
+                break;
+              }
+
               try {
                 const code = this.getProjectCode(projectDir);
                 await projectService.storeGeneratedCode(projectId, code);
@@ -1631,13 +1718,13 @@ The user will visually verify. If this was your final action, in your NEXT turn 
 
               bustCache(projectDir);
               try { commitService.syncToDev(projectId, projectDir); } catch {}
-              toolResults.push({ type: "tool_result", tool_use_id: id, content: "OK" });
-              messages.push({ role: "user", content: toolResults });
+              toolResults.push({ role: "tool", tool_call_id: id, content: "OK" });
+              for (const tr of toolResults) messages.push(tr as any);
               logger.done(summary, iterations, totalInputTokens, totalOutputTokens);
               writeDetailedLog("finish");
-              const logFilePath = logger.getLogPath();
+              const logFilePath2 = logger.getLogPath();
               logger.close();
-              return { summary, shortSummary, model: tierConfig.model, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath, commitNum, commitDir };
+              return { summary, shortSummary, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath2, commitNum, commitDir };
             }
 
             case "configure_bot": {
@@ -1716,10 +1803,11 @@ The user will visually verify. If this was your final action, in your NEXT turn 
 
         logger.toolResult(name, result);
         console.log(`[Agent] 📥 ${name}(${argsSummary}) -> ${result.substring(0, 200).replace(/\n/g, "\\n")}${result.length > 200 ? "..." : ""}`);
-        toolResults.push({ type: "tool_result", tool_use_id: id, content: result });
+        toolResults.push({ role: "tool", tool_call_id: id, content: result });
       }
 
-      messages.push({ role: "user", content: toolResults });
+      // Push each tool result as a separate message (OpenAI format).
+      for (const tr of toolResults) messages.push(tr as any);
 
       // DISABLED: pruneConversation mutates older messages and breaks Anthropic
       // prompt cache (cacheRead drops to 0 after first prune, causing 5-10x cost
@@ -1736,8 +1824,8 @@ The user will visually verify. If this was your final action, in your NEXT turn 
       const estimatedTokens = Math.round(msgSize / 4);
       console.log(`[Agent] 📊 Iter ${iterations} | Messages: ${messages.length} | ~${estimatedTokens} tokens | Cost: $${liveCostUsd.toFixed(4)}`);
 
-      const hasWrite = toolBlocks.some(b =>
-        b.type === "tool_use" && ["write_file", "edit_file"].includes(b.name)
+      const hasWrite = assistantToolCalls.some((tc: any) =>
+        ["write_file", "edit_file"].includes((tc as any).function?.name)
       );
 
       // Track consecutive iterations without writes
@@ -1775,6 +1863,11 @@ The user will visually verify. If this was your final action, in your NEXT turn 
     }
 
     // Fallback: store code even if done() wasn't called
+    const finalRouteError = this.validateBackendRoutes(projectDir, projectId);
+    if (finalRouteError) {
+      summary = `Agent reached iteration limit with invalid backend routes: ${finalRouteError}`;
+      console.warn(`[Agent] final sync blocked: ${finalRouteError}`);
+    }
     try {
       const code = this.getProjectCode(projectDir);
       await projectService.storeGeneratedCode(projectId, code);
@@ -1782,7 +1875,9 @@ The user will visually verify. If this was your final action, in your NEXT turn 
 
     bustCache(projectDir);
     // Final sync commit folder to development/
-    try { commitService.syncToDev(projectId, projectDir); } catch {}
+    if (!finalRouteError) {
+      try { commitService.syncToDev(projectId, projectDir); } catch {}
+    }
 
     logger.done(summary || "Agent reached iteration limit", iterations, totalInputTokens, totalOutputTokens);
     writeDetailedLog("iteration_limit");
@@ -1792,7 +1887,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
     return {
       summary: summary || "App updated (agent reached iteration limit)",
       shortSummary: shortSummary || summary?.split("\n")[0]?.substring(0, 200) || "Update completed",
-      model: tierConfig.model,
+      model: tierConfig.modelId,
       inputTokens: totalInputTokens,
       outputTokens: totalOutputTokens,
       cacheWriteTokens: totalCacheWriteTokens,
@@ -1853,32 +1948,12 @@ The user will visually verify. If this was your final action, in your NEXT turn 
    * This mutates the messages — but only via a shallow copy of the target
    * block, so the caller's messages array stays clean for subsequent iters.
    */
-  private applyCacheBreakpoint(
-    messages: Anthropic.MessageParam[]
-  ): Anthropic.MessageParam[] {
-    if (messages.length < 4) return messages;
-
-    // Find the latest message that's at least 2 turns back
-    const breakpointIdx = messages.length - 4;
-    const target = messages[breakpointIdx];
-
-    // Only works on structured content (array of blocks), not string content
-    if (typeof target.content === "string") return messages;
-    if (!Array.isArray(target.content)) return messages;
-
-    // Clone the target message and add cache_control to its LAST block
-    const clonedBlocks = target.content.map((b, i, arr) =>
-      i === arr.length - 1
-        ? { ...b, cache_control: { type: "ephemeral" as const } }
-        : b
-    );
-
-    const result = [...messages];
-    result[breakpointIdx] = { ...target, content: clonedBlocks as any };
-    return result;
+  /** @deprecated No longer used — OpenRouter handles caching transparently. */
+  private applyCacheBreakpoint(messages: any[]): any[] {
+    return messages;
   }
 
-  private pruneConversation(messages: Anthropic.MessageParam[]): void {
+  private pruneConversation(messages: any[]): void {
     // Keep last 8 iterations (16 messages) fully intact.
     // Only prune older messages where information can be safely compressed.
     const keepRecent = 16;
@@ -2245,9 +2320,12 @@ The user will visually verify. If this was your final action, in your NEXT turn 
     if (prevPassport) inputParts.push(`PREVIOUS PASSPORT (for reference — preserve style and key decisions, but update everything from actual code):\n${prevPassport.substring(0, 8000)}`);
     if (doneSummary) inputParts.push(`LATEST CHANGES (commit #${commitNum}):\n${doneSummary.substring(0, 3000)}`);
 
-    const response = await this.client.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 16000,
+    const passportCfg = runtimeConfig.getModelConfig("passport");
+    const client = getOpenRouterClient();
+    const response = await client.chat.completions.create({
+      model: passportCfg.modelId,
+      max_tokens: passportCfg.maxTokens,
+      ...(this.getProviderRouting(passportCfg.modelId, passportCfg.provider) ? { provider: this.getProviderRouting(passportCfg.modelId, passportCfg.provider) } : {}),
       messages: [{
         role: "user",
         content: `${doneSummary ? "Generate an updated" : "Analyze this codebase and generate a"} project passport for a Telegram Mini App.
@@ -2289,16 +2367,22 @@ and things that look wrong but are intentional.
 ## Current State
 What the app can do right now. What features are complete, what's partially done.`,
       }],
-    });
+    } as any);
 
-    const passportText = response.content[0]?.type === "text" ? response.content[0].text : "";
+    const passportText = response.choices[0]?.message?.content || "";
     if (!passportText) throw new Error("Failed to generate passport");
 
     const usage = response.usage as any;
-    const inTok = usage?.input_tokens || 0;
-    const outTok = usage?.output_tokens || 0;
-    const p = MODEL_PRICING["claude-haiku-4-5-20251001"];
-    const costUsd = inTok * p.input + outTok * p.output;
+    const inTok = usage?.prompt_tokens || 0;
+    const outTok = usage?.completion_tokens || 0;
+    const markupMul = passportCfg.markupMultiplier ?? runtimeConfig.getMarkupMultiplier();
+    const livePricing = await getModelPricing(passportCfg.modelId);
+    const staticPricing = MODEL_PRICING[passportCfg.modelId] || { input: 0, output: 0, cache_write: 0, cache_read: 0 };
+    const p = {
+      input: livePricing?.promptPerToken ?? staticPricing.input,
+      output: livePricing?.completionPerToken ?? staticPricing.output,
+    };
+    const costUsd = (inTok * p.input + outTok * p.output) * markupMul;
 
     fs.writeFileSync(path.join(commitDir, "passport.md"), passportText, "utf-8");
 
@@ -2359,6 +2443,7 @@ What the app can do right now. What features are complete, what's partially done
   }
 
   async regenerateContext(projectId: string): Promise<string> {
+    return runWithProject(projectId, async () => {
     const projectDir = path.join(PROJECTS_DIR, projectId);
     const commitsDir = path.join(projectDir, "commits");
 
@@ -2379,6 +2464,7 @@ What the app can do right now. What features are complete, what's partially done
 
     const project = await projectService.getProject(projectId);
     return this.generatePassport({ projectId, commitDir: latestDir, commitNum: latestNum, description: project?.description || undefined });
+    }); // end runWithProject
   }
 
   private buildFallbackSummary(projectDir: string, doneSummary: string): string {

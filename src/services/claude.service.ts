@@ -1,4 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { getOpenRouterClient } from "./openrouter.service";
+import { runtimeConfig } from "./runtime-config.service";
 import { config } from "../config";
 import { GeneratedApp, GeneratedFile } from "../types";
 import { ProjectPreferences, buildPreferencesPrompt } from "./preferences.catalog";
@@ -225,36 +226,51 @@ function extractFilesManually(text: string): any {
 }
 
 export class ClaudeService {
-  private client: Anthropic;
-
-  constructor() {
-    this.client = new Anthropic({ apiKey: config.anthropicApiKey });
-    console.log(config.anthropicApiKey);
+  private getProviderRouting(modelId: string, provider?: string): any | undefined {
+    const selectedProvider = provider?.trim();
+    if (selectedProvider) {
+      return { only: [selectedProvider], allow_fallbacks: false };
+    }
+    if (modelId.toLowerCase().startsWith("minimax/")) {
+      return { only: ["Minimax"], allow_fallbacks: false };
+    }
+    return undefined;
   }
 
   private async streamMessage(params: {
     system: string;
     messages: Array<{ role: "user" | "assistant"; content: string }>;
     max_tokens: number;
+    modelId: string;
+    provider?: string;
   }): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
-    let result = "";
-    const stream = this.client.messages.stream({
-      model: "claude-sonnet-4-6",
+    const client = getOpenRouterClient();
+    const stream = await client.chat.completions.create({
+      model: params.modelId,
       max_tokens: params.max_tokens,
-      system: params.system,
-      messages: params.messages,
-    });
-    for await (const event of stream) {
-      if (event.type === "content_block_delta" && (event.delta as any).type === "text_delta") {
-        result += (event.delta as any).text;
+      messages: [
+        { role: "system", content: params.system },
+        ...params.messages,
+      ],
+      ...(this.getProviderRouting(params.modelId, params.provider) ? { provider: this.getProviderRouting(params.modelId, params.provider) } : {}),
+      stream: true,
+    } as any) as any;
+
+    let result = "";
+    let inputTokens = 0;
+    let outputTokens = 0;
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content;
+      if (delta) result += delta;
+      // OpenRouter returns usage on the final chunk
+      if (chunk.usage) {
+        inputTokens = chunk.usage.prompt_tokens || 0;
+        outputTokens = chunk.usage.completion_tokens || 0;
       }
     }
-    const final = await stream.finalMessage();
-    return {
-      text: result,
-      inputTokens: final.usage?.input_tokens || 0,
-      outputTokens: final.usage?.output_tokens || 0,
-    };
+
+    return { text: result, inputTokens, outputTokens };
   }
 
   async generatePlan(
@@ -267,6 +283,7 @@ export class ClaudeService {
     inputTokens: number;
     outputTokens: number;
   }> {
+    const modelCfg = runtimeConfig.getModelConfig("plan");
     const prefsBlock = prefs ? `${buildPreferencesPrompt(prefs)}\n\n` : "";
     let prompt = `${prefsBlock}Create a plan for a Telegram Mini App based on this description:\n\n${description}`;
     if (assets && assets.length > 0) {
@@ -286,7 +303,9 @@ IMPORTANT: Keep the plan CONCISE. The user-facing summary must fit in a Telegram
     const result = await this.streamMessage({
       system: SYSTEM_PROMPT,
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 2048,
+      max_tokens: modelCfg.maxTokens,
+      modelId: modelCfg.modelId,
+      provider: modelCfg.provider,
     });
 
     return { plan: result.text, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
@@ -298,6 +317,7 @@ IMPORTANT: Keep the plan CONCISE. The user-facing summary must fit in a Telegram
     projectId: string,
     assets?: string[]
   ): Promise<GeneratedApp> {
+    const modelCfg = runtimeConfig.getModelConfig("codegen");
     let prompt = `Generate the complete Telegram Mini App code based on this plan.
 
 Project ID: ${projectId}
@@ -321,7 +341,9 @@ ${plan}`;
         { role: "user", content: prompt },
         { role: "assistant", content: "{" },
       ],
-      max_tokens: 32000,
+      max_tokens: modelCfg.maxTokens,
+      modelId: modelCfg.modelId,
+      provider: modelCfg.provider,
     });
 
     const text = "{" + result.text;
@@ -348,6 +370,7 @@ ${plan}`;
     updateDescription: string,
     projectId: string
   ): Promise<GeneratedApp> {
+    const modelCfg = runtimeConfig.getModelConfig("codegen");
     const prompt = `Update the existing Telegram Mini App code based on the user's request.
 
 Project ID: ${projectId}
@@ -367,7 +390,9 @@ Return the COMPLETE updated code as valid JSON matching the specified structure.
         { role: "user", content: prompt },
         { role: "assistant", content: "{" },
       ],
-      max_tokens: 32000,
+      max_tokens: modelCfg.maxTokens,
+      modelId: modelCfg.modelId,
+      provider: modelCfg.provider,
     });
 
     const text = "{" + result.text;
@@ -394,6 +419,7 @@ Return the COMPLETE updated code as valid JSON matching the specified structure.
     inputTokens: number;
     outputTokens: number;
   }> {
+    const modelCfg = runtimeConfig.getModelConfig("suggestions");
     const langInstruction = lang && lang !== "en"
       ? `\n\nIMPORTANT: Write all suggestions in ${lang === "ru" ? "Russian" : lang === "ua" ? "Ukrainian" : "English"}. The suggestions must be in that language.`
       : "";
@@ -407,15 +433,20 @@ Return a JSON array of strings, each being a brief improvement suggestion. Examp
 
 Return ONLY the JSON array, no other text.${langInstruction}`;
 
-    const message = await this.client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 1024,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: prompt }],
-    });
+    const client = getOpenRouterClient();
+    const message = await client.chat.completions.create({
+      model: modelCfg.modelId,
+      max_tokens: modelCfg.maxTokens,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: prompt },
+      ],
+      ...(this.getProviderRouting(modelCfg.modelId, modelCfg.provider) ? { provider: this.getProviderRouting(modelCfg.modelId, modelCfg.provider) } : {}),
+    } as any);
 
-    const block = message.content[0];
-    const text = block.type === "text" ? block.text : "[]";
+    const text = message.choices[0]?.message?.content || "[]";
+    const inputTokens = message.usage?.prompt_tokens || 0;
+    const outputTokens = message.usage?.completion_tokens || 0;
 
     let suggestions: string[] = [];
     try {
@@ -423,11 +454,7 @@ Return ONLY the JSON array, no other text.${langInstruction}`;
       suggestions = JSON.parse(arrMatch ? arrMatch[0] : text);
     } catch {}
 
-    return {
-      suggestions,
-      inputTokens: message.usage?.input_tokens || 0,
-      outputTokens: message.usage?.output_tokens || 0,
-    };
+    return { suggestions, inputTokens, outputTokens };
   }
 }
 

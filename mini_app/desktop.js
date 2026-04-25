@@ -408,7 +408,7 @@ async function openAppPanel(p) {
 
   const version = p.currentVersion || 0;
   const cost = p.totalCostUsd ? `$${Number(p.totalCostUsd).toFixed(2)}` : '$0.00';
-  $('dapp-info').innerHTML = `Version: <b>${version}</b> · Cost: <b>${cost}</b> · Quality: <b>Tier ${p.qualityTier || 1}</b><br>ID: <b>${p.id}</b>`;
+  $('dapp-info').innerHTML = `Version: <b>${version}</b> · Cost: <b>${cost}</b><br>ID: <b>${p.id}</b>`;
 
   const isLive = ['deployed', 'released'].includes(p.status);
   const baseUrl = location.origin;
@@ -456,7 +456,6 @@ async function openAppPanel(p) {
 
   // Settings
   let settingsRows = menuRowAction(t('detail_edit_info') || 'Edit Info', 'af-icon-edit-info', 'panel-edit-info');
-  settingsRows += menuRowAction(t('detail_quality') || 'AI Quality', 'af-icon-quality', 'panel-quality');
   if (p.botUsername) settingsRows += menuRow(`Open @${p.botUsername}`, 'af-icon-open', `https://t.me/${p.botUsername}`);
   $('dapp-settings-rows').innerHTML = settingsRows;
 
@@ -472,7 +471,6 @@ async function openAppPanel(p) {
   onAction('panel-release', () => releaseVersionPanel(p));
   onAction('panel-features', () => showToast('Features panel coming soon'));
   onAction('panel-edit-info', () => showToast('Edit Info — open in Mini App'));
-  onAction('panel-quality', () => showToast('Quality Tier — open in Mini App'));
 
   // Copy fields
   $('dapp-token-text').onclick = () => {
@@ -909,29 +907,32 @@ function appendMessage(msg, animate = true) {
     html += `<div class="chat-bubble-content">${esc(msg.content)}</div>`;
     el.innerHTML = html;
   } else if (msg.type === 'balance_error') {
-    el.className = 'chat-bubble chat-bubble--balance-error';
+    el.className = 'chat-bubble chat-bubble--insufficient-funds';
     const bal = Number(msg.metadata?.balance ?? 0);
+    const minBal = 5;
+    const note = (t('chat_min_balance_note') || 'You can start when your balance is at least ${min}')
+      .replace('${min}', `$${minBal}`);
     el.innerHTML = `
-      <div class="balance-cta-header">
-        <div class="balance-cta-icon">🚀</div>
-        <div class="balance-cta-headtext">
-          <div class="balance-cta-title">${t('chat_almost_there_title') || 'Almost there!'}</div>
-          <div class="balance-cta-sub">${t('chat_almost_there_sub') || 'Your app is just one step away'}</div>
+      <div class="ifc-header">
+        <div class="ifc-icon">⚠️</div>
+        <div class="ifc-headtext">
+          <div class="ifc-title">${t('chat_insufficient_funds_title') || 'Insufficient Funds'}</div>
+          <div class="ifc-sub">${t('chat_insufficient_funds_sub') || 'Top up your balance to start building'}</div>
         </div>
       </div>
-      <div class="balance-cta-stats">
-        <div class="balance-cta-stat">
-          <div class="balance-cta-stat-label">${t('chat_estimated_cost') || 'Estimated cost'}</div>
-          <div class="balance-cta-stat-value">~$3.00</div>
+      <div class="ifc-stats">
+        <div class="ifc-stat">
+          <div class="ifc-stat-label">${t('chat_estimated_price') || t('chat_estimated_cost') || 'Estimated price'}</div>
+          <div class="ifc-stat-value">~$1–$5</div>
         </div>
-        <div class="balance-cta-stat">
-          <div class="balance-cta-stat-label">${t('chat_your_balance') || 'Your balance'}</div>
-          <div class="balance-cta-stat-value low">$${Number(bal).toFixed(2)}</div>
+        <div class="ifc-stat">
+          <div class="ifc-stat-label">${t('chat_your_balance') || 'Your balance'}</div>
+          <div class="ifc-stat-value low">$${Number(bal).toFixed(2)}</div>
         </div>
       </div>
-      <div class="balance-bonus-chip">
-        <span class="balance-bonus-chip-icon">🎁</span>
-        <span>${t('chat_first_deposit_chip') || 'Get +$10 FREE on your first deposit'}</span>
+      <div class="ifc-note">
+        <span class="ifc-note-icon">ℹ️</span>
+        <span>${note}</span>
       </div>`;
     if (isProcessing) {
       isProcessing = false;

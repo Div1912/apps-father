@@ -26,6 +26,7 @@ import { chatService, ChatMessage } from "../services/chat.service";
 import { agentService, AgentProgress, AgentAbortedError } from "../services/agent.service";
 import { processingProjects, abortedProjects } from "../bot/processing";
 import { commitService } from "../services/commit.service";
+import * as adminQueries from "../services/admin-queries.service";
 import { publishReport } from "../services/telegraph.service";
 import { claudeService } from "../services/claude.service";
 import {
@@ -468,7 +469,6 @@ export function createWebServer() {
           botUsername: p.botUsername || null,
           currentVersion: p.currentVersion || 0,
           totalCostUsd: p.totalCostUsd ? Number(p.totalCostUsd) : 0,
-          qualityTier: p.qualityTier || 1,
           features: p.features || "[]",
           releaseCommit: p.releaseCommit || null,
           avatarUrl,
@@ -680,11 +680,12 @@ export function createWebServer() {
         prisma.user.findUnique({ where: { id: user.id }, select: { firstDepositBonusGiven: true } }),
       ]);
       const firstDepositBonusEligible = paymentCount === 0 && !fullUser?.firstDepositBonusGiven;
+      const firstDepositBonusPercent = Number(runtimeConfig.get().firstTopupBonusPercent) || 0;
       res.json({
         balance,
         paymentCount,
         firstDepositBonusEligible,
-        firstDepositBonusUsd: 10,
+        firstDepositBonusPercent,
         minTopupUsd: 2,
       });
     } catch (err) {
@@ -1249,7 +1250,7 @@ export function createWebServer() {
             );
 
             const usage = await billingService.recordUsage(
-              user.id, projectId, "claude-sonnet-4-6",
+              user.id, projectId, runtimeConfig.getModelConfig("ask").modelId,
               { input_tokens: answer.inputTokens, output_tokens: answer.outputTokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
               "ask",
             );
@@ -1531,7 +1532,7 @@ export function createWebServer() {
       await projectService.updateProjectPlan(projectId, result.plan);
 
       const usage = await billingService.recordUsage(
-        user.id, projectId, "claude-sonnet-4-6",
+        user.id, projectId, runtimeConfig.getModelConfig("plan").modelId,
         { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
         "plan"
       );
@@ -1748,7 +1749,7 @@ export function createWebServer() {
       await projectService.updateProjectPlan(projectId, result.plan);
 
       const usage = await billingService.recordUsage(
-        user.id, projectId, "claude-sonnet-4-6",
+        user.id, projectId, runtimeConfig.getModelConfig("plan").modelId,
         { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
         "plan"
       );
@@ -1977,25 +1978,7 @@ export function createWebServer() {
   });
 
   app.post("/telegram-mini-app/api/quality/:projectId", async (req, res) => {
-    try {
-      const auth = validateAuth(req);
-      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await getOrCreateUserFromReq(req, auth);
-      const projectId = req.params.projectId as string;
-      const project = await projectService.getProject(projectId);
-      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
-
-      const { tier } = req.body;
-      if (typeof tier !== "number" || tier < 1 || tier > 4) { res.status(400).json({ error: "Invalid tier (1-4)" }); return; }
-
-      const { prisma } = await import("../db");
-      await prisma.project.update({ where: { id: projectId }, data: { qualityTier: tier } });
-
-      res.json({ tier });
-    } catch (err) {
-      console.error("[MiniApp API] Quality tier error:", err);
-      res.status(500).json({ error: "Internal server error" });
-    }
+    res.status(410).json({ error: "Quality tiers are disabled" });
   });
 
   // ── Regenerate Context API ──
@@ -2575,9 +2558,6 @@ export function createWebServer() {
   app.get("/telegram-mini-app/api/admin/stats/sources", async (req, res) => {
     if (!adminGuard(req, res)) return;
     try {
-      // Optional date range filter on user.created_at. Both bounds are
-      // optional ISO timestamps. Invalid values are silently ignored so
-      // bad input never breaks the admin dashboard.
       const parseIso = (raw: unknown): Date | null => {
         if (typeof raw !== "string" || !raw) return null;
         const d = new Date(raw);
@@ -2586,7 +2566,36 @@ export function createWebServer() {
       const fromDate = parseIso(req.query.from);
       const toDate = parseIso(req.query.to);
 
-      // One pass: user-level aggregate (cheap on admin scale).
+      const mainToken = config.botToken;
+      const resolveAvatar = mainToken
+        ? (async (telegramId: string): Promise<string | null> => {
+            const cacheKey = `u:${telegramId}`;
+            if (avatarCache.has(cacheKey)) return avatarCache.get(cacheKey)!;
+            try {
+              const r = await fetch(`https://api.telegram.org/bot${mainToken}/getUserProfilePhotos?user_id=${telegramId}&limit=1`);
+              const d: any = await r.json();
+              if (!d.ok || !d.result?.photos?.length) return null;
+              const photo = d.result.photos[0];
+              const biggest = photo[photo.length - 1];
+              const fr = await fetch(`https://api.telegram.org/bot${mainToken}/getFile?file_id=${biggest.file_id}`);
+              const fd: any = await fr.json();
+              if (!fd.ok) return null;
+              const url = `https://api.telegram.org/file/bot${mainToken}/${fd.result.file_path}`;
+              avatarCache.set(cacheKey, url);
+              return url;
+            } catch { return null; }
+          })
+        : undefined;
+
+      const result = await adminQueries.getSourcesStats({ from: fromDate, to: toDate, resolveAvatar });
+      res.json(result);
+    } catch (err: any) {
+      console.error("[Admin] Sources stats error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /* LEGACY_SOURCES_BLOCK_START
       //
       // Funnel reflects the new "create-project-first" flow (project is
       // created BEFORE the bot is linked):
@@ -2764,16 +2773,10 @@ export function createWebServer() {
       res.status(500).json({ error: err.message });
     }
   });
+  LEGACY_SOURCES_BLOCK_END */
 
   // List of users that registered in the given date range AND match a
-  // specific bucket from the Sources screen. Powers the per-card "Users"
-  // drill-down. Mirrors the filtering logic of /stats/sources so the user
-  // counts always line up.
-  //   kind=all                          -> every user in the range
-  //   kind=organic                      -> no utm_source AND no referred_by
-  //   kind=source  &key=<utm_source>    -> users with that utm_source
-  //   kind=partner &key=<telegramId>    -> users referred by that telegramId
-  //   kind=referrer&key=<telegramId>    -> same shape as partner
+  // specific bucket from the Sources screen.
   app.get("/telegram-mini-app/api/admin/stats/sources/users", async (req, res) => {
     if (!adminGuard(req, res)) return;
     try {
@@ -2784,9 +2787,18 @@ export function createWebServer() {
       };
       const fromDate = parseIso(req.query.from);
       const toDate = parseIso(req.query.to);
-      const kind = String(req.query.kind || "all");
+      const kind = String(req.query.kind || "all") as any;
       const key = typeof req.query.key === "string" ? req.query.key : "";
 
+      const result = await adminQueries.listSourceUsers({ from: fromDate, to: toDate, kind, key });
+      res.json(result);
+    } catch (err: any) {
+      console.error("[Admin] Sources users error:", err);
+      res.status(err.status || 500).json({ error: err.message });
+    }
+  });
+
+  /* LEGACY_SOURCES_USERS_BLOCK_START
       const where: any = {};
       if (fromDate || toDate) {
         where.createdAt = {};
@@ -2875,169 +2887,76 @@ export function createWebServer() {
           };
         }),
       });
-    } catch (err: any) {
-      console.error("[Admin] Sources users error:", err);
-      res.status(500).json({ error: err.message });
-    }
-  });
+  LEGACY_SOURCES_USERS_BLOCK_END */
+
+  // ─── User admin endpoints (Mini-App admin) ─────────────────────────────
+  // Backed by src/services/admin-queries.service.ts so the legacy mini-app
+  // admin and the new browser CRM (/admin/api/users/*) share identical logic.
 
   app.get("/telegram-mini-app/api/admin/users", async (req, res) => {
     if (!adminGuard(req, res)) return;
     try {
-      const users = await prisma.user.findMany({
-        include: { _count: { select: { projects: true } } },
-        orderBy: { createdAt: "desc" },
+      const result = await adminQueries.listUsers({
+        q:        typeof req.query.q === "string" ? req.query.q : undefined,
+        filter:   req.query.filter as any,
+        sort:     req.query.sort   as any,
+        page:     req.query.page     ? parseInt(String(req.query.page),     10) : undefined,
+        // Mini-App admin doesn't paginate — return everything in one page.
+        pageSize: req.query.pageSize ? parseInt(String(req.query.pageSize), 10) : 5000,
       });
-      res.json(users.map(u => ({
-        id: u.id,
-        telegramId: u.telegramId.toString(),
-        username: u.username,
-        firstName: u.firstName,
-        balance: Number(u.balance),
-        appSlots: u.appSlots,
-        referredBy: u.referredBy?.toString() || null,
-        projectCount: u._count.projects,
-        createdAt: u.createdAt,
-      })));
+      // Backward compat: the existing mini_app/app.js consumes a flat array.
+      res.json(result.users);
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   app.get("/telegram-mini-app/api/admin/users/:id", async (req, res) => {
     if (!adminGuard(req, res)) return;
     try {
-      const userId = parseInt(req.params.id);
-      const user = await prisma.user.findUnique({
-        where: { id: userId },
-        include: {
-          projects: { orderBy: { updatedAt: "desc" } },
-          payments: { orderBy: { createdAt: "desc" }, take: 20 },
-          usageLogs: { orderBy: { createdAt: "desc" }, take: 30, include: { project: { select: { name: true } } } },
-        },
-      });
+      const userId = parseInt(req.params.id, 10);
+      const user = await adminQueries.getUserDetail(userId);
       if (!user) { res.status(404).json({ error: "User not found" }); return; }
-      const totalSpent = await prisma.usageLog.aggregate({ _sum: { costUsd: true }, where: { userId } });
-      res.json({
-        id: user.id,
-        telegramId: user.telegramId.toString(),
-        username: user.username,
-        firstName: user.firstName,
-        balance: Number(user.balance),
-        appSlots: user.appSlots,
-        referredBy: user.referredBy?.toString() || null,
-        totalSpent: Number(totalSpent._sum.costUsd || 0),
-        createdAt: user.createdAt,
-        isPartner: user.isPartner,
-        partnerPercent: user.partnerPercent ? Number(user.partnerPercent) : null,
-        partnerTag: user.partnerTag,
-        partnerReferralBonus: user.partnerReferralBonus ? Number(user.partnerReferralBonus) : null,
-        partnerBalance: Number(user.partnerBalance),
-        projects: user.projects.map(p => ({
-          id: p.id, name: p.name, status: p.status, botUsername: p.botUsername,
-          totalCost: Number(p.totalCostUsd), createdAt: p.createdAt, updatedAt: p.updatedAt,
-        })),
-        payments: user.payments.map(p => ({
-          id: p.id, amount: Number(p.amountUsd), status: p.status,
-          createdAt: p.createdAt, confirmedAt: p.confirmedAt,
-        })),
-        usageLogs: user.usageLogs.map(l => ({
-          id: l.id, project: l.project?.name || "-", operation: l.operation,
-          inputTokens: l.inputTokens, outputTokens: l.outputTokens,
-          cost: Number(l.costUsd), createdAt: l.createdAt,
-        })),
-      });
+      res.json(user);
     } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   app.post("/telegram-mini-app/api/admin/users/:id/partner", async (req, res) => {
     if (!adminGuard(req, res)) return;
     try {
-      const userId = parseInt(req.params.id);
-      const { isPartner, partnerPercent, partnerTag, partnerReferralBonus } = req.body;
-      const data: any = {};
-      if (typeof isPartner === "boolean") data.isPartner = isPartner;
-      if (partnerPercent !== undefined) data.partnerPercent = partnerPercent === null ? null : new Decimal(parseFloat(partnerPercent).toFixed(2));
-      if (partnerTag !== undefined) data.partnerTag = partnerTag || null;
-      if (partnerReferralBonus !== undefined) data.partnerReferralBonus = partnerReferralBonus === null ? null : new Decimal(parseFloat(partnerReferralBonus).toFixed(4));
-      const updated = await prisma.user.update({ where: { id: userId }, data });
-      res.json({
-        isPartner: updated.isPartner,
-        partnerPercent: updated.partnerPercent ? Number(updated.partnerPercent) : null,
-        partnerTag: updated.partnerTag,
-        partnerReferralBonus: updated.partnerReferralBonus ? Number(updated.partnerReferralBonus) : null,
-        partnerBalance: Number(updated.partnerBalance),
-      });
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
+      const userId = parseInt(req.params.id, 10);
+      const result = await adminQueries.updateUserPartner(userId, req.body || {});
+      res.json(result);
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
   });
 
   app.post("/telegram-mini-app/api/admin/users/:id/balance", async (req, res) => {
     if (!adminGuard(req, res)) return;
     try {
-      const userId = parseInt(req.params.id);
-      const { action, amount } = req.body;
-      const val = parseFloat(amount);
-      if (isNaN(val) || val < 0) { res.status(400).json({ error: "Invalid amount" }); return; }
-      let updated;
-      if (action === "set") {
-        updated = await prisma.user.update({ where: { id: userId }, data: { balance: new Decimal(val.toFixed(4)) } });
-      } else if (action === "add") {
-        updated = await prisma.user.update({ where: { id: userId }, data: { balance: { increment: new Decimal(val.toFixed(4)) } } });
-      } else { res.status(400).json({ error: "action must be 'set' or 'add'" }); return; }
-      res.json({ balance: Number(updated.balance) });
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
+      const userId = parseInt(req.params.id, 10);
+      const action = req.body?.action;
+      const amount = parseFloat(req.body?.amount);
+      if (action !== "set" && action !== "add") {
+        res.status(400).json({ error: "action must be 'set' or 'add'" }); return;
+      }
+      const result = await adminQueries.setUserBalance(userId, action, amount);
+      res.json(result);
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
   });
 
   // Wipe user-attached data (payments, conversations, usage logs, withdrawals,
   // voucher redemptions) and reset user profile fields to defaults — but KEEP
   // the User row and KEEP all Projects (apps continue to function under the
-  // anonymized user). Used from the Admin → User View "Wipe User Data" button.
+  // anonymized user). Backed by adminQueries.wipeUserData so the new CRM and
+  // the Mini App both share the exact same transaction.
   app.delete("/telegram-mini-app/api/admin/users/:id/data", async (req, res) => {
     if (!adminGuard(req, res)) return;
     try {
-      const userId = parseInt(req.params.id);
-      const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, telegramId: true } });
-      if (!user) { res.status(404).json({ error: "User not found" }); return; }
-
-      const result = await prisma.$transaction(async (tx) => {
-        const [payments, conversations, usageLogs, withdrawals, voucherRedemptions] = await Promise.all([
-          tx.payment.deleteMany({ where: { userId } }),
-          tx.conversation.deleteMany({ where: { userId } }),
-          tx.usageLog.deleteMany({ where: { userId } }),
-          tx.withdrawal.deleteMany({ where: { userId } }),
-          tx.voucherRedemption.deleteMany({ where: { userId } }),
-        ]);
-
-        await tx.user.update({
-          where: { id: userId },
-          data: {
-            username: null,
-            firstName: null,
-            balance: new Decimal(0),
-            partnerBalance: new Decimal(0),
-            isPartner: false,
-            partnerPercent: null,
-            partnerTag: null,
-            partnerReferralBonus: null,
-            firstDepositBonusGiven: false,
-            utmSource: null,
-            referredBy: null,
-            language: "en",
-          },
-        });
-
-        return {
-          payments: payments.count,
-          conversations: conversations.count,
-          usageLogs: usageLogs.count,
-          withdrawals: withdrawals.count,
-          voucherRedemptions: voucherRedemptions.count,
-        };
-      });
-
-      console.log(`[Admin] Wiped data for user ${userId} (tg=${user.telegramId}):`, result);
-      res.json({ ok: true, deleted: result });
+      const userId = parseInt(req.params.id, 10);
+      const deleted = await adminQueries.wipeUserData(userId);
+      console.log(`[Admin] Wiped data for user ${userId}:`, deleted);
+      res.json({ ok: true, deleted });
     } catch (err: any) {
       console.error("[Admin] Wipe user data error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(err.status || 500).json({ error: err.message });
     }
   });
 
@@ -3049,56 +2968,13 @@ export function createWebServer() {
   app.delete("/telegram-mini-app/api/admin/users/:id/full", async (req, res) => {
     if (!adminGuard(req, res)) return;
     try {
-      const userId = parseInt(req.params.id);
-      const user = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { id: true, telegramId: true, projects: { select: { id: true } } },
-      });
-      if (!user) { res.status(404).json({ error: "User not found" }); return; }
-
-      const projectIds = user.projects.map((p) => p.id);
-
-      const result = await prisma.$transaction(async (tx) => {
-        // First clear records that reference projects (FK constraints).
-        let assets = { count: 0 };
-        let versions = { count: 0 };
-        if (projectIds.length) {
-          [assets, versions] = await Promise.all([
-            tx.asset.deleteMany({ where: { projectId: { in: projectIds } } }),
-            tx.version.deleteMany({ where: { projectId: { in: projectIds } } }),
-          ]);
-        }
-
-        // User-attached records (these cover both project-bound and not,
-        // since both conversation.userId and usageLog.userId are required).
-        const [payments, conversations, usageLogs, withdrawals, voucherRedemptions] = await Promise.all([
-          tx.payment.deleteMany({ where: { userId } }),
-          tx.conversation.deleteMany({ where: { userId } }),
-          tx.usageLog.deleteMany({ where: { userId } }),
-          tx.withdrawal.deleteMany({ where: { userId } }),
-          tx.voucherRedemption.deleteMany({ where: { userId } }),
-        ]);
-
-        const projects = await tx.project.deleteMany({ where: { userId } });
-        await tx.user.delete({ where: { id: userId } });
-
-        return {
-          assets: assets.count,
-          versions: versions.count,
-          payments: payments.count,
-          conversations: conversations.count,
-          usageLogs: usageLogs.count,
-          withdrawals: withdrawals.count,
-          voucherRedemptions: voucherRedemptions.count,
-          projects: projects.count,
-        };
-      });
-
-      console.log(`[Admin] FULL RESET for user ${userId} (tg=${user.telegramId}):`, result);
-      res.json({ ok: true, deleted: result });
+      const userId = parseInt(req.params.id, 10);
+      const deleted = await adminQueries.fullResetUser(userId);
+      console.log(`[Admin] FULL RESET for user ${userId}:`, deleted);
+      res.json({ ok: true, deleted });
     } catch (err: any) {
       console.error("[Admin] Full reset error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(err.status || 500).json({ error: err.message });
     }
   });
 

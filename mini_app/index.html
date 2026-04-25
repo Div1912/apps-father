@@ -15,7 +15,7 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <link href="bootstrap.min.css" rel="stylesheet">
   <link href="bootstrap-extra.css" rel="stylesheet">
-  <link href="styles.css?r=212" rel="stylesheet">
+  <link href="styles.css?r=220" rel="stylesheet">
   <script>
     window.op=window.op||function(){var n=[];return new Proxy(function(){arguments.length&&n.push([].slice.call(arguments))},{get:function(t,r){return"q"===r?n:function(){n.push([r].concat([].slice.call(arguments)))}} ,has:function(t,r){return"q"===r}}) }();
     window.op('init', {
@@ -198,7 +198,7 @@
           <div class="topup-bonus-banner" id="topup-bonus-banner">
             <div class="topup-bonus-icon">🎁</div>
             <div class="topup-bonus-content">
-              <div class="topup-bonus-title">Get +$10 FREE on your first deposit</div>
+              <div class="topup-bonus-title">Get +100% bonus on your first deposit</div>
               <div class="topup-bonus-sub">Auto-credited the moment your first payment is confirmed</div>
             </div>
           </div>
@@ -427,7 +427,7 @@
       <div class="onb-nav">
         <div class="onb-dots">
           <div class="onb-dot active"></div>
-          <div class="onb-dot"></div>
+          <!-- Slide 2 dot temporarily hidden together with the S2 screen below -->
           <div class="onb-dot"></div>
           <div class="onb-dot"></div>
         </div>
@@ -444,10 +444,11 @@
           <div class="onb-big-title"><span data-i18n="onb_s1_title_1">Build apps</span><br><em data-i18n="onb_s1_title_2">just by typing</em></div>
           <div class="onb-lead" data-i18n="onb_s1_lead" data-i18n-html="1">Describe your idea — AI writes the code,<br>builds the UI and launches the bot.<br><b>No code. No designer.</b></div>
         </div>
-        <div class="onb-foot"><button class="onb-btn" data-onb-go="2"><span data-i18n="onb_btn_start">Start</span> →</button></div>
+        <div class="onb-foot"><button class="onb-btn" data-onb-go="3"><span data-i18n="onb_btn_start">Start</span> →</button></div>
       </div>
 
-      <!-- S2 -->
+      <!-- S2 (temporarily disabled — skip straight from S1 to S3) -->
+      <!--
       <div class="onb-screen" id="onb-s2">
         <div class="onb-body onb-s2-body">
           <div class="onb-s-title"><span data-i18n="onb_s2_title_1">Describe your idea —</span><br><em data-i18n="onb_s2_title_2">AI does it all</em></div>
@@ -469,6 +470,7 @@
         </div>
         <div class="onb-foot"><button class="onb-btn" data-onb-go="3"><span data-i18n="onb_btn_next">Next</span> →</button></div>
       </div>
+      -->
 
       <!-- S3 -->
       <div class="onb-screen" id="onb-s3">
@@ -840,21 +842,6 @@
     </div>
   </div>
 
-  <!-- ═══ QUALITY TIER VIEW ═══ -->
-  <div id="view-quality" class="view-container hidden">
-    <div>
-      <main class="tm-main">
-        <section class="tm-main-intro">
-          <h1 class="tm-main-intro-header" data-i18n="quality_title">AI Quality Tier</h1>
-          <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="quality_subtitle">Select the AI model quality for building and updating your app</p>
-        </section>
-        <section class="tm-section tm-menu-items">
-          <div class="tm-table-wrap" id="quality-tier-list"></div>
-        </section>
-      </main>
-    </div>
-  </div>
-
   <!-- ═══ EDIT INFO VIEW ═══ -->
   <div id="view-edit-info" class="view-container hidden">
     <div>
@@ -1050,8 +1037,8 @@
     </div>
   </div>
 
-  <script src="i18n.js?r=211" defer></script>
-  <script src="app.js?r=216" defer></script>
+  <script src="i18n.js?r=217" defer></script>
+  <script src="app.js?r=227" defer></script>
   <script>
       function initAnalytics() {
         window.telegramAnalytics.init({

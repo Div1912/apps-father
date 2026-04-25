@@ -268,7 +268,7 @@ export class ProjectService {
       prisma.user.findUnique({ where: { id: userId }, select: { appSlots: true } }),
       prisma.project.count({ where: { userId } }),
     ]);
-    return { used: count, total: user?.appSlots ?? 1 };
+    return { used: count, total: user?.appSlots ?? 5 };
   }
 
   async canCreateApp(userId: number): Promise<boolean> {

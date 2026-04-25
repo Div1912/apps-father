@@ -1,0 +1,209 @@
+/* ── Apps Father Admin — design tokens ──
+   Mirrors mini_app/styles.css :root so the admin feels like a sibling product.
+   Standalone (not inside Telegram WebApp) so we set our own background instead
+   of relying on --tg-theme-* variables. */
+
+@font-face {
+  font-family: ProductSans;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+  src: url(/telegram-mini-app/fonts/ProductSansRegular.ttf);
+}
+@font-face {
+  font-family: ProductSans;
+  font-display: swap;
+  font-style: normal;
+  font-weight: 600;
+  src: url(/telegram-mini-app/fonts/ProductSansBold.ttf);
+}
+
+:root {
+  /* Palette — copied from mini_app */
+  --text-color: #8794a1;
+  --accent-color: #4cb2ff;
+  --accent-rgb: 77, 178, 255;
+  --accent-bg-color: rgba(var(--accent-rgb), .1);
+  --article-color: #fff;
+  --header-color: #fff;
+  --field-color: #fff;
+  --field-bg-color: rgb(22, 22, 22);
+  --field-second-color: #8494a3;
+  --field-placeholder-color: #8a98a6;
+  --field-accent-color: #248bda;
+
+  --btn-primary-color: #fff;
+  --btn-primary-bg-rgb: 36, 139, 218;
+  --btn-primary-bg-color: rgb(var(--btn-primary-bg-rgb));
+  --btn-primary-bg-hover-color: #207cc2;
+  --btn-default-color: #fff;
+  --btn-default-bg-color: #161616;
+  --btn-default-bg-hover-color: #222222;
+
+  --table-bg-color: rgb(22, 22, 22);
+  --table-header-bg-color: #1a1a1a;
+  --table-bg-hover-color: #1a1a1a;
+  --table-text-color: #8c9aa9;
+
+  --def-border-radius: 8px;
+  --min-border-radius: 3px;
+  --popup-border-radius: 12px;
+
+  --bg-rgb: 0, 0, 0;
+  --bg-color: rgb(var(--bg-rgb));
+  --header-bg-color: rgb(22, 22, 22);
+  --bg-hover-color: #161616;
+
+  --footer-bg-color: #000;
+  --footer-color: #6d8394;
+  --tooltip-bg-color: #1a1a1a;
+  --tooltip-color: #fff;
+
+  --danger-color-rgb: 255, 88, 99;
+  --danger-bg-color: rgba(var(--danger-color-rgb), .14);
+  --danger-text-color: rgb(var(--danger-color-rgb));
+  --warning-color-rgb: 255, 153, 83;
+  --warning-bg-color: rgba(var(--warning-color-rgb), .14);
+  --warning-text-color: rgb(var(--warning-color-rgb));
+  --success-color: #5CC377;
+  --success-bg-color: rgba(92, 195, 119, .14);
+
+  /* Admin-specific additions */
+  --admin-sidebar-bg: #040404;
+  --admin-sidebar-border: rgba(255,255,255,0.06);
+  --admin-tabbar-bg: #0a0a0a;
+  --admin-tabbar-border: rgba(255,255,255,0.08);
+  --admin-tab-active-bg: #161616;
+  --admin-tab-hover-bg: rgba(255,255,255,0.04);
+  --admin-content-bg: #000;
+  --admin-card-bg: rgba(255,255,255,0.04);
+  --admin-card-border: rgba(255,255,255,0.06);
+  --admin-card-hover-border: rgba(255,255,255,0.12);
+  --admin-divider: rgba(255,255,255,0.06);
+  --admin-muted: #6d8394;
+  --admin-text: #e4e4e7;
+
+  /* Env color */
+  --env-prod: #34c759;
+  --env-dev:  #ff9500;
+
+  /* Theme-aware shadows */
+  --admin-shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+  --admin-shadow-md: 0 6px 18px rgba(0,0,0,0.35);
+  --admin-shadow-lg: 0 20px 60px rgba(0,0,0,0.4);
+
+  /* Scrollbar */
+  --admin-scrollbar:        rgba(255,255,255,0.08);
+  --admin-scrollbar-hover:  rgba(255,255,255,0.16);
+}
+
+/* ── Light theme overrides ── */
+:root[data-theme="light"] {
+  --text-color: #4a5764;
+  --accent-color: #248bda;
+  --accent-rgb: 36, 139, 218;
+  --accent-bg-color: rgba(var(--accent-rgb), .08);
+  --article-color: #1a1f24;
+  --header-color: #1a1f24;
+  --field-color: #1a1f24;
+  --field-bg-color: #ffffff;
+  --field-second-color: #6d7a87;
+  --field-placeholder-color: #aab4be;
+  --field-accent-color: #248bda;
+
+  --btn-primary-color: #fff;
+  --btn-primary-bg-rgb: 36, 139, 218;
+  --btn-primary-bg-color: rgb(var(--btn-primary-bg-rgb));
+  --btn-primary-bg-hover-color: #1f7cc2;
+  --btn-default-color: #1a1f24;
+  --btn-default-bg-color: #ffffff;
+  --btn-default-bg-hover-color: #f1f4f8;
+
+  --table-bg-color: #ffffff;
+  --table-header-bg-color: #f6f8fb;
+  --table-bg-hover-color: #f1f5fa;
+  --table-text-color: #4a5764;
+
+  --bg-rgb: 244, 246, 250;
+  --bg-color: rgb(var(--bg-rgb));
+  --header-bg-color: #ffffff;
+  --bg-hover-color: #eef2f7;
+
+  --footer-bg-color: #ffffff;
+  --footer-color: #6d7a87;
+  --tooltip-bg-color: #1a1f24;
+  --tooltip-color: #fff;
+
+  --danger-bg-color: rgba(var(--danger-color-rgb), .10);
+  --warning-bg-color: rgba(var(--warning-color-rgb), .10);
+  --success-bg-color: rgba(92, 195, 119, .12);
+
+  --admin-sidebar-bg: #ffffff;
+  --admin-sidebar-border: #e2e8f0;
+  --admin-tabbar-bg: #f6f8fb;
+  --admin-tabbar-border: #e2e8f0;
+  --admin-tab-active-bg: #ffffff;
+  --admin-tab-hover-bg: rgba(36,139,218,0.05);
+  --admin-content-bg: #f4f6fa;
+  --admin-card-bg: #ffffff;
+  --admin-card-border: #e2e8f0;
+  --admin-card-hover-border: #cdd6e2;
+  --admin-divider: #e8edf3;
+  --admin-muted: #6d7a87;
+  --admin-text: #1a1f24;
+
+  --admin-shadow-sm: 0 1px 2px rgba(31,45,61,0.06);
+  --admin-shadow-md: 0 4px 18px rgba(31,45,61,0.08);
+  --admin-shadow-lg: 0 16px 50px rgba(31,45,61,0.14);
+
+  --admin-scrollbar:        rgba(31,45,61,0.18);
+  --admin-scrollbar-hover:  rgba(31,45,61,0.32);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: ProductSans, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+  font-variant-ligatures: none;
+  -webkit-font-smoothing: antialiased;
+  background: var(--admin-content-bg);
+  color: var(--admin-text);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+a { color: var(--accent-color); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  background: none;
+  border: none;
+  color: inherit;
+}
+input, select, textarea {
+  font-family: inherit;
+  color: inherit;
+}
+
+/* Custom scrollbars to match dark theme */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--admin-scrollbar);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--admin-scrollbar-hover); }

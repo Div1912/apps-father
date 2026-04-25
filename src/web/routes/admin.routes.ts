@@ -1,4 +1,5 @@
 import { Router, Request, Response, NextFunction } from "express";
+import express from "express";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
@@ -6,9 +7,38 @@ import { prisma } from "../../db";
 import { config } from "../../config";
 import { runtimeConfig } from "../../services/runtime-config.service";
 import { Decimal } from "@prisma/client/runtime/library";
+import {
+  listUsers,
+  getUserDetail,
+  setUserBalance,
+  updateUserPartner,
+  patchUser,
+  setUserTags,
+  listUserNotes,
+  addUserNote,
+  deleteUserNote,
+  wipeUserData,
+  fullResetUser,
+  listProjects,
+  getProjectDetail,
+  patchProject,
+  getSourcesStats,
+  listSourceUsers,
+  getTimeseries,
+  getOperationBreakdown,
+} from "../../services/admin-queries.service";
+import { commitService } from "../../services/commit.service";
+import { chatService } from "../../services/chat.service";
+import { getOutLog, getErrLog, readTailLines } from "./logs.routes";
+import { decryptToken } from "../../services/crypto.service";
+import { PAID_FEATURES } from "../../services/features.service";
+import { exec } from "child_process";
 
 const router = Router();
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
+// Project root (resolves correctly whether running from src/ via ts-node or
+// from compiled dist/web/routes — both end up two `..` away from project root).
+const ADMIN_DIR = path.join(__dirname, "..", "..", "..", "admin");
 
 const activeTokens = new Set<string>();
 
@@ -19,7 +49,12 @@ function generateToken(): string {
 }
 
 function authMiddleware(req: Request, res: Response, next: NextFunction) {
-  const token = req.headers.authorization?.replace("Bearer ", "");
+  // Accept the token from either an Authorization header (preferred — used by
+  // the SPA's fetch calls) or a `?token=` query string (needed for plain
+  // anchor downloads such as /admin/api/projects/:id/download.zip).
+  const headerToken = req.headers.authorization?.replace("Bearer ", "");
+  const queryToken  = typeof req.query.token === "string" ? req.query.token : undefined;
+  const token = headerToken || queryToken;
   if (!token || !activeTokens.has(token)) {
     res.status(401).json({ error: "Unauthorized" });
     return;
@@ -44,22 +79,38 @@ router.use("/api", authMiddleware);
 
 // --- Dashboard Stats ---
 
-router.get("/api/stats", async (_req: Request, res: Response) => {
+router.get("/api/stats", async (req: Request, res: Response) => {
   try {
+    const from = parseIsoQuery(req.query.from);
+    const to   = parseIsoQuery(req.query.to);
+    // Build a `createdAt` filter that we can reuse for everything below.
+    const createdAtFilter: { gte?: Date; lte?: Date } = {};
+    if (from) createdAtFilter.gte = from;
+    if (to)   createdAtFilter.lte = to;
+    const dateWhere = (from || to) ? { createdAt: createdAtFilter } : {};
+
     const [userCount, projectCount, totalSpent, totalTopups] = await Promise.all([
-      prisma.user.count(),
-      prisma.project.count(),
-      prisma.usageLog.aggregate({ _sum: { costUsd: true } }),
-      prisma.payment.aggregate({ _sum: { amountUsd: true }, where: { status: "confirmed" } }),
+      prisma.user.count({ where: dateWhere }),
+      prisma.project.count({ where: dateWhere }),
+      prisma.usageLog.aggregate({ _sum: { costUsd: true }, where: dateWhere }),
+      prisma.payment.aggregate({
+        _sum: { amountUsd: true },
+        where: { status: "confirmed", ...dateWhere },
+      }),
     ]);
 
+    // Recent activity always shows the latest 20 — date range applies to KPIs
+    // only, like a typical analytics dashboard.
     const recentUsage = await prisma.usageLog.findMany({
       orderBy: { createdAt: "desc" },
       take: 20,
+      where: (from || to) ? { createdAt: createdAtFilter } : undefined,
       include: { user: { select: { username: true, firstName: true } }, project: { select: { name: true } } },
     });
 
     res.json({
+      from: from ? from.toISOString() : null,
+      to:   to   ? to.toISOString()   : null,
       userCount,
       projectCount,
       totalSpent: Number(totalSpent._sum.costUsd || 0),
@@ -81,25 +132,19 @@ router.get("/api/stats", async (_req: Request, res: Response) => {
 });
 
 // --- Users ---
+// All user endpoints are backed by src/services/admin-queries.service.ts so
+// the legacy Mini-App admin and the new browser CRM share identical logic.
 
-router.get("/api/users", async (_req: Request, res: Response) => {
+router.get("/api/users", async (req: Request, res: Response) => {
   try {
-    const users = await prisma.user.findMany({
-      include: {
-        _count: { select: { projects: true } },
-      },
-      orderBy: { createdAt: "desc" },
+    const result = await listUsers({
+      q:        typeof req.query.q === "string" ? req.query.q : undefined,
+      filter:   req.query.filter as any,
+      sort:     req.query.sort   as any,
+      page:     req.query.page     ? parseInt(String(req.query.page),     10) : undefined,
+      pageSize: req.query.pageSize ? parseInt(String(req.query.pageSize), 10) : undefined,
     });
-
-    res.json(users.map(u => ({
-      id: u.id,
-      telegramId: u.telegramId.toString(),
-      username: u.username,
-      firstName: u.firstName,
-      balance: Number(u.balance),
-      projectCount: u._count.projects,
-      createdAt: u.createdAt,
-    })));
+    res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -107,106 +152,126 @@ router.get("/api/users", async (_req: Request, res: Response) => {
 
 router.get("/api/users/:id", async (req: Request<{id: string}>, res: Response) => {
   try {
-    const userId = parseInt(req.params.id);
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      include: {
-        projects: { orderBy: { updatedAt: "desc" } },
-        payments: { orderBy: { createdAt: "desc" }, take: 20 },
-        usageLogs: { orderBy: { createdAt: "desc" }, take: 30, include: { project: { select: { name: true } } } },
-      },
-    });
-
+    const userId = parseInt(req.params.id, 10);
+    const user = await getUserDetail(userId);
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
-
-    const totalSpent = await prisma.usageLog.aggregate({
-      _sum: { costUsd: true },
-      where: { userId },
-    });
-
-    res.json({
-      id: user.id,
-      telegramId: user.telegramId.toString(),
-      username: user.username,
-      firstName: user.firstName,
-      balance: Number(user.balance),
-      totalSpent: Number(totalSpent._sum.costUsd || 0),
-      createdAt: user.createdAt,
-      projects: user.projects.map(p => ({
-        id: p.id,
-        name: p.name,
-        status: p.status,
-        botUsername: p.botUsername,
-        totalCost: Number(p.totalCostUsd),
-        createdAt: p.createdAt,
-        updatedAt: p.updatedAt,
-      })),
-      payments: user.payments.map(p => ({
-        id: p.id,
-        amount: Number(p.amountUsd),
-        status: p.status,
-        createdAt: p.createdAt,
-        confirmedAt: p.confirmedAt,
-      })),
-      usageLogs: user.usageLogs.map(l => ({
-        id: l.id,
-        project: l.project?.name || "-",
-        operation: l.operation,
-        inputTokens: l.inputTokens,
-        outputTokens: l.outputTokens,
-        cost: Number(l.costUsd),
-        createdAt: l.createdAt,
-      })),
-    });
+    res.json(user);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch("/api/users/:id", async (req: Request<{id: string}>, res: Response) => {
+  try {
+    const userId = parseInt(req.params.id, 10);
+    const updated = await patchUser(userId, req.body || {});
+    res.json(updated);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
   }
 });
 
 router.post("/api/users/:id/balance", async (req: Request<{id: string}>, res: Response) => {
   try {
-    const userId = parseInt(req.params.id);
-    const { action, amount } = req.body;
-    const val = parseFloat(amount);
-    if (isNaN(val) || val < 0) { res.status(400).json({ error: "Invalid amount" }); return; }
-
-    let updated;
-    if (action === "set") {
-      updated = await prisma.user.update({ where: { id: userId }, data: { balance: new Decimal(val.toFixed(4)) } });
-    } else if (action === "add") {
-      updated = await prisma.user.update({ where: { id: userId }, data: { balance: { increment: new Decimal(val.toFixed(4)) } } });
-    } else {
+    const userId = parseInt(req.params.id, 10);
+    const action = req.body?.action;
+    const amount = parseFloat(req.body?.amount);
+    if (action !== "set" && action !== "add") {
       res.status(400).json({ error: "action must be 'set' or 'add'" });
       return;
     }
+    const result = await setUserBalance(userId, action, amount);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
 
-    res.json({ balance: Number(updated.balance) });
+router.post("/api/users/:id/partner", async (req: Request<{id: string}>, res: Response) => {
+  try {
+    const userId = parseInt(req.params.id, 10);
+    const result = await updateUserPartner(userId, req.body || {});
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post("/api/users/:id/tags", async (req: Request<{id: string}>, res: Response) => {
+  try {
+    const userId = parseInt(req.params.id, 10);
+    const tags = Array.isArray(req.body?.tags) ? req.body.tags : [];
+    const result = await setUserTags(userId, tags);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.get("/api/users/:id/notes", async (req: Request<{id: string}>, res: Response) => {
+  try {
+    const userId = parseInt(req.params.id, 10);
+    res.json({ notes: await listUserNotes(userId) });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
+router.post("/api/users/:id/notes", async (req: Request<{id: string}>, res: Response) => {
+  try {
+    const userId = parseInt(req.params.id, 10);
+    const note = await addUserNote(userId, req.body?.body || "", req.body?.authorTag);
+    res.json(note);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.delete("/api/users/:id/notes/:noteId", async (req: Request<{id: string, noteId: string}>, res: Response) => {
+  try {
+    const userId = parseInt(req.params.id, 10);
+    const noteId = parseInt(req.params.noteId, 10);
+    await deleteUserNote(userId, noteId);
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.delete("/api/users/:id/data", async (req: Request<{id: string}>, res: Response) => {
+  try {
+    const userId = parseInt(req.params.id, 10);
+    const deleted = await wipeUserData(userId);
+    console.log(`[Admin CRM] Wiped data for user ${userId}:`, deleted);
+    res.json({ ok: true, deleted });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.delete("/api/users/:id/full", async (req: Request<{id: string}>, res: Response) => {
+  try {
+    const userId = parseInt(req.params.id, 10);
+    const deleted = await fullResetUser(userId);
+    console.log(`[Admin CRM] Full reset for user ${userId}:`, deleted);
+    res.json({ ok: true, deleted });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 // --- Projects ---
 
-router.get("/api/projects", async (_req: Request, res: Response) => {
+router.get("/api/projects", async (req: Request, res: Response) => {
   try {
-    const projects = await prisma.project.findMany({
-      include: { user: { select: { username: true, firstName: true } } },
-      orderBy: { updatedAt: "desc" },
+    const result = await listProjects({
+      q:        typeof req.query.q === "string" ? req.query.q : undefined,
+      filter:   req.query.filter as any,
+      sort:     req.query.sort   as any,
+      page:     req.query.page     ? parseInt(String(req.query.page),     10) : undefined,
+      pageSize: req.query.pageSize ? parseInt(String(req.query.pageSize), 10) : undefined,
     });
-
-    res.json(projects.map(p => ({
-      id: p.id,
-      name: p.name,
-      status: p.status,
-      owner: p.user.username || p.user.firstName || `User ${p.userId}`,
-      userId: p.userId,
-      botUsername: p.botUsername,
-      totalCost: Number(p.totalCostUsd),
-      description: p.description?.substring(0, 120),
-      createdAt: p.createdAt,
-      updatedAt: p.updatedAt,
-    })));
+    res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -214,30 +279,28 @@ router.get("/api/projects", async (_req: Request, res: Response) => {
 
 router.get("/api/projects/:id", async (req: Request<{id: string}>, res: Response) => {
   try {
-    const projectId = req.params.id;
-    const project = await prisma.project.findUnique({
-      where: { id: projectId },
-      include: { user: { select: { username: true, firstName: true, id: true } } },
-    });
+    const project = await getProjectDetail(req.params.id);
     if (!project) { res.status(404).json({ error: "Not found" }); return; }
-
-    res.json({
-      id: project.id,
-      name: project.name,
-      status: project.status,
-      description: project.description,
-      plan: project.plan,
-      projectSummary: project.projectSummary,
-      botUsername: project.botUsername,
-      totalCost: Number(project.totalCostUsd),
-      owner: project.user.username || project.user.firstName || `User ${project.user.id}`,
-      userId: project.userId,
-      createdAt: project.createdAt,
-      updatedAt: project.updatedAt,
-    });
+    res.json(project);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+router.patch("/api/projects/:id", async (req: Request<{id: string}>, res: Response) => {
+  try {
+    const updated = await patchProject(req.params.id, req.body || {});
+    res.json(updated);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// The PAID_FEATURES catalog (id, label, price, description) so the App
+// detail page can render its Features sub-tab as a true checklist instead
+// of the raw JSON blob that the Settings tab still exposes for power users.
+router.get("/api/features-catalog", (_req: Request, res: Response) => {
+  res.json({ features: PAID_FEATURES });
 });
 
 router.get("/api/projects/:id/files", (req: Request<{id: string}>, res: Response) => {
@@ -255,7 +318,26 @@ router.get("/api/projects/:id/file", (req: Request<{id: string}>, res: Response)
   const fullPath = path.join(devDir, filePath);
   if (!fullPath.startsWith(devDir)) { res.status(403).json({ error: "Forbidden" }); return; }
   if (!fs.existsSync(fullPath)) { res.status(404).json({ error: "Not found" }); return; }
-  res.json({ content: fs.readFileSync(fullPath, "utf-8") });
+  // Block obvious binaries; cap response to ~1MB.
+  const stat = fs.statSync(fullPath);
+  if (stat.size > 1_000_000) { res.status(413).json({ error: "File too large to view in browser (>1MB)" }); return; }
+  const buf = fs.readFileSync(fullPath);
+  // Heuristic: if NUL byte appears in first 4KB, treat as binary.
+  if (buf.subarray(0, Math.min(4096, buf.length)).includes(0)) {
+    res.json({ content: "[binary file omitted]", binary: true, size: stat.size });
+    return;
+  }
+  res.json({ content: buf.toString("utf-8"), size: stat.size });
+});
+
+router.get("/api/projects/:id/reveal", (req: Request<{id: string}>, res: Response) => {
+  const projectId = req.params.id;
+  const projectDir = path.join(PROJECTS_DIR, projectId);
+  const devDir = path.join(projectDir, "development");
+  res.json({
+    projectDir,
+    developmentDir: fs.existsSync(devDir) ? devDir : null,
+  });
 });
 
 router.post("/api/projects/:id/status", async (req: Request<{id: string}>, res: Response) => {
@@ -266,6 +348,549 @@ router.post("/api/projects/:id/status", async (req: Request<{id: string}>, res: 
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Project chat (read-only history + admin system note) -------------------
+
+router.get("/api/projects/:id/chat", (req: Request<{id: string}>, res: Response) => {
+  try {
+    const projectId = req.params.id;
+    const before = req.query.before ? Number(req.query.before) : undefined;
+    const limit  = req.query.limit  ? Number(req.query.limit)  : 100;
+    const messages = chatService.getHistory(projectId, before, limit);
+    res.json({ messages });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/api/projects/:id/chat/send", (req: Request<{id: string}>, res: Response) => {
+  try {
+    const projectId = req.params.id;
+    const text = String(req.body?.text || "").trim();
+    if (!text) { res.status(400).json({ error: "Empty message" }); return; }
+    // Admin-side messages are appended as a system note so the project owner
+    // sees them in their chat. Triggering a full agent run is out of scope
+    // for the read-only CRM viewer.
+    const msg = chatService.addMessage(projectId, {
+      role: "system",
+      type: "text",
+      content: `[Admin] ${text}`,
+    });
+    res.json({ message: msg });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// --- Project commits / logs -------------------------------------------------
+
+router.get("/api/projects/:id/logs", async (req: Request<{id: string}>, res: Response) => {
+  try {
+    const projectId = req.params.id;
+    const versions = await commitService.getCommits(projectId);
+    const commitsRoot = path.join(PROJECTS_DIR, projectId, "commits");
+    const items = versions.map((v) => {
+      const num = Number(v.version);
+      let sizeBytes = 0;
+      const logFile = path.join(commitsRoot, String(num), "agent.log");
+      if (fs.existsSync(logFile)) {
+        try { sizeBytes = fs.statSync(logFile).size; } catch {}
+      }
+      return {
+        commit: num,
+        version: v.version,
+        changelog: v.changelog,
+        createdAt: v.createdAt,
+        sizeBytes,
+        hasLog: sizeBytes > 0,
+      };
+    });
+    res.json({ commits: items });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/api/projects/:id/logs/:commit", (req: Request<{id: string, commit: string}>, res: Response) => {
+  try {
+    const projectId = req.params.id;
+    const commitNum = parseInt(req.params.commit, 10);
+    if (!Number.isFinite(commitNum)) { res.status(400).json({ error: "Invalid commit" }); return; }
+    const logPath = commitService.getLogPath(projectId, commitNum);
+    if (!logPath) { res.status(404).json({ error: "No log for that commit" }); return; }
+    const stat = fs.statSync(logPath);
+    if (stat.size > 5_000_000) {
+      // Tail the last 5MB if huge
+      const fd = fs.openSync(logPath, "r");
+      const buf = Buffer.alloc(5_000_000);
+      fs.readSync(fd, buf, 0, 5_000_000, stat.size - 5_000_000);
+      fs.closeSync(fd);
+      res.json({
+        truncated: true,
+        size: stat.size,
+        entries: parseLogText(buf.toString("utf-8")),
+      });
+      return;
+    }
+    const text = fs.readFileSync(logPath, "utf-8");
+    res.json({ size: stat.size, entries: parseLogText(text) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function parseLogText(text: string): any[] {
+  const out: any[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      out.push(JSON.parse(trimmed));
+    } catch {
+      out.push({ raw: trimmed });
+    }
+  }
+  return out;
+}
+
+// --- Sources / Funnel ---
+
+function parseIsoQuery(raw: unknown): Date | null {
+  if (typeof raw !== "string" || !raw) return null;
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+router.get("/api/stats/sources", async (req: Request, res: Response) => {
+  try {
+    const result = await getSourcesStats({
+      from: parseIsoQuery(req.query.from),
+      to:   parseIsoQuery(req.query.to),
+      // Avatar resolution intentionally skipped here — the browser CRM
+      // renders gradient initials for partners/referrers (cheap & offline).
+    });
+    res.json(result);
+  } catch (err: any) {
+    console.error("[Admin CRM] Sources stats error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Persistent runtime logs (app_logs table) -------------------------------
+//
+// Backed by `prisma.appLog` (see schema.prisma). The console tee in
+// console-tagger.service.ts pushes every stdout/stderr line into this table,
+// indexed by (projectId, category, ts). These endpoints power the Admin
+// Logs tab and the per-app "Logs" sub-tab on the App page.
+
+interface AppLogQueryFilters {
+  projectId?: string;
+  category?: string;
+  level?: string;
+  source?: string;
+  q?: string;
+  from?: Date;
+  to?: Date;
+  // Cursor pagination — return rows STRICTLY OLDER than this (id descending).
+  beforeId?: bigint;
+  // Hard ceiling on result size; client may request smaller.
+  limit: number;
+}
+
+function parseAppLogQuery(req: Request): AppLogQueryFilters {
+  const q: AppLogQueryFilters = {
+    limit: Math.max(10, Math.min(2000, parseInt(String(req.query.limit ?? "300"), 10) || 300)),
+  };
+
+  const projectId = typeof req.query.projectId === "string" ? req.query.projectId.trim() : "";
+  if (projectId) {
+    if (projectId === "__system__") q.projectId = "__system__"; // sentinel
+    else q.projectId = projectId;
+  }
+
+  const cat = typeof req.query.category === "string" ? req.query.category.trim() : "";
+  if (cat && cat !== "all") q.category = cat;
+
+  const lvl = typeof req.query.level === "string" ? req.query.level.trim() : "";
+  if (lvl && lvl !== "all") q.level = lvl;
+
+  const src = typeof req.query.source === "string" ? req.query.source.trim() : "";
+  if (src && src !== "all") q.source = src;
+
+  const text = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  if (text) q.q = text.slice(0, 200);
+
+  const from = typeof req.query.from === "string" ? req.query.from : "";
+  if (from) {
+    const d = new Date(from);
+    if (!isNaN(d.getTime())) q.from = d;
+  }
+  const to = typeof req.query.to === "string" ? req.query.to : "";
+  if (to) {
+    const d = new Date(to);
+    if (!isNaN(d.getTime())) q.to = d;
+  }
+
+  const beforeId = typeof req.query.beforeId === "string" ? req.query.beforeId : "";
+  if (beforeId && /^\d+$/.test(beforeId)) {
+    try { q.beforeId = BigInt(beforeId); } catch { /* ignore */ }
+  }
+
+  return q;
+}
+
+function buildAppLogWhere(q: AppLogQueryFilters): any {
+  const where: any = {};
+  if (q.projectId === "__system__") where.projectId = null;
+  else if (q.projectId)             where.projectId = q.projectId;
+
+  if (q.category) where.category = q.category;
+  if (q.level)    where.level    = q.level;
+  if (q.source)   where.source   = q.source;
+  if (q.q)        where.message  = { contains: q.q, mode: "insensitive" };
+
+  if (q.from || q.to) {
+    where.ts = {};
+    if (q.from) where.ts.gte = q.from;
+    if (q.to)   where.ts.lte = q.to;
+  }
+  if (q.beforeId) {
+    where.id = { lt: q.beforeId };
+  }
+  return where;
+}
+
+router.get("/api/applogs", async (req: Request, res: Response) => {
+  try {
+    const q = parseAppLogQuery(req);
+    const where = buildAppLogWhere(q);
+    const rows = await prisma.appLog.findMany({
+      where,
+      orderBy: { id: "desc" },
+      take: q.limit,
+    });
+    // Send oldest → newest so the UI can append-and-stick-to-bottom naturally.
+    rows.reverse();
+    const nextCursor = rows.length > 0 ? rows[0].id.toString() : null;
+    res.json({
+      lines: rows.map(r => ({
+        id: r.id.toString(),
+        ts: r.ts,
+        projectId: r.projectId,
+        category: r.category,
+        level: r.level,
+        source: r.source,
+        message: r.message,
+      })),
+      nextCursor, // pass back as `beforeId` to fetch the previous page (older)
+      hasMore: rows.length === q.limit,
+    });
+  } catch (err: any) {
+    console.error("[Admin CRM] AppLogs query error:", err);
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+// Distinct categories present in the table — used to populate the dropdown.
+// Cached in-process for 30s so we don't hammer Postgres every refresh tick.
+let categoriesCache: { ts: number; data: string[] } | null = null;
+router.get("/api/applogs/categories", async (_req: Request, res: Response) => {
+  try {
+    if (categoriesCache && Date.now() - categoriesCache.ts < 30_000) {
+      res.json({ categories: categoriesCache.data });
+      return;
+    }
+    const rows = await prisma.appLog.findMany({
+      select: { category: true },
+      distinct: ["category"],
+      orderBy: { category: "asc" },
+      take: 200,
+    });
+    const data = rows.map(r => r.category).filter(Boolean);
+    categoriesCache = { ts: Date.now(), data };
+    res.json({ categories: data });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+// Per-project shorthand: same query as /applogs but pins projectId.
+router.get("/api/projects/:id/applogs", async (req: Request, res: Response) => {
+  try {
+    (req.query as any).projectId = req.params.id;
+    const q = parseAppLogQuery(req);
+    const where = buildAppLogWhere(q);
+    const rows = await prisma.appLog.findMany({
+      where,
+      orderBy: { id: "desc" },
+      take: q.limit,
+    });
+    rows.reverse();
+    const nextCursor = rows.length > 0 ? rows[0].id.toString() : null;
+    res.json({
+      lines: rows.map(r => ({
+        id: r.id.toString(),
+        ts: r.ts,
+        projectId: r.projectId,
+        category: r.category,
+        level: r.level,
+        source: r.source,
+        message: r.message,
+      })),
+      nextCursor,
+      hasMore: rows.length === q.limit,
+    });
+  } catch (err: any) {
+    console.error("[Admin CRM] Project AppLogs query error:", err);
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+// --- Recent process logs (legacy PM2 tail; kept for backward compatibility) -
+
+router.get("/api/logs/recent", (req: Request, res: Response) => {
+  try {
+    const source  = String(req.query.source || "out");
+    const lines   = Math.max(50, Math.min(5000, parseInt(String(req.query.lines || "500"), 10) || 500));
+
+    let filePath = "";
+    if      (source === "out") filePath = getOutLog();
+    else if (source === "err") filePath = getErrLog();
+    else { res.status(400).json({ error: "Unknown source: use out|err" }); return; }
+
+    if (!filePath) {
+      res.json({ source, file: null, lines: [] });
+      return;
+    }
+    const text = readTailLines(filePath, lines);
+    let size = 0;
+    try { size = fs.statSync(filePath).size; } catch {}
+    res.json({ source, file: filePath, size, lines: text });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+// --- Avatar resolution (cached, talks to Telegram on miss) ------------------
+//
+// The Mini-App fetches avatars on the fly via the project's own bot token; the
+// browser CRM uses these dedicated endpoints so we can:
+//   • cache the URL for 30 minutes (avatars rotate rarely),
+//   • cache misses too (so we don't hammer Telegram for users with no photo),
+//   • use the master Apps-Father bot token as a fallback for plain Telegram
+//     IDs that don't belong to any project bot.
+const AVATAR_TTL_MS = 30 * 60 * 1000;
+type AvatarCacheEntry = { url: string | null; ts: number };
+const avatarCache: Map<string, AvatarCacheEntry> = new Map();
+
+function getCachedAvatar(key: string): AvatarCacheEntry | null {
+  const e = avatarCache.get(key);
+  if (!e) return null;
+  if (Date.now() - e.ts > AVATAR_TTL_MS) { avatarCache.delete(key); return null; }
+  return e;
+}
+function setCachedAvatar(key: string, url: string | null) {
+  avatarCache.set(key, { url, ts: Date.now() });
+}
+
+async function fetchTelegramAvatarUrl(botToken: string, telegramUserId: string | number): Promise<string | null> {
+  try {
+    const photosRes = await fetch(`https://api.telegram.org/bot${botToken}/getUserProfilePhotos?user_id=${telegramUserId}&limit=1`);
+    const photosData = await photosRes.json() as any;
+    if (!photosData.ok || !photosData.result?.photos?.length) return null;
+    const photo = photosData.result.photos[0];
+    const biggest = photo[photo.length - 1];
+    const fileId = biggest.file_id;
+    const fileRes = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
+    const fileData = await fileRes.json() as any;
+    if (!fileData.ok || !fileData.result?.file_path) return null;
+    return `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
+  } catch {
+    return null;
+  }
+}
+
+router.get("/api/avatar/project/:id", async (req: Request<{id: string}>, res: Response) => {
+  const projectId = req.params.id;
+  const cacheKey = `project:${projectId}`;
+  const cached = getCachedAvatar(cacheKey);
+  if (cached) { res.json({ url: cached.url, cached: true }); return; }
+
+  try {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { botUserId: true, botTokenEncrypted: true },
+    });
+    if (!project || !project.botTokenEncrypted || !project.botUserId) {
+      setCachedAvatar(cacheKey, null);
+      res.json({ url: null });
+      return;
+    }
+    const token = decryptToken(project.botTokenEncrypted);
+    const url = await fetchTelegramAvatarUrl(token, String(project.botUserId));
+    setCachedAvatar(cacheKey, url);
+    res.json({ url });
+  } catch (err: any) {
+    res.status(500).json({ url: null, error: err.message || String(err) });
+  }
+});
+
+router.get("/api/avatar/user/:telegramId", async (req: Request<{telegramId: string}>, res: Response) => {
+  const tgId = String(req.params.telegramId || "").trim();
+  if (!tgId || !/^\d+$/.test(tgId)) { res.status(400).json({ error: "Invalid telegramId" }); return; }
+  const cacheKey = `user:${tgId}`;
+  const cached = getCachedAvatar(cacheKey);
+  if (cached) { res.json({ url: cached.url, cached: true }); return; }
+
+  try {
+    if (!config.botToken) { res.json({ url: null }); return; }
+    const url = await fetchTelegramAvatarUrl(config.botToken, tgId);
+    setCachedAvatar(cacheKey, url);
+    res.json({ url });
+  } catch (err: any) {
+    res.status(500).json({ url: null, error: err.message || String(err) });
+  }
+});
+
+// --- Reveal in explorer (gated) ---------------------------------------------
+
+router.post("/api/projects/:id/open-in-explorer", (req: Request<{id: string}>, res: Response) => {
+  try {
+    if (!runtimeConfig.get().allowAdminShell) {
+      res.status(403).json({ error: "Admin shell is disabled. Enable allowAdminShell in Configuration." });
+      return;
+    }
+    const projectId = req.params.id;
+    const which = String(req.body?.dir || "project");
+    const base  = which === "development"
+      ? path.join(PROJECTS_DIR, projectId, "development")
+      : path.join(PROJECTS_DIR, projectId);
+    if (!fs.existsSync(base)) { res.status(404).json({ error: "Directory does not exist" }); return; }
+
+    // Detect headless Linux (no DISPLAY) up front and bail with a useful
+    // message — there's no way to open a GUI explorer on a remote PM2 server,
+    // so the admin should download the folder as a zip instead.
+    if (process.platform === "linux" && !process.env.DISPLAY) {
+      res.status(409).json({
+        error: "Server is headless (no DISPLAY). Use 'Download ZIP' to inspect files locally, or 'Copy path' if you're SSH'd into the server.",
+        path: base,
+        headless: true,
+      });
+      return;
+    }
+
+    const cmd = process.platform === "win32"
+      ? `start "" "${base}"`
+      : process.platform === "darwin"
+        ? `open "${base}"`
+        : `xdg-open "${base}"`;
+
+    // Wait for the exec to finish so we can report the *real* outcome rather
+    // than always claiming success. Cap the wait at 4s to keep the request
+    // snappy.
+    let answered = false;
+    const timeout = setTimeout(() => {
+      if (answered) return;
+      answered = true;
+      res.json({ ok: true, path: base, async: true });
+    }, 4000);
+    exec(cmd, { windowsHide: true, timeout: 5000 }, (err) => {
+      if (answered) return;
+      answered = true;
+      clearTimeout(timeout);
+      if (err) {
+        console.error("[Admin CRM] open-in-explorer failed:", err.message);
+        res.status(500).json({ error: `Open command failed: ${err.message}`, path: base });
+        return;
+      }
+      res.json({ ok: true, path: base });
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+// Download the project's development folder as a streaming zip. Useful on
+// headless Linux deployments where Open-in-Explorer can't pop a window.
+router.get("/api/projects/:id/download.zip", async (req: Request<{id: string}>, res: Response) => {
+  try {
+    const projectId = req.params.id;
+    const which = String(req.query.dir || "development");
+    const base  = which === "development"
+      ? path.join(PROJECTS_DIR, projectId, "development")
+      : path.join(PROJECTS_DIR, projectId);
+    if (!fs.existsSync(base)) { res.status(404).json({ error: "Directory does not exist" }); return; }
+
+    let archiver: any;
+    try { archiver = require("archiver"); }
+    catch {
+      res.status(500).json({ error: "archiver module not installed on server" });
+      return;
+    }
+
+    const safeName = `${projectId.slice(0, 8)}-${which}.zip`;
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="${safeName}"`);
+
+    const archive = archiver("zip", { zlib: { level: 6 } });
+    archive.on("warning", (err: any) => console.warn("[Admin CRM] zip warning:", err?.message || err));
+    archive.on("error",   (err: any) => { console.error("[Admin CRM] zip error:", err); try { res.end(); } catch {} });
+    archive.pipe(res);
+    archive.glob("**/*", { cwd: base, dot: true, ignore: ["node_modules/**", ".git/**"] });
+    await archive.finalize();
+  } catch (err: any) {
+    if (!res.headersSent) res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+router.get("/api/timeseries", async (req: Request, res: Response) => {
+  try {
+    const metric = String(req.query.metric || "new_users") as any;
+    const interval = String(req.query.interval || "day") as any;
+    const result = await getTimeseries({
+      metric,
+      interval,
+      from: parseIsoQuery(req.query.from),
+      to:   parseIsoQuery(req.query.to),
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Cost & token breakdown grouped by `usage_logs.operation`. Backs the
+// Dashboard's "Cost by operation" / "Tokens by operation" panels so admins
+// can see at-a-glance which agent step is burning the most spend.
+router.get("/api/stats/operations", async (req: Request, res: Response) => {
+  try {
+    const rows = await getOperationBreakdown({
+      from: parseIsoQuery(req.query.from),
+      to:   parseIsoQuery(req.query.to),
+    });
+    res.json({
+      from: parseIsoQuery(req.query.from)?.toISOString() || null,
+      to:   parseIsoQuery(req.query.to)?.toISOString()   || null,
+      rows,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/api/stats/sources/users", async (req: Request, res: Response) => {
+  try {
+    const result = await listSourceUsers({
+      from: parseIsoQuery(req.query.from),
+      to:   parseIsoQuery(req.query.to),
+      kind: String(req.query.kind || "all") as any,
+      key:  typeof req.query.key === "string" ? req.query.key : "",
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -382,482 +1007,36 @@ function walkDir(dir: string, base: string): { path: string; name: string }[] {
 }
 
 // --- Serve the SPA for any non-API path under /admin ---
+// Static assets: admin/css/*, admin/js/*, etc.
+router.use(express.static(ADMIN_DIR, { fallthrough: true, index: false }));
 
-router.get("/", (_req: Request, res: Response) => {
-  res.type("html").send(ADMIN_HTML);
+// SPA fallback: anything that isn't /api/* falls back to index.html so the
+// vanilla-JS router on the client can take over.
+// Proxy the OpenRouter model catalog so the Models admin page can show live pricing.
+router.get("/api/openrouter/models", authMiddleware, async (_req: Request, res: Response) => {
+  const key = runtimeConfig.getOpenRouterApiKey() || config.openrouterApiKey;
+  if (!key) {
+    res.status(400).json({ error: "OpenRouter API key not configured" });
+    return;
+  }
+  try {
+    const r = await fetch("https://openrouter.ai/api/v1/models", {
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    const data = await r.json();
+    res.json(data);
+  } catch (err: any) {
+    res.status(502).json({ error: `Failed to fetch OpenRouter models: ${err.message}` });
+  }
 });
 
-
-const ADMIN_HTML = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Apps Father — Admin</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-:root{--bg:#0f0f11;--surface:#17171a;--surface2:#1e1e22;--border:#2a2a30;--text:#e4e4e7;--dim:#71717a;--accent:#6366f1;--accent-hover:#818cf8;--green:#22c55e;--red:#ef4444;--yellow:#eab308;--blue:#3b82f6;--radius:8px}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,sans-serif;background:var(--bg);color:var(--text);height:100vh;overflow:hidden}
-button{font-family:inherit;cursor:pointer}
-input,select{font-family:inherit}
-
-.login{display:flex;align-items:center;justify-content:center;height:100vh;background:var(--bg)}
-.login-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:32px;width:360px;text-align:center}
-.login-box h1{font-size:20px;margin-bottom:4px}
-.login-box p{color:var(--dim);font-size:13px;margin-bottom:24px}
-.login-box input{width:100%;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:14px;outline:none;margin-bottom:16px}
-.login-box input:focus{border-color:var(--accent)}
-.login-box .btn-login{width:100%;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:var(--radius);font-size:14px;font-weight:600}
-.login-box .btn-login:hover{background:var(--accent-hover)}
-.login-err{color:var(--red);font-size:12px;margin-top:8px;min-height:16px}
-
-.app{display:flex;height:100vh}
-.sidebar{width:220px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
-.sidebar-brand{padding:20px 16px 16px;font-size:15px;font-weight:700;border-bottom:1px solid var(--border);letter-spacing:-0.3px}
-.sidebar-brand span{color:var(--accent)}
-.sidebar-nav{flex:1;padding:8px}
-.nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:var(--radius);font-size:13px;font-weight:500;color:var(--dim);cursor:pointer;transition:all .15s;border:none;background:none;width:100%;text-align:left}
-.nav-item:hover{background:var(--surface2);color:var(--text)}
-.nav-item.active{background:var(--accent);color:#fff}
-.nav-item .icon{font-size:16px;width:20px;text-align:center}
-.sidebar-foot{padding:12px 16px;border-top:1px solid var(--border);font-size:11px;color:var(--dim)}
-
-.content{flex:1;overflow-y:auto;padding:24px 32px}
-.page{display:none}
-.page.active{display:block}
-
-.page-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
-.page-hdr h2{font-size:18px;font-weight:700}
-.page-hdr .sub{color:var(--dim);font-size:13px;margin-top:2px}
-
-.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}
-.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px}
-.stat-card .label{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--dim);margin-bottom:6px}
-.stat-card .value{font-size:26px;font-weight:700}
-.stat-card .value.green{color:var(--green)}
-.stat-card .value.blue{color:var(--blue)}
-.stat-card .value.yellow{color:var(--yellow)}
-
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:left;padding:10px 12px;background:var(--surface);border-bottom:1px solid var(--border);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);position:sticky;top:0;z-index:1}
-td{padding:10px 12px;border-bottom:1px solid var(--border)}
-tr:hover td{background:var(--surface2)}
-.clickable{cursor:pointer}
-.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
-.badge.deployed{background:rgba(34,197,94,.15);color:var(--green)}
-.badge.building{background:rgba(234,179,8,.15);color:var(--yellow)}
-.badge.error{background:rgba(239,68,68,.15);color:var(--red)}
-.badge.created{background:rgba(99,102,241,.15);color:var(--accent)}
-
-.detail-back{display:inline-flex;align-items:center;gap:4px;color:var(--dim);font-size:13px;cursor:pointer;margin-bottom:16px;border:none;background:none;padding:0}
-.detail-back:hover{color:var(--text)}
-
-.info-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px}
-.info-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px}
-.info-card .lbl{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
-.info-card .val{font-size:16px;font-weight:600}
-
-.section-title{font-size:14px;font-weight:600;margin:20px 0 10px}
-
-.btn{padding:7px 16px;border-radius:var(--radius);font-size:13px;font-weight:500;border:1px solid var(--border);background:var(--surface);color:var(--text);transition:all .15s}
-.btn:hover{background:var(--surface2)}
-.btn-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
-.btn-primary:hover{background:var(--accent-hover)}
-.btn-sm{padding:4px 10px;font-size:12px}
-
-.inline-form{display:flex;gap:8px;align-items:center;margin-bottom:16px}
-.inline-form input,.inline-form select{padding:7px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:13px;outline:none}
-.inline-form input:focus{border-color:var(--accent)}
-
-.config-form{max-width:500px}
-.config-row{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border)}
-.config-row .clbl{font-size:13px;font-weight:500}
-.config-row .cdesc{font-size:11px;color:var(--dim)}
-.config-row input{width:140px;padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:13px;text-align:right;outline:none}
-.config-row input:focus{border-color:var(--accent)}
-
-.code-viewer{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-top:12px}
-.code-files{display:flex;flex-wrap:wrap;gap:4px;padding:8px 12px;border-bottom:1px solid var(--border);background:var(--surface2)}
-.code-tab{padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;color:var(--dim);border:none;background:none}
-.code-tab:hover{color:var(--text)}
-.code-tab.active{background:var(--accent);color:#fff}
-.code-content{padding:12px 16px;font-family:'Cascadia Code','Fira Code','Consolas',monospace;font-size:12px;line-height:1.6;white-space:pre-wrap;overflow-x:auto;max-height:500px;overflow-y:auto;tab-size:2;color:#d4d4d4}
-
-.toast{position:fixed;bottom:20px;right:20px;padding:10px 20px;border-radius:var(--radius);font-size:13px;z-index:1000;animation:slideIn .3s ease;color:#fff}
-.toast.ok{background:var(--green)}.toast.err{background:var(--red)}
-@keyframes slideIn{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
-
-.empty-state{text-align:center;padding:48px;color:var(--dim)}
-.empty-state .big{font-size:36px;margin-bottom:8px}
-</style>
-</head>
-<body>
-<div id="root"></div>
-<script>
-(function(){
-const $ = s => document.querySelector(s);
-const $$ = s => document.querySelectorAll(s);
-let token = localStorage.getItem('af_admin_token');
-let currentPage = 'dashboard';
-let cache = {};
-
-function api(path, opts = {}) {
-  return fetch('/admin/api' + path, {
-    ...opts,
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, ...(opts.headers||{}) },
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-  }).then(r => {
-    if (r.status === 401) { token = null; localStorage.removeItem('af_admin_token'); render(); throw new Error('Unauthorized'); }
-    return r.json();
-  });
-}
-
-function toast(msg, type='ok') {
-  const el = document.createElement('div');
-  el.className = 'toast ' + type;
-  el.textContent = msg;
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), 3000);
-}
-
-function esc(s) { const d = document.createElement('div'); d.textContent = s||''; return d.innerHTML; }
-function fmtDate(d) { return new Date(d).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric', hour:'2-digit', minute:'2-digit' }); }
-function fmtMoney(n) { return '$' + Number(n).toFixed(2); }
-function fmtTokens(n) { return n > 999999 ? (n/1000000).toFixed(1)+'M' : n > 999 ? (n/1000).toFixed(0)+'K' : n; }
-function statusBadge(s) { return '<span class="badge '+s+'">'+s+'</span>'; }
-
-function render() {
-  if (!token) { renderLogin(); return; }
-  renderApp();
-}
-
-function renderLogin() {
-  $('#root').innerHTML = '<div class="login"><div class="login-box"><h1>Apps Father</h1><p>Admin Panel</p><input type="password" id="pw" placeholder="Password" /><button class="btn-login" id="login-btn">Sign In</button><div class="login-err" id="login-err"></div></div></div>';
-  const pw = $('#pw');
-  const btn = $('#login-btn');
-  const err = $('#login-err');
-  pw.focus();
-  pw.addEventListener('keydown', e => { if (e.key==='Enter') doLogin(); });
-  btn.addEventListener('click', doLogin);
-  function doLogin() {
-    err.textContent = '';
-    fetch('/admin/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:pw.value}) })
-      .then(r => r.json()).then(d => {
-        if (d.token) { token = d.token; localStorage.setItem('af_admin_token', token); render(); }
-        else { err.textContent = d.error || 'Login failed'; pw.value=''; pw.focus(); }
-      }).catch(() => { err.textContent = 'Connection failed'; });
+router.get(/^\/(?!api(\/|$)).*/, (_req: Request, res: Response) => {
+  const indexPath = path.join(ADMIN_DIR, "index.html");
+  if (!fs.existsSync(indexPath)) {
+    res.status(500).type("text/plain").send("admin/ folder not built \u2014 missing index.html");
+    return;
   }
-}
-
-function renderApp() {
-  $('#root').innerHTML = \`
-  <div class="app">
-    <div class="sidebar">
-      <div class="sidebar-brand">Apps <span>Father</span></div>
-      <div class="sidebar-nav">
-        <button class="nav-item active" data-page="dashboard"><span class="icon">📊</span> Dashboard</button>
-        <button class="nav-item" data-page="users"><span class="icon">👤</span> Users</button>
-        <button class="nav-item" data-page="projects"><span class="icon">📁</span> Projects</button>
-        <button class="nav-item" data-page="vouchers"><span class="icon">🎟️</span> Vouchers</button>
-        <button class="nav-item" data-page="config"><span class="icon">⚙️</span> Configuration</button>
-      </div>
-      <div class="sidebar-foot">
-        <button class="nav-item" id="logout-btn"><span class="icon">🚪</span> Logout</button>
-      </div>
-    </div>
-    <div class="content">
-      <div class="page active" id="page-dashboard"></div>
-      <div class="page" id="page-users"></div>
-      <div class="page" id="page-projects"></div>
-      <div class="page" id="page-vouchers"></div>
-      <div class="page" id="page-config"></div>
-    </div>
-  </div>\`;
-
-  $$('.nav-item[data-page]').forEach(el => el.addEventListener('click', () => navigate(el.dataset.page)));
-  $('#logout-btn').addEventListener('click', () => { token=null; localStorage.removeItem('af_admin_token'); render(); });
-  loadPage('dashboard');
-}
-
-function navigate(page) {
-  currentPage = page;
-  $$('.nav-item[data-page]').forEach(el => el.classList.toggle('active', el.dataset.page===page));
-  $$('.page').forEach(el => el.classList.toggle('active', el.id==='page-'+page));
-  loadPage(page);
-}
-
-function loadPage(page) {
-  switch(page) {
-    case 'dashboard': loadDashboard(); break;
-    case 'users': loadUsers(); break;
-    case 'projects': loadProjects(); break;
-    case 'vouchers': loadVouchers(); break;
-    case 'config': loadConfig(); break;
-  }
-}
-
-// === DASHBOARD ===
-function loadDashboard() {
-  const el = $('#page-dashboard');
-  el.innerHTML = '<div class="page-hdr"><div><h2>Dashboard</h2><div class="sub">Overview of your platform</div></div></div><div class="stats-grid" id="dash-stats"></div><div class="section-title">Recent Activity</div><div id="dash-activity"></div>';
-  api('/stats').then(d => {
-    $('#dash-stats').innerHTML = \`
-      <div class="stat-card"><div class="label">Users</div><div class="value blue">\${d.userCount}</div></div>
-      <div class="stat-card"><div class="label">Projects</div><div class="value">\${d.projectCount}</div></div>
-      <div class="stat-card"><div class="label">Total Revenue</div><div class="value green">\${fmtMoney(d.totalTopups)}</div></div>
-      <div class="stat-card"><div class="label">Total Spent</div><div class="value yellow">\${fmtMoney(d.totalSpent)}</div></div>
-    \`;
-    if (!d.recentUsage.length) { $('#dash-activity').innerHTML = '<div class="empty-state"><div class="big">📭</div>No activity yet</div>'; return; }
-    $('#dash-activity').innerHTML = '<table><thead><tr><th>User</th><th>Project</th><th>Operation</th><th>Tokens</th><th>Cost</th><th>Date</th></tr></thead><tbody>' +
-      d.recentUsage.map(u => '<tr><td>'+esc(u.username)+'</td><td>'+esc(u.project)+'</td><td>'+u.operation+'</td><td>'+fmtTokens(u.inputTokens)+' / '+fmtTokens(u.outputTokens)+'</td><td>'+fmtMoney(u.cost)+'</td><td>'+fmtDate(u.createdAt)+'</td></tr>').join('') +
-      '</tbody></table>';
-  });
-}
-
-// === USERS ===
-function loadUsers() {
-  const el = $('#page-users');
-  el.innerHTML = '<div class="page-hdr"><div><h2>Users</h2><div class="sub">All registered users</div></div></div><div id="users-content"></div>';
-  api('/users').then(users => {
-    if (!users.length) { $('#users-content').innerHTML = '<div class="empty-state"><div class="big">👥</div>No users yet</div>'; return; }
-    $('#users-content').innerHTML = '<table><thead><tr><th>ID</th><th>Username</th><th>Name</th><th>Balance</th><th>Projects</th><th>Joined</th><th></th></tr></thead><tbody>' +
-      users.map(u => '<tr class="clickable" data-uid="'+u.id+'"><td>'+u.id+'</td><td>'+esc(u.username||'-')+'</td><td>'+esc(u.firstName||'-')+'</td><td>'+fmtMoney(u.balance)+'</td><td>'+u.projectCount+'</td><td>'+fmtDate(u.createdAt)+'</td><td><button class="btn btn-sm" data-view-user="'+u.id+'">View</button></td></tr>').join('') +
-      '</tbody></table>';
-    $$('[data-view-user]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); loadUserDetail(b.dataset.viewUser); }));
-    $$('tr[data-uid]').forEach(r => r.addEventListener('click', () => loadUserDetail(r.dataset.uid)));
-  });
-}
-
-function loadUserDetail(userId) {
-  const el = $('#page-users');
-  api('/users/' + userId).then(u => {
-    el.innerHTML = \`
-      <button class="detail-back" id="back-users">← Back to Users</button>
-      <div class="page-hdr"><div><h2>\${esc(u.username || u.firstName || 'User '+u.id)}</h2><div class="sub">Telegram ID: \${u.telegramId}</div></div></div>
-      <div class="info-grid">
-        <div class="info-card"><div class="lbl">Balance</div><div class="val" id="bal-val">\${fmtMoney(u.balance)}</div></div>
-        <div class="info-card"><div class="lbl">Total Spent</div><div class="val">\${fmtMoney(u.totalSpent)}</div></div>
-        <div class="info-card"><div class="lbl">Projects</div><div class="val">\${u.projects.length}</div></div>
-      </div>
-      <div class="section-title">Balance Management</div>
-      <div class="inline-form">
-        <select id="bal-action"><option value="set">Set to</option><option value="add">Add</option></select>
-        <input type="number" id="bal-amount" placeholder="Amount" step="0.01" style="width:120px" />
-        <button class="btn btn-primary btn-sm" id="bal-btn">Apply</button>
-      </div>
-      <div class="section-title">Projects</div>
-      <div id="user-projects"></div>
-      <div class="section-title">Usage History</div>
-      <div id="user-usage"></div>
-    \`;
-
-    $('#back-users').addEventListener('click', () => loadUsers());
-    $('#bal-btn').addEventListener('click', () => {
-      const action = $('#bal-action').value;
-      const amount = $('#bal-amount').value;
-      api('/users/'+userId+'/balance', { method:'POST', body:{action,amount} }).then(d => {
-        $('#bal-val').textContent = fmtMoney(d.balance);
-        $('#bal-amount').value = '';
-        toast('Balance updated to '+fmtMoney(d.balance));
-      }).catch(() => toast('Failed','err'));
-    });
-
-    if (u.projects.length) {
-      $('#user-projects').innerHTML = '<table><thead><tr><th>Name</th><th>Status</th><th>Bot</th><th>Cost</th><th>Updated</th><th></th></tr></thead><tbody>'+
-        u.projects.map(p => '<tr><td>'+esc(p.name)+'</td><td>'+statusBadge(p.status)+'</td><td>'+(p.botUsername?'@'+esc(p.botUsername):'-')+'</td><td>'+fmtMoney(p.totalCost)+'</td><td>'+fmtDate(p.updatedAt)+'</td><td><button class="btn btn-sm" data-view-proj="'+p.id+'">View</button></td></tr>').join('')+
-        '</tbody></table>';
-      $$('[data-view-proj]').forEach(b => b.addEventListener('click', () => { navigate('projects'); loadProjectDetail(b.dataset.viewProj); }));
-    } else {
-      $('#user-projects').innerHTML = '<div class="empty-state">No projects</div>';
-    }
-
-    if (u.usageLogs.length) {
-      $('#user-usage').innerHTML = '<table><thead><tr><th>Project</th><th>Operation</th><th>In / Out</th><th>Cost</th><th>Date</th></tr></thead><tbody>'+
-        u.usageLogs.map(l => '<tr><td>'+esc(l.project)+'</td><td>'+l.operation+'</td><td>'+fmtTokens(l.inputTokens)+' / '+fmtTokens(l.outputTokens)+'</td><td>'+fmtMoney(l.cost)+'</td><td>'+fmtDate(l.createdAt)+'</td></tr>').join('')+
-        '</tbody></table>';
-    } else {
-      $('#user-usage').innerHTML = '<div class="empty-state">No usage history</div>';
-    }
-  });
-}
-
-// === PROJECTS ===
-function loadProjects() {
-  const el = $('#page-projects');
-  el.innerHTML = '<div class="page-hdr"><div><h2>Projects</h2><div class="sub">All projects across users</div></div></div><div id="projects-content"></div>';
-  api('/projects').then(projects => {
-    if (!projects.length) { $('#projects-content').innerHTML = '<div class="empty-state"><div class="big">📁</div>No projects yet</div>'; return; }
-    $('#projects-content').innerHTML = '<table><thead><tr><th>Name</th><th>Owner</th><th>Status</th><th>Bot</th><th>Cost</th><th>Updated</th><th></th></tr></thead><tbody>' +
-      projects.map(p => '<tr class="clickable" data-pid="'+p.id+'"><td>'+esc(p.name)+'</td><td>'+esc(p.owner)+'</td><td>'+statusBadge(p.status)+'</td><td>'+(p.botUsername?'@'+esc(p.botUsername):'-')+'</td><td>'+fmtMoney(p.totalCost)+'</td><td>'+fmtDate(p.updatedAt)+'</td><td><button class="btn btn-sm" data-view-proj="'+p.id+'">View</button></td></tr>').join('') +
-      '</tbody></table>';
-    $$('[data-view-proj]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); loadProjectDetail(b.dataset.viewProj); }));
-    $$('tr[data-pid]').forEach(r => r.addEventListener('click', () => loadProjectDetail(r.dataset.pid)));
-  });
-}
-
-function loadProjectDetail(projectId) {
-  const el = $('#page-projects');
-  Promise.all([
-    api('/projects/' + projectId),
-    api('/projects/' + projectId + '/files'),
-  ]).then(([p, filesData]) => {
-    const files = filesData.files || [];
-    el.innerHTML = \`
-      <button class="detail-back" id="back-projects">← Back to Projects</button>
-      <div class="page-hdr"><div><h2>\${esc(p.name)}</h2><div class="sub">\${p.id}</div></div><div style="display:flex;gap:8px"><a class="btn btn-sm" href="/editor/\${p.id}/" target="_blank">Open Editor</a><a class="btn btn-sm" href="/app/\${p.id}/" target="_blank">Open App</a><a class="btn btn-sm" href="/telegram-mini-app/desktop.html" target="_blank">Desktop</a></div></div>
-      <div class="info-grid">
-        <div class="info-card"><div class="lbl">Status</div><div class="val">\${statusBadge(p.status)}</div></div>
-        <div class="info-card"><div class="lbl">Owner</div><div class="val">\${esc(p.owner)}</div></div>
-        <div class="info-card"><div class="lbl">Total Cost</div><div class="val">\${fmtMoney(p.totalCost)}</div></div>
-        <div class="info-card"><div class="lbl">Bot</div><div class="val">\${p.botUsername ? '@'+esc(p.botUsername) : '-'}</div></div>
-        <div class="info-card"><div class="lbl">Created</div><div class="val" style="font-size:13px">\${fmtDate(p.createdAt)}</div></div>
-        <div class="info-card"><div class="lbl">Updated</div><div class="val" style="font-size:13px">\${fmtDate(p.updatedAt)}</div></div>
-      </div>
-      \${p.description ? '<div class="section-title">Description</div><div style="color:var(--dim);font-size:13px;margin-bottom:12px">'+esc(p.description)+'</div>' : ''}
-      <div class="section-title">Status Management</div>
-      <div class="inline-form">
-        <select id="status-sel"><option value="created">created</option><option value="building">building</option><option value="deployed">deployed</option><option value="error">error</option></select>
-        <button class="btn btn-primary btn-sm" id="status-btn">Update Status</button>
-      </div>
-      <div class="section-title">Code (\${files.length} files)</div>
-      <div class="code-viewer" id="code-viewer">
-        <div class="code-files" id="code-tabs">\${files.map((f,i) => '<button class="code-tab'+(i===0?' active':'')+'" data-fpath="'+f.path+'">'+esc(f.name)+'</button>').join('')}</div>
-        <pre class="code-content" id="code-pre">Loading...</pre>
-      </div>
-      \${p.projectSummary ? '<div class="section-title">AI Summary</div><div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;font-size:13px;white-space:pre-wrap;color:var(--dim);max-height:300px;overflow-y:auto">'+esc(p.projectSummary)+'</div>' : ''}
-    \`;
-
-    $('#back-projects').addEventListener('click', () => loadProjects());
-    
-    const statusSel = $('#status-sel');
-    statusSel.value = p.status;
-    $('#status-btn').addEventListener('click', () => {
-      api('/projects/'+projectId+'/status', { method:'POST', body:{ status: statusSel.value } }).then(() => toast('Status updated'));
-    });
-
-    if (files.length > 0) {
-      loadProjectFile(projectId, files[0].path);
-      $$('.code-tab').forEach(t => t.addEventListener('click', () => {
-        $$('.code-tab').forEach(x => x.classList.remove('active'));
-        t.classList.add('active');
-        loadProjectFile(projectId, t.dataset.fpath);
-      }));
-    } else {
-      $('#code-pre').textContent = '(no files)';
-    }
-  });
-}
-
-function loadProjectFile(projectId, filePath) {
-  $('#code-pre').textContent = 'Loading...';
-  api('/projects/'+projectId+'/file?path='+encodeURIComponent(filePath)).then(d => {
-    $('#code-pre').textContent = d.content;
-  }).catch(() => { $('#code-pre').textContent = 'Failed to load file'; });
-}
-
-// === VOUCHERS ===
-function loadVouchers() {
-  const el = $('#page-vouchers');
-  el.innerHTML = \`
-    <div class="page-hdr"><div><h2>Vouchers</h2><div class="sub">Create and manage voucher codes</div></div></div>
-    <div class="section-title">Create Voucher</div>
-    <div class="inline-form">
-      <input type="number" id="v-amount" placeholder="Amount ($)" step="0.01" style="width:120px" />
-      <input type="number" id="v-max" placeholder="Max uses" step="1" value="1" style="width:100px" />
-      <button class="btn btn-primary btn-sm" id="v-create">Create</button>
-    </div>
-    <div class="section-title">All Vouchers</div>
-    <div id="vouchers-list"></div>
-  \`;
-
-  $('#v-create').addEventListener('click', () => {
-    const amount = $('#v-amount').value;
-    const maxUses = $('#v-max').value;
-    if (!amount || parseFloat(amount) <= 0) { toast('Enter a valid amount','err'); return; }
-    api('/vouchers', { method:'POST', body:{ amount, maxUses: maxUses||'1' } }).then(v => {
-      toast('Voucher created: '+v.code);
-      $('#v-amount').value = '';
-      $('#v-max').value = '1';
-      refreshVoucherList();
-    }).catch(() => toast('Failed to create','err'));
-  });
-
-  refreshVoucherList();
-}
-
-function refreshVoucherList() {
-  api('/vouchers').then(vouchers => {
-    const el = $('#vouchers-list');
-    if (!vouchers.length) { el.innerHTML = '<div class="empty-state"><div class="big">🎟️</div>No vouchers yet</div>'; return; }
-    el.innerHTML = '<table><thead><tr><th>Code</th><th>Amount</th><th>Used / Max</th><th>Status</th><th>Link</th><th>Created</th><th>Actions</th></tr></thead><tbody>' +
-      vouchers.map(v => '<tr><td><code>'+esc(v.code)+'</code></td><td>'+fmtMoney(v.amountUsd)+'</td><td>'+v.usedCount+' / '+v.maxUses+'</td><td>'+(v.active ? '<span class="badge deployed">active</span>' : '<span class="badge error">inactive</span>')+'</td><td><button class="btn btn-sm" data-copy-link="'+esc(v.link)+'">Copy</button></td><td>'+fmtDate(v.createdAt)+'</td><td><button class="btn btn-sm" data-toggle-v="'+v.id+'" data-active="'+v.active+'">'+(v.active?'Disable':'Enable')+'</button> <button class="btn btn-sm" style="color:var(--red)" data-del-v="'+v.id+'">Delete</button></td></tr>').join('') +
-      '</tbody></table>';
-
-    $$('[data-copy-link]').forEach(b => b.addEventListener('click', () => {
-      navigator.clipboard.writeText(b.dataset.copyLink).then(() => toast('Link copied!')).catch(() => {
-        const ta = document.createElement('textarea'); ta.value = b.dataset.copyLink; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('Link copied!');
-      });
-    }));
-
-    $$('[data-toggle-v]').forEach(b => b.addEventListener('click', () => {
-      const newActive = b.dataset.active === 'true' ? false : true;
-      api('/vouchers/'+b.dataset.toggleV, { method:'PUT', body:{ active: newActive } }).then(() => {
-        toast(newActive ? 'Voucher enabled' : 'Voucher disabled');
-        refreshVoucherList();
-      });
-    }));
-
-    $$('[data-del-v]').forEach(b => b.addEventListener('click', () => {
-      if (!confirm('Delete this voucher?')) return;
-      api('/vouchers/'+b.dataset.delV, { method:'DELETE' }).then(() => {
-        toast('Voucher deleted');
-        refreshVoucherList();
-      }).catch(() => toast('Failed to delete','err'));
-    }));
-  });
-}
-
-// === CONFIG ===
-function loadConfig() {
-  const el = $('#page-config');
-  el.innerHTML = '<div class="page-hdr"><div><h2>Configuration</h2><div class="sub">Runtime pricing and agent settings</div></div></div><div id="config-content"></div>';
-  api('/config').then(cfg => {
-    const el2 = $('#config-content');
-    el2.innerHTML = \`
-      <div class="config-form">
-        <div class="config-row">
-          <div><div class="clbl">Markup Multiplier</div><div class="cdesc">Applied on top of per-model base rates</div></div>
-          <input type="number" id="cfg-markupMultiplier" value="\${cfg.markupMultiplier}" step="0.5" />
-        </div>
-        <div class="config-row">
-          <div><div class="clbl">Min Top-up</div><div class="cdesc">Minimum top-up amount (USD)</div></div>
-          <input type="number" id="cfg-minTopup" value="\${cfg.minTopup}" step="1" />
-        </div>
-        <div class="config-row">
-          <div><div class="clbl">Max Agent Iterations</div><div class="cdesc">Maximum tool calls per agent run</div></div>
-          <input type="number" id="cfg-maxAgentIterations" value="\${cfg.maxAgentIterations}" step="1" />
-        </div>
-        <div style="margin-top:20px">
-          <button class="btn btn-primary" id="cfg-save">Save Configuration</button>
-        </div>
-      </div>
-    \`;
-
-    $('#cfg-save').addEventListener('click', () => {
-      const data = {
-        markupMultiplier: parseFloat($('#cfg-markupMultiplier').value),
-        minTopup: parseFloat($('#cfg-minTopup').value),
-        maxAgentIterations: parseInt($('#cfg-maxAgentIterations').value),
-      };
-      api('/config', { method:'POST', body:data }).then(() => toast('Configuration saved'));
-    });
-  });
-}
-
-render();
-})();
-</script>
-</body>
-</html>`;
+  res.sendFile(indexPath);
+});
 
 export default router;

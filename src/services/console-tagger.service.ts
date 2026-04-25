@@ -18,6 +18,7 @@
  */
 
 import { AsyncLocalStorage } from "async_hooks";
+import { enqueueLog } from "./app-log.service";
 
 interface AppContext {
   projectId: string;
@@ -40,7 +41,9 @@ export function getCurrentProjectId(): string | null {
 let installed = false;
 
 /** Patch process.stdout/stderr.write so that every line emitted while inside a
- * `runWithProject` context is prefixed with `[app:<projectId>] `.
+ * `runWithProject` context is prefixed with `[app:<projectId>] `, AND every
+ * line (project-tagged or core) is forked into the persistent `app_logs`
+ * sink via app-log.service.ts.
  *
  * Tagging happens at the stream level (not at console.log) so multi-line
  * payloads (object inspection, stack traces, `\n`-containing strings) get
@@ -49,44 +52,76 @@ export function installConsoleTagger(): void {
   if (installed) return;
   installed = true;
 
-  patchStream(process.stdout);
-  patchStream(process.stderr);
+  patchStream(process.stdout, "stdout");
+  patchStream(process.stderr, "stderr");
 }
 
 const APP_PREFIX_RE = /^\[app:[A-Za-z0-9_\-]+\]\s/;
 
-function patchStream(stream: NodeJS.WriteStream): void {
+// Re-entrancy guard. Any process.stdout/stderr.write that happens *while*
+// we're already inside the patched `write` (e.g. a logger somewhere in the
+// flush path) goes straight to the original stream and is NOT re-captured
+// to the persistent sink. Prevents infinite loops if the DB itself logs.
+let inTee = 0;
+
+function patchStream(stream: NodeJS.WriteStream, source: "stdout" | "stderr"): void {
   const original = stream.write.bind(stream);
 
   (stream as any).write = (chunk: any, encoding?: any, cb?: any): boolean => {
-    const ctx = als.getStore();
-    if (!ctx?.projectId) return original(chunk, encoding, cb);
+    if (inTee > 0) return original(chunk, encoding, cb);
 
-    let text: string;
+    const ctx = als.getStore();
+    const projectId = ctx?.projectId ?? null;
+
+    let text: string | null = null;
     if (typeof chunk === "string") {
       text = chunk;
     } else if (Buffer.isBuffer(chunk)) {
       text = chunk.toString("utf8");
-    } else {
-      // Unknown chunk type — pass through unchanged.
-      return original(chunk, encoding, cb);
     }
 
-    const tag = `[app:${ctx.projectId}] `;
+    // Unknown chunk type — pass through, can't capture meaningfully.
+    if (text === null) return original(chunk, encoding, cb);
+
     const endsWithNl = text.endsWith("\n");
     const body = endsWithNl ? text.slice(0, -1) : text;
-    const tagged =
-      body
-        .split("\n")
-        .map((line) => {
-          if (line.length === 0) return line;
-          // Avoid double-tagging if the line is already tagged (e.g. PM2 piped
-          // chains, or our own re-entry).
-          if (APP_PREFIX_RE.test(line)) return line;
-          return tag + line;
-        })
-        .join("\n") + (endsWithNl ? "\n" : "");
 
+    // Walk lines: build the (possibly tagged) outgoing text AND fork to the
+    // persistent sink. We do both in the same pass to keep the cost low.
+    const out: string[] = [];
+    inTee++;
+    try {
+      const lines = body.split("\n");
+      for (const line of lines) {
+        if (line.length === 0) { out.push(line); continue; }
+
+        // Strip an already-present `[app:<id>]` tag for the persistent sink
+        // and use it as the project id if ALS didn't have one.
+        let pid = projectId;
+        let persistedLine = line;
+        if (APP_PREFIX_RE.test(line)) {
+          // Already tagged — don't double-tag for output.
+          out.push(line);
+          if (!pid) {
+            const m = /^\[app:([A-Za-z0-9_\-]+)\]\s?(.*)$/.exec(line);
+            if (m) { pid = m[1]; persistedLine = m[2]; }
+          }
+        } else if (pid) {
+          out.push(`[app:${pid}] ${line}`);
+        } else {
+          out.push(line);
+        }
+
+        // Fork to the persistent sink (cheap enqueue, async flush).
+        try {
+          enqueueLog({ projectId: pid, source, rawLine: persistedLine });
+        } catch { /* never let a sink failure break process.stdout */ }
+      }
+    } finally {
+      inTee--;
+    }
+
+    const tagged = out.join("\n") + (endsWithNl ? "\n" : "");
     return original(tagged, encoding, cb);
   };
 }

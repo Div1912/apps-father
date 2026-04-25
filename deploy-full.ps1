@@ -49,6 +49,12 @@ ssh $SERVER "mkdir -p ${APP_DIR}/landing/samples"
 scp -r landing/* "${SERVER}:${APP_DIR}/landing/"
 Write-Host "Landing OK" -ForegroundColor Green
 
+# ── Admin CRM (browser SPA at /admin) ─────────────────────
+Write-Host "=== [$ENV_NAME] Uploading admin ===" -ForegroundColor $COLOR
+ssh $SERVER "mkdir -p ${APP_DIR}/admin"
+scp -r admin/* "${SERVER}:${APP_DIR}/admin/"
+Write-Host "Admin OK" -ForegroundColor Green
+
 # ── Upload .env ───────────────────────────────────────────
 if ($ENV_NAME -eq "DEV") {
     Write-Host "=== [$ENV_NAME] Syncing dev.env ===" -ForegroundColor $COLOR
@@ -96,6 +102,69 @@ ssh $SERVER "$psql 'ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_notified_at
 ssh $SERVER "$psql 'UPDATE users SET admin_notified_at = created_at WHERE admin_notified_at IS NULL;'"
 ssh $SERVER "$psql 'ALTER TABLE users ADD COLUMN IF NOT EXISTS sub_bonus_claimed_at TIMESTAMPTZ;'"
 ssh $SERVER "$psql 'ALTER TABLE projects ADD COLUMN IF NOT EXISTS preferences TEXT;'"
+# Admin CRM: user tags + notes (Prisma User.adminTags / AdminUserNote)
+ssh $SERVER "$psql 'ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_tags TEXT;'"
+# App slots: bumped from 1 → 5 free starter slots. Existing users get +4 so
+# their previous purchases still work out (was 1 → 5, was 2 → 6, etc).
+# The migration is idempotent: a marker row is left behind and we skip the
+# bump on subsequent deploys.
+$slotBumpSql = @"
+DO `$`$
+BEGIN
+  ALTER TABLE users ALTER COLUMN app_slots SET DEFAULT 5;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_class WHERE relname = '_app_slots_bump_v1_done'
+  ) THEN
+    UPDATE users SET app_slots = app_slots + 4;
+    CREATE TABLE _app_slots_bump_v1_done (applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+    INSERT INTO _app_slots_bump_v1_done DEFAULT VALUES;
+  END IF;
+END
+`$`$;
+"@
+$slotBumpSql | Out-File -Encoding utf8 -FilePath tmp_slot_bump.sql
+scp tmp_slot_bump.sql "${SERVER}:/tmp/tmp_slot_bump.sql"
+ssh $SERVER "docker cp /tmp/tmp_slot_bump.sql ${DB_CTR}:/tmp/tmp_slot_bump.sql; docker exec ${DB_CTR} psql -U ${DB_USER} -d ${DB_NAME} -f /tmp/tmp_slot_bump.sql"
+Remove-Item tmp_slot_bump.sql -ErrorAction SilentlyContinue
+$adminCrmSql = @"
+CREATE TABLE IF NOT EXISTS admin_user_notes (
+  id SERIAL PRIMARY KEY,
+  user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  author_tag TEXT NOT NULL DEFAULT 'admin',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS admin_user_notes_user_id_idx ON admin_user_notes(user_id);
+"@
+$adminCrmSql | Out-File -Encoding utf8 -FilePath tmp_admin_crm.sql
+scp tmp_admin_crm.sql "${SERVER}:/tmp/tmp_admin_crm.sql"
+ssh $SERVER "docker cp /tmp/tmp_admin_crm.sql ${DB_CTR}:/tmp/tmp_admin_crm.sql; docker exec ${DB_CTR} psql -U ${DB_USER} -d ${DB_NAME} -f /tmp/tmp_admin_crm.sql"
+Remove-Item tmp_admin_crm.sql -ErrorAction SilentlyContinue
+
+# ── App logs (persistent runtime log capture, see app-log.service.ts) ────────
+# Indexed on (ts), (project_id, ts), (category, ts), (project_id, category, ts)
+# so the Admin Logs page can paginate/filter quickly. Created idempotently.
+$appLogsSql = @"
+CREATE TABLE IF NOT EXISTS app_logs (
+  id BIGSERIAL PRIMARY KEY,
+  ts TIMESTAMP(3) NOT NULL DEFAULT NOW(),
+  project_id TEXT NULL REFERENCES projects(id) ON DELETE SET NULL,
+  category TEXT NOT NULL,
+  level TEXT NOT NULL,
+  source TEXT NOT NULL,
+  message TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS app_logs_ts_desc_idx           ON app_logs (ts DESC);
+CREATE INDEX IF NOT EXISTS app_logs_project_ts_idx        ON app_logs (project_id, ts DESC);
+CREATE INDEX IF NOT EXISTS app_logs_category_ts_idx       ON app_logs (category,  ts DESC);
+CREATE INDEX IF NOT EXISTS app_logs_project_cat_ts_idx    ON app_logs (project_id, category, ts DESC);
+"@
+$appLogsSql | Out-File -Encoding utf8 -FilePath tmp_app_logs.sql
+scp tmp_app_logs.sql "${SERVER}:/tmp/tmp_app_logs.sql"
+ssh $SERVER "docker cp /tmp/tmp_app_logs.sql ${DB_CTR}:/tmp/tmp_app_logs.sql; docker exec ${DB_CTR} psql -U ${DB_USER} -d ${DB_NAME} -f /tmp/tmp_app_logs.sql"
+Remove-Item tmp_app_logs.sql -ErrorAction SilentlyContinue
+
 Write-Host "Migration OK" -ForegroundColor Green
 
 # ── Agent knowledge (instructions + skills) ───────────────

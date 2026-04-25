@@ -3,10 +3,32 @@ import { config } from "../config";
 import crypto from "crypto";
 import { Decimal } from "@prisma/client/runtime/library";
 import { runtimeConfig } from "./runtime-config.service";
+import type { ModelConfigs } from "./runtime-config.service";
+import { getModelPricing } from "./openrouter.service";
 import { notifyDeposit, notifyReferralBonus } from "./notify.service";
 import { trackEvent } from "./analytics.service";
 
 export const MODEL_PRICING: Record<string, { input: number; output: number; cache_write: number; cache_read: number }> = {
+  // OpenRouter slugs (current default models)
+  "anthropic/claude-sonnet-4-5": {
+    input: 3.00 / 1_000_000,
+    output: 15.00 / 1_000_000,
+    cache_write: 3.75 / 1_000_000,
+    cache_read: 0.30 / 1_000_000,
+  },
+  "anthropic/claude-opus-4-5": {
+    input: 15.00 / 1_000_000,
+    output: 75.00 / 1_000_000,
+    cache_write: 18.75 / 1_000_000,
+    cache_read: 1.50 / 1_000_000,
+  },
+  "anthropic/claude-haiku-4-5": {
+    input: 0.80 / 1_000_000,
+    output: 4.00 / 1_000_000,
+    cache_write: 1.00 / 1_000_000,
+    cache_read: 0.08 / 1_000_000,
+  },
+  // Legacy short-form aliases (for backward compatibility with old usage logs)
   "claude-sonnet-4-6": {
     input: 3.00 / 1_000_000,
     output: 15.00 / 1_000_000,
@@ -14,16 +36,16 @@ export const MODEL_PRICING: Record<string, { input: number; output: number; cach
     cache_read: 0.30 / 1_000_000,
   },
   "claude-opus-4-7": {
-    input: 5.00 / 1_000_000,
-    output: 25.00 / 1_000_000,
-    cache_write: 6.25 / 1_000_000,
-    cache_read: 0.50 / 1_000_000,
+    input: 15.00 / 1_000_000,
+    output: 75.00 / 1_000_000,
+    cache_write: 18.75 / 1_000_000,
+    cache_read: 1.50 / 1_000_000,
   },
   "claude-haiku-4-5-20251001": {
-    input: 1.00 / 1_000_000,
-    output: 5.00 / 1_000_000,
-    cache_write: 1.25 / 1_000_000,
-    cache_read: 0.10 / 1_000_000,
+    input: 0.80 / 1_000_000,
+    output: 4.00 / 1_000_000,
+    cache_write: 1.00 / 1_000_000,
+    cache_read: 0.08 / 1_000_000,
   },
 };
 
@@ -54,15 +76,57 @@ export class BillingService {
     return balance > 0;
   }
 
-  calculateCost(model: string, usage: TokenUsage, operation?: string): number {
-    const p = MODEL_PRICING[model] || MODEL_PRICING["claude-sonnet-4-6"];
-    const inputCost = (usage.input_tokens ?? 0) * p.input;
-    const outputCost = (usage.output_tokens ?? 0) * p.output;
-    const cacheWrite = (usage.cache_creation_input_tokens ?? 0) * p.cache_write;
-    const cacheRead = (usage.cache_read_input_tokens ?? 0) * p.cache_read;
+  private getActionKey(operation?: string): keyof ModelConfigs | null {
+    if (!operation) return null;
+    if (operation === "build" || operation === "update") return "codegen";
+    if (["plan", "codegen", "ask", "suggestions", "passport"].includes(operation)) {
+      return operation as keyof ModelConfigs;
+    }
+    return null;
+  }
+
+  private getMarkupMultiplier(operation?: string): number {
+    const actionKey = this.getActionKey(operation);
+    if (!actionKey) return runtimeConfig.getMarkupMultiplier();
+    try {
+      return runtimeConfig.getModelConfig(actionKey).markupMultiplier ?? runtimeConfig.getMarkupMultiplier();
+    } catch {
+      return runtimeConfig.getMarkupMultiplier();
+    }
+  }
+
+  private calculateCostWithPricing(
+    pricing: { input: number; output: number; cache_write: number; cache_read: number },
+    usage: TokenUsage,
+    operation?: string
+  ): number {
+    const inputCost = (usage.input_tokens ?? 0) * pricing.input;
+    const outputCost = (usage.output_tokens ?? 0) * pricing.output;
+    const cacheWrite = (usage.cache_creation_input_tokens ?? 0) * pricing.cache_write;
+    const cacheRead = (usage.cache_read_input_tokens ?? 0) * pricing.cache_read;
     const total = inputCost + outputCost + cacheWrite + cacheRead;
-    const multiplier = operation === "ask" ? runtimeConfig.getAskMultiplier() : runtimeConfig.getMarkupMultiplier();
-    return total * multiplier;
+    return total * this.getMarkupMultiplier(operation);
+  }
+
+  calculateCost(model: string, usage: TokenUsage, operation?: string): number {
+    const p = MODEL_PRICING[model] || MODEL_PRICING["anthropic/claude-sonnet-4-5"] || { input: 0, output: 0, cache_write: 0, cache_read: 0 };
+    return this.calculateCostWithPricing(p, usage, operation);
+  }
+
+  async calculateCostAsync(model: string, usage: TokenUsage, operation?: string): Promise<number> {
+    const livePricing = await getModelPricing(model);
+    if (livePricing) {
+      return this.calculateCostWithPricing({
+        input: livePricing.promptPerToken,
+        output: livePricing.completionPerToken,
+        // OpenRouter catalog exposes prompt/completion price. Cached prompt
+        // discounts are provider-specific; use prompt price unless usage
+        // details are already folded into provider usage.
+        cache_write: livePricing.promptPerToken,
+        cache_read: livePricing.promptPerToken,
+      }, usage, operation);
+    }
+    return this.calculateCost(model, usage, operation);
   }
 
   async recordUsage(
@@ -72,7 +136,7 @@ export class BillingService {
     usage: TokenUsage,
     operation: string
   ): Promise<UsageResult> {
-    const costUsd = this.calculateCost(model, usage, operation);
+    const costUsd = await this.calculateCostAsync(model, usage, operation);
 
     const result = await prisma.$transaction(async (tx) => {
       await tx.usageLog.create({
@@ -559,25 +623,40 @@ export class BillingService {
   }
 
   /**
-   * Credit a one-time +$10 bonus on the user's very first confirmed deposit.
+   * Credit a percentage-based bonus on the user's very first confirmed deposit.
+   * The bonus equals `runtimeConfig.firstTopupBonusPercent`% of the deposited
+   * amount (e.g. 100% → user deposits $5 and receives an extra +$5).
    * Atomic: only triggers if `firstDepositBonusGiven` is still false AND the
    * confirmed-payments-count equals 1 (i.e. the payment we just confirmed).
    */
   async creditFirstDepositBonus(userId: number, justConfirmedPaymentId: number): Promise<void> {
-    const FIRST_DEPOSIT_BONUS_USD = 10;
     try {
+      const percent = Number(runtimeConfig.get().firstTopupBonusPercent) || 0;
+      if (percent <= 0) return;
+
       // Count confirmed payments that are NOT the one we just confirmed
       const otherConfirmed = await prisma.payment.count({
         where: { userId, status: "confirmed", id: { not: justConfirmedPaymentId } },
       });
       if (otherConfirmed > 0) return;
 
+      // Pull the deposit amount so the bonus can be a % of it.
+      const justPaid = await prisma.payment.findUnique({
+        where: { id: justConfirmedPaymentId },
+        select: { amountUsd: true },
+      });
+      const depositAmountUsd = Number(justPaid?.amountUsd ?? 0);
+      if (depositAmountUsd <= 0) return;
+
+      const bonusUsd = +(depositAmountUsd * percent / 100).toFixed(4);
+      if (bonusUsd <= 0) return;
+
       // Atomic: flag toggles only if currently false; this prevents double-credit.
       const updated = await prisma.user.updateMany({
         where: { id: userId, firstDepositBonusGiven: false },
         data: {
           firstDepositBonusGiven: true,
-          balance: { increment: new Decimal(FIRST_DEPOSIT_BONUS_USD.toFixed(4)) },
+          balance: { increment: new Decimal(bonusUsd.toFixed(4)) },
         },
       });
       if (updated.count === 0) return;
@@ -588,7 +667,7 @@ export class BillingService {
 
       const text =
         `<b><tg-emoji emoji-id="5384541907051357217">🎁</tg-emoji> First-deposit bonus!</b>\n\n` +
-        `<b><tg-emoji emoji-id="5377851954321989517">💲</tg-emoji> +$${FIRST_DEPOSIT_BONUS_USD.toFixed(2)}</b> bonus credited to your balance.\n\n` +
+        `<b><tg-emoji emoji-id="5377851954321989517">💲</tg-emoji> +$${bonusUsd.toFixed(2)}</b> (${percent}% of your first deposit) credited to your balance.\n\n` +
         `<blockquote>New balance: <b>$${newBalance.toFixed(2)}</b></blockquote>`;
 
       await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
@@ -597,7 +676,7 @@ export class BillingService {
         body: JSON.stringify({ chat_id: user.telegramId.toString(), text, parse_mode: "HTML" }),
       }).catch(() => {});
 
-      console.log(`[Billing] First-deposit bonus +$${FIRST_DEPOSIT_BONUS_USD} credited to user ${userId}`);
+      console.log(`[Billing] First-deposit bonus +$${bonusUsd.toFixed(2)} (${percent}%) credited to user ${userId}`);
     } catch (err) {
       console.error("[Billing] Failed to credit first-deposit bonus:", err);
     }

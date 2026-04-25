@@ -3,7 +3,8 @@ dotenv.config();
 
 export const config = {
   botToken: process.env.APPS_FATHER_TOKEN!,
-  anthropicApiKey: process.env.ANTHROPIC_API_KEY!,
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY || "",
+  openrouterApiKey: process.env.OPENROUTER_API_KEY || "",
   databaseUrl: process.env.DATABASE_URL!,
   domain: process.env.DOMAIN || "localhost",
   port: parseInt(process.env.PORT || "3000", 10),

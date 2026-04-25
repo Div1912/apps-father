@@ -121,7 +121,7 @@ async function reportInit() {
 }
 
 let projects = [];
-let slots = { used: 0, total: 1 };
+let slots = { used: 0, total: 5 };
 let currentProject = null;
 let currentToken = null;
 let currentView = 'list';
@@ -430,7 +430,26 @@ function renderAppList(filter) {
 
   document.getElementById('apps-header-count').textContent = `${t('my_apps')} (${slots.used}/${slots.total})`;
 
-  let html = `<a class="tm-row tm-row-add" id="btn-create-app"><span class="tm-icon"></span><span>${t('create_new_app')}</span></a>`;
+  // First-time onboarding: when the user has zero apps, give the Create App
+  // button a strong gradient + nudge label so it's the obvious next action.
+  const isFirstApp = projects.length === 0;
+  let html;
+  if (isFirstApp) {
+    const ctaLabel = t('create_first_app') || t('create_new_app');
+    const ctaHint = t('create_first_app_hint') || 'Start your first AI-built bot';
+    html = `<a class="tm-row tm-row-add tm-row-add-pulse" id="btn-create-app">` +
+      `<span class="tm-icon"></span>` +
+      `<div class="tm-row-add-textcol">` +
+        `<span class="tm-row-add-label">${esc(ctaLabel)}</span>` +
+        `<span class="tm-row-add-hint">${esc(ctaHint)}</span>` +
+      `</div>` +
+      `</a>`;
+  } else {
+    html = `<a class="tm-row tm-row-add" id="btn-create-app">` +
+      `<span class="tm-icon"></span>` +
+      `<span>${esc(t('create_new_app'))}</span>` +
+      `</a>`;
+  }
   for (const p of filtered) {
     const username = p.botUsername ? `@${p.botUsername}` : '';
     let avatarHtml;
@@ -593,7 +612,14 @@ let topupReturnView = null;
 let userBalance = 0;
 let userPaymentCount = 0;
 let firstDepositBonusEligible = false;
-const FIRST_DEPOSIT_BONUS_USD = 10;
+// Percent-based first-deposit bonus (server-driven). e.g. 100 → double the
+// first deposit. Falls back to 100 if the API hasn't returned yet.
+let firstDepositBonusPercent = 100;
+function firstDepositBonusUsdFor(amountUsd) {
+  const amt = Number(amountUsd) || 0;
+  const pct = Number(firstDepositBonusPercent) || 0;
+  return +(amt * pct / 100).toFixed(2);
+}
 const ESTIMATED_APP_COST_USD = 3;
 let tonConnectUI = null;
 let tonVerifyTimeout = null;
@@ -630,6 +656,23 @@ function openTopup(returnTo) {
   showView('topup');
 }
 
+// Live "+$X bonus" preview shown under the first-deposit banner on the
+// Top-Up page. Updates as the user changes the deposit amount.
+function updateTopupBonusPreview() {
+  const sub = document.querySelector('#topup-bonus-banner .topup-bonus-sub');
+  if (!sub) return;
+  if (!firstDepositBonusEligible || firstDepositBonusPercent <= 0) return;
+  const bonus = firstDepositBonusUsdFor(topupAmount);
+  if (bonus > 0) {
+    const tmpl = t('topup_first_bonus_preview') || 'You will receive +${bonus} bonus on top of ${amount}';
+    sub.textContent = tmpl
+      .replace('{bonus}', bonus.toFixed(2))
+      .replace('{amount}', `$${Number(topupAmount).toFixed(2)}`);
+  } else {
+    sub.textContent = t('topup_first_bonus_sub') || 'Auto-credited the moment your first payment is confirmed';
+  }
+}
+
 function updateOtherCryptoLock() {
   const row = document.querySelector('.topup-method[data-method="crypto"]');
   if (!row) return;
@@ -657,81 +700,81 @@ function updateOtherCryptoLock() {
   }
 }
 
-// Compact red "Insufficient balance" card — shown to users who have already
-// deposited at least once. The big conversion-focused "Almost there!" CTA is
-// only useful as a first-purchase nudge; returning users have already crossed
-// that line and just need a quick top-up shortcut.
-function renderInsufficientCard(balance) {
-  const ctaText = t('chat_topup_cta') || t('chat_topup_btn') || 'Top Up Balance';
-  const title = t('chat_insufficient') || 'Insufficient Balance';
-  return `
-    <div class="balance-insufficient-row">
-      <div class="balance-insufficient-text">
-        <div class="balance-insufficient-title">${esc(title)}</div>
-        <div class="balance-insufficient-sub">${esc(t('chat_your_balance') || 'Your balance')}: <b>$${Number(balance).toFixed(2)}</b></div>
-      </div>
-      <button class="balance-cta-btn balance-cta-btn--compact">
-        <span>${esc(ctaText)}</span>
-        <span class="balance-cta-arrow">→</span>
-      </button>
-    </div>
-  `;
-}
+// Minimum balance required to start a build/update (mirrors the server-side
+// guards in src/web/server.ts — keep in sync).
+const MIN_BUILD_BALANCE_USD = 5;
+const ESTIMATED_PRICE_RANGE = '$1–$5';
 
-function renderBalanceErrorCard(balance) {
-  const eligible = firstDepositBonusEligible;
-  const ctaText = eligible
-    ? (t('chat_topup_cta_bonus') || `Top Up & Claim $${FIRST_DEPOSIT_BONUS_USD} Bonus`)
+// Single unified "Insufficient Funds" warning panel.
+// Replaces the older split between the compact red bar (returning depositors)
+// and the "Almost there!" conversion card (first-timers). Both audiences now
+// see the same fancy amber/orange warning card; the +bonus mini-panel is
+// shown inline only when the user is still eligible for the first-deposit
+// bonus AND the bonus percent is enabled.
+function renderInsufficientFundsCard(balance) {
+  const bal = Number(balance) || 0;
+  const eligibleBonus = firstDepositBonusEligible && firstDepositBonusPercent > 0;
+  const pct = firstDepositBonusPercent;
+
+  const title    = t('chat_insufficient_funds_title') || t('chat_insufficient') || 'Insufficient Funds';
+  const subtitle = t('chat_insufficient_funds_sub')   || 'Top up your balance to start building';
+  const lblPrice = t('chat_estimated_price')          || t('chat_estimated_cost') || 'Estimated price';
+  const lblBal   = t('chat_your_balance')             || 'Your balance';
+  const note     = (t('chat_min_balance_note') || 'You can start when your balance is at least ${min}')
+                     .replace('${min}', `$${MIN_BUILD_BALANCE_USD}`);
+  const ctaText  = eligibleBonus
+    ? ((t('chat_topup_cta_bonus') || 'Top Up & Get +{pct}% Bonus').replace('{pct}', pct))
     : (t('chat_topup_cta') || t('chat_topup_btn') || 'Top Up Balance');
 
-  const bonusChip = eligible
-    ? `<div class="balance-bonus-chip">
-         <span class="balance-bonus-chip-icon">🎁</span>
-         <span>${esc(t('chat_first_deposit_chip') || `Get +$${FIRST_DEPOSIT_BONUS_USD} FREE on your first deposit`)}</span>
+  const bonusPanel = eligibleBonus
+    ? `<div class="ifc-bonus">
+         <div class="ifc-bonus-icon">🎁</div>
+         <div class="ifc-bonus-text">
+           <div class="ifc-bonus-title">${esc((t('chat_bonus_mini_title') || '+{pct}% Bonus on first deposit').replace('{pct}', pct))}</div>
+           <div class="ifc-bonus-sub">${esc(t('chat_bonus_mini_sub') || 'Auto-credited the moment your payment is confirmed')}</div>
+         </div>
+         <div class="ifc-bonus-pct">+${pct}%</div>
        </div>`
     : '';
 
   return `
-    <div class="balance-cta-header">
-      <div class="balance-cta-icon">🚀</div>
-      <div class="balance-cta-headtext">
-        <div class="balance-cta-title">${esc(t('chat_almost_there_title') || 'Almost there!')}</div>
-        <div class="balance-cta-sub">${esc(t('chat_almost_there_sub') || 'Your app is just one step away')}</div>
+    <div class="ifc-header">
+      <div class="ifc-icon">⚠️</div>
+      <div class="ifc-headtext">
+        <div class="ifc-title">${esc(title)}</div>
+        <div class="ifc-sub">${esc(subtitle)}</div>
       </div>
     </div>
-    <div class="balance-cta-stats">
-      <div class="balance-cta-stat">
-        <div class="balance-cta-stat-label">${esc(t('chat_estimated_cost') || 'Estimated cost')}</div>
-        <div class="balance-cta-stat-value">~$${ESTIMATED_APP_COST_USD.toFixed(2)}</div>
+    <div class="ifc-stats">
+      <div class="ifc-stat">
+        <div class="ifc-stat-label">${esc(lblPrice)}</div>
+        <div class="ifc-stat-value">~${ESTIMATED_PRICE_RANGE}</div>
       </div>
-      <div class="balance-cta-stat">
-        <div class="balance-cta-stat-label">${esc(t('chat_your_balance') || 'Your balance')}</div>
-        <div class="balance-cta-stat-value low">$${Number(balance).toFixed(2)}</div>
+      <div class="ifc-stat">
+        <div class="ifc-stat-label">${esc(lblBal)}</div>
+        <div class="ifc-stat-value low">$${bal.toFixed(2)}</div>
       </div>
     </div>
-    ${bonusChip}
-    <button class="balance-cta-btn ${eligible ? 'with-bonus' : ''}">
+    <div class="ifc-note">
+      <span class="ifc-note-icon">ℹ️</span>
+      <span>${esc(note)}</span>
+    </div>
+    ${bonusPanel}
+    <button class="ifc-cta ${eligibleBonus ? 'with-bonus' : ''}">
       <span>${esc(ctaText)}</span>
-      <span class="balance-cta-arrow">→</span>
+      <span class="ifc-cta-arrow">→</span>
     </button>
   `;
 }
 
-// Picks which balance card to render. Returning depositors (paymentCount > 0)
-// get the compact red "insufficient balance" card; first-timers get the big
-// conversion-focused "Almost there!" card with bonus CTA.
+// Re-renders the unified balance-warning card into a chat-bubble wrapper.
+// All previous card-class flags (`chat-bubble--balance-error`,
+// `chat-bubble--insufficient`) are stripped so re-rendering is idempotent.
 function renderBalancePromptCard(el, balance) {
-  const isReturningDepositor = (typeof userPaymentCount === 'number') && userPaymentCount > 0;
-  if (isReturningDepositor) {
-    el.classList.remove('chat-bubble--balance-error');
-    el.classList.add('chat-bubble--insufficient');
-    el.innerHTML = renderInsufficientCard(balance);
-  } else {
-    el.classList.remove('chat-bubble--insufficient');
-    el.classList.add('chat-bubble--balance-error');
-    el.innerHTML = renderBalanceErrorCard(balance);
-  }
-  el.querySelector('.balance-cta-btn')?.addEventListener('click', () => openTopup('chat'));
+  el.classList.remove('chat-bubble--balance-error', 'chat-bubble--insufficient');
+  el.classList.add('chat-bubble--insufficient-funds');
+  el.innerHTML = renderInsufficientFundsCard(balance);
+  el.querySelector('.ifc-cta')?.addEventListener('click', () => openTopup('chat'));
 }
 
 async function loadTopupBalance() {
@@ -742,6 +785,9 @@ async function loadTopupBalance() {
       userBalance = data.balance;
       userPaymentCount = data.paymentCount ?? 0;
       firstDepositBonusEligible = !!data.firstDepositBonusEligible;
+      if (typeof data.firstDepositBonusPercent === 'number') {
+        firstDepositBonusPercent = data.firstDepositBonusPercent;
+      }
       document.getElementById('topup-balance-text').textContent = `Current balance: $${Number(data.balance).toFixed(2)}`;
       const balEl = document.getElementById('balance-amount');
       if (balEl) balEl.textContent = `$${Number(data.balance).toFixed(2)}`;
@@ -750,10 +796,14 @@ async function loadTopupBalance() {
       const bonusSection = document.getElementById('topup-bonus-section');
       const bonusBanner = document.getElementById('topup-bonus-banner');
       if (bonusSection && bonusBanner) {
-        if (firstDepositBonusEligible) {
-          bonusBanner.querySelector('.topup-bonus-title').textContent = t('topup_first_bonus_title') || `Get +$${FIRST_DEPOSIT_BONUS_USD} FREE on your first deposit`;
-          bonusBanner.querySelector('.topup-bonus-sub').textContent = t('topup_first_bonus_sub') || 'Auto-credited the moment your first payment is confirmed';
+        if (firstDepositBonusEligible && firstDepositBonusPercent > 0) {
+          const pct = firstDepositBonusPercent;
+          bonusBanner.querySelector('.topup-bonus-title').textContent =
+            (t('topup_first_bonus_title') || 'Get +{pct}% bonus on your first deposit').replace('{pct}', pct);
+          bonusBanner.querySelector('.topup-bonus-sub').textContent =
+            t('topup_first_bonus_sub') || 'Auto-credited the moment your first payment is confirmed';
           bonusSection.style.display = '';
+          updateTopupBonusPreview();
         } else {
           bonusSection.style.display = 'none';
         }
@@ -1081,6 +1131,7 @@ function initTopupEvents() {
       document.querySelectorAll('.topup-amount-btn').forEach(b => b.classList.toggle('active', b === btn));
       updateOtherCryptoLock();
       updateTopupButton();
+      updateTopupBonusPreview();
     });
   });
 
@@ -1092,6 +1143,7 @@ function initTopupEvents() {
     });
     updateOtherCryptoLock();
     updateTopupButton();
+    updateTopupBonusPreview();
   });
 
   document.querySelectorAll('.topup-method').forEach(row => {
@@ -1190,6 +1242,7 @@ function enterPlanningMode(active) {
     attachBtn.style.display = 'none';
     input.placeholder = t('chat_placeholder');
     loadTgsAnimation();
+    renderPromptSamples();
   } else {
     welcome.classList.add('hidden');
     pills.classList.remove('hidden');
@@ -1198,8 +1251,78 @@ function enterPlanningMode(active) {
       planAnimInstance.destroy();
       planAnimInstance = null;
     }
+    clearPromptSamples();
     switchChatMode(chatMode);
   }
+}
+
+// Onboarding hint pinned above the chat input on the planning screen:
+// a single compact chip showing one localized example prompt at a time,
+// rotating every ~2.8s with a smooth fade. Pure visual cue — not clickable.
+let promptSamplesTimer = null;
+let promptSamplesIndex = 0;
+
+function renderPromptSamples() {
+  const inputArea = document.getElementById('chat-input-area');
+  if (!inputArea) return;
+  const samples = [
+    t('chat_sample_1'),
+    t('chat_sample_2'),
+    t('chat_sample_3'),
+  ].filter(s => s && typeof s === 'string');
+  if (samples.length === 0) {
+    clearPromptSamples();
+    return;
+  }
+
+  let chip = document.getElementById('chat-sample-chip');
+  if (!chip) {
+    chip = document.createElement('div');
+    chip.id = 'chat-sample-chip';
+    chip.className = 'chat-sample-chip';
+    chip.setAttribute('aria-hidden', 'true');
+    chip.innerHTML =
+      `<span class="chat-sample-chip-label">${esc(t('chat_samples_title') || 'Try:')}</span>` +
+      `<span class="chat-sample-chip-text"></span>`;
+    // Insert just before the input bar so the chip visually attaches to it.
+    const inputBar = inputArea.querySelector('.chat-input-bar');
+    if (inputBar) {
+      inputArea.insertBefore(chip, inputBar);
+    } else {
+      inputArea.appendChild(chip);
+    }
+  } else {
+    const lbl = chip.querySelector('.chat-sample-chip-label');
+    if (lbl) lbl.textContent = t('chat_samples_title') || 'Try:';
+  }
+
+  const textEl = chip.querySelector('.chat-sample-chip-text');
+  promptSamplesIndex = 0;
+  const setSample = (i) => {
+    if (!textEl) return;
+    textEl.classList.add('fading');
+    setTimeout(() => {
+      textEl.textContent = samples[i];
+      textEl.classList.remove('fading');
+    }, 220);
+  };
+  textEl.textContent = samples[0];
+
+  if (promptSamplesTimer) clearInterval(promptSamplesTimer);
+  if (samples.length > 1) {
+    promptSamplesTimer = setInterval(() => {
+      promptSamplesIndex = (promptSamplesIndex + 1) % samples.length;
+      setSample(promptSamplesIndex);
+    }, 2800);
+  }
+}
+
+function clearPromptSamples() {
+  if (promptSamplesTimer) {
+    clearInterval(promptSamplesTimer);
+    promptSamplesTimer = null;
+  }
+  document.getElementById('chat-sample-chip')?.remove();
 }
 
 function showEmptyChat() {
@@ -1625,6 +1748,9 @@ function appendMessage(msg, animate = true) {
         userBalance = d.balance;
         userPaymentCount = d.paymentCount ?? 0;
         firstDepositBonusEligible = !!d.firstDepositBonusEligible;
+        if (typeof d.firstDepositBonusPercent === 'number') {
+          firstDepositBonusPercent = d.firstDepositBonusPercent;
+        }
         const fresh = el.parentElement?.querySelector(`#${el.id}`);
         if (fresh) renderBalancePromptCard(fresh, Number(d.balance));
       })
@@ -2445,6 +2571,30 @@ function renderPreferencesModal() {
       card.addEventListener('click', () => onPrefCardPick(cat.id, opt.id, card, step, idx));
       grid.appendChild(card);
     }
+
+    // Append a non-interactive "AI Agent (soon)" teaser card in the kind step.
+    if (cat.id === 'kind') {
+      const agentLabel = t('pref_opt_kind_aiAgent_label') || 'AI Agent';
+      const agentDesc  = t('pref_opt_kind_aiAgent_desc')  || 'Autonomous agent that acts on its own. No UI — just results.';
+      const soonLabel  = t('pref_soon') || 'Soon';
+      const teaser = document.createElement('div');
+      teaser.className = 'pref-card pref-card--soon';
+      teaser.setAttribute('aria-disabled', 'true');
+      teaser.innerHTML = `
+        <div class="pref-card-preview">
+          ${renderAiAgentPreviewCard()}
+        </div>
+        <div class="pref-card-meta">
+          <div class="pref-card-label">
+            ${escapeHtml(agentLabel)}
+            <span class="pref-soon-badge">${escapeHtml(soonLabel)}</span>
+          </div>
+          <div class="pref-card-desc">${escapeHtml(agentDesc)}</div>
+        </div>
+      `;
+      grid.appendChild(teaser);
+    }
+
     stepsEl.appendChild(step);
 
     if (progressEl) {
@@ -2709,15 +2859,31 @@ function renderKindPreviewCard(opt) {
     `;
   }
   if (variant === 'textBot') {
-    // Tiny mock of a Telegram chat: bot avatar + bubble + chip row.
+    // Mini Telegram chat exchange — bot welcome → user reply → bot answer →
+    // command chips. Fills the square card naturally so it doesn't look like
+    // an empty bubble floating in a void.
     return `
       <div class="gp-card gp-card-kind gp-card-kind-textbot">
         <div class="tb-chat">
           <div class="tb-msg tb-msg-bot">
             <div class="tb-avatar">B</div>
             <div class="tb-bubble">
-              <div class="tb-line"></div>
-              <div class="tb-line tb-line-sm"></div>
+              <div class="tb-line tb-line-w-full"></div>
+              <div class="tb-line tb-line-w-md"></div>
+              <div class="tb-line tb-line-w-sm"></div>
+            </div>
+          </div>
+          <div class="tb-msg tb-msg-user">
+            <div class="tb-bubble tb-bubble-user">
+              <div class="tb-line tb-line-w-md"></div>
+              <div class="tb-line tb-line-w-sm"></div>
+            </div>
+          </div>
+          <div class="tb-msg tb-msg-bot">
+            <div class="tb-avatar">B</div>
+            <div class="tb-bubble">
+              <div class="tb-line tb-line-w-full"></div>
+              <div class="tb-line tb-line-w-md"></div>
             </div>
           </div>
           <div class="tb-chips">
@@ -2736,6 +2902,40 @@ function renderKindPreviewCard(opt) {
         ${renderIsoScene()}
         <span class="gp-score">SCORE 0042</span>
       </div>
+    </div>
+  `;
+}
+
+// ── AI Agent teaser illustration ────────────────────────────────────
+// A "coming soon" card shown in the kind grid. Not selectable.
+function renderAiAgentPreviewCard() {
+  return `
+    <div class="gp-card gp-card-kind gp-card-kind-agent">
+      <svg class="gp-iso" viewBox="0 0 120 120" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <!-- Dark background -->
+        <rect width="120" height="120" fill="#0d1117"/>
+        <!-- Central "brain" hexagon ring -->
+        <polygon points="60,22 78,32 78,52 60,62 42,52 42,32" fill="none" stroke="rgba(139,92,246,0.55)" stroke-width="1.5"/>
+        <polygon points="60,30 72,37 72,51 60,58 48,51 48,37" fill="rgba(139,92,246,0.12)"/>
+        <!-- Pulsing center dot -->
+        <circle cx="60" cy="44" r="6" fill="#8b5cf6" opacity="0.9"/>
+        <circle cx="60" cy="44" r="10" fill="none" stroke="#8b5cf6" stroke-width="1" opacity="0.35"/>
+        <!-- Connector lines to outer nodes -->
+        <line x1="60" y1="44" x2="24" y2="30" stroke="rgba(139,92,246,0.4)" stroke-width="1"/>
+        <line x1="60" y1="44" x2="96" y2="30" stroke="rgba(139,92,246,0.4)" stroke-width="1"/>
+        <line x1="60" y1="44" x2="24" y2="80" stroke="rgba(139,92,246,0.4)" stroke-width="1"/>
+        <line x1="60" y1="44" x2="96" y2="80" stroke="rgba(139,92,246,0.4)" stroke-width="1"/>
+        <line x1="60" y1="44" x2="60" y2="90" stroke="rgba(139,92,246,0.4)" stroke-width="1"/>
+        <!-- Outer nodes -->
+        <circle cx="24" cy="30" r="4" fill="#a78bfa" opacity="0.75"/>
+        <circle cx="96" cy="30" r="4" fill="#a78bfa" opacity="0.75"/>
+        <circle cx="24" cy="80" r="4" fill="#6366f1" opacity="0.75"/>
+        <circle cx="96" cy="80" r="4" fill="#6366f1" opacity="0.75"/>
+        <circle cx="60" cy="90" r="4" fill="#a78bfa" opacity="0.75"/>
+        <!-- Tiny "task" pill rows at bottom -->
+        <rect x="28" y="100" width="42" height="6" rx="3" fill="rgba(139,92,246,0.22)"/>
+        <rect x="28" y="110" width="28" height="6" rx="3" fill="rgba(139,92,246,0.14)"/>
+      </svg>
     </div>
   `;
 }
@@ -2822,8 +3022,11 @@ function renderBotKeyboardStylePreviewCard(opt) {
 
 function renderIsoScene() {
   // A tiny isometric scene: ground tile + 3 stacked cubes for "voxel" feel.
+  // `preserveAspectRatio="xMidYMid slice"` makes the SVG fill the entire
+  // container (cropping sides if needed) so there's no letterbox seam
+  // between the SVG sky and the parent card background.
   return `
-    <svg class="gp-iso" viewBox="0 0 120 90" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <svg class="gp-iso" viewBox="0 0 120 90" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <defs>
         <linearGradient id="gpSky" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0" stop-color="#bde7ff"/>
@@ -2831,18 +3034,18 @@ function renderIsoScene() {
         </linearGradient>
       </defs>
       <rect width="120" height="90" fill="url(#gpSky)"/>
-      <!-- ground tile -->
-      <polygon points="20,60 60,40 100,60 60,80" fill="#7cb342"/>
-      <polygon points="60,80 100,60 100,68 60,88" fill="#558b2f"/>
-      <polygon points="20,60 20,68 60,88 60,80" fill="#689f38"/>
+      <!-- ground tile — shifted up 10 units so the scene sits near vertical center -->
+      <polygon points="20,50 60,30 100,50 60,70" fill="#7cb342"/>
+      <polygon points="60,70 100,50 100,58 60,78" fill="#558b2f"/>
+      <polygon points="20,50 20,58 60,78 60,70" fill="#689f38"/>
       <!-- voxel block -->
-      <polygon points="50,52 65,44 80,52 65,60" fill="#ffd54f"/>
-      <polygon points="65,60 80,52 80,62 65,70" fill="#f9a825"/>
-      <polygon points="50,52 50,62 65,70 65,60" fill="#fbc02d"/>
+      <polygon points="50,42 65,34 80,42 65,50" fill="#ffd54f"/>
+      <polygon points="65,50 80,42 80,52 65,60" fill="#f9a825"/>
+      <polygon points="50,42 50,52 65,60 65,50" fill="#fbc02d"/>
       <!-- back tree -->
-      <polygon points="38,45 46,41 54,45 46,49" fill="#2e7d32"/>
-      <polygon points="46,49 54,45 54,52 46,56" fill="#1b5e20"/>
-      <polygon points="38,45 38,52 46,56 46,49" fill="#256527"/>
+      <polygon points="38,35 46,31 54,35 46,39" fill="#2e7d32"/>
+      <polygon points="46,39 54,35 54,42 46,46" fill="#1b5e20"/>
+      <polygon points="38,35 38,42 46,46 46,39" fill="#256527"/>
     </svg>
   `;
 }
@@ -4177,7 +4380,7 @@ async function openDetail(id) {
   const version = p.currentVersion || 0;
   const cost = p.totalCostUsd ? `$${Number(p.totalCostUsd).toFixed(2)}` : '$0.00';
   document.getElementById('detail-info').innerHTML =
-    `Version: <b>${version}</b> · Total cost: <b>${cost}</b> · Quality: <b>Tier ${p.qualityTier || 1}</b><br>Project ID: <b>${p.id}</b>`;
+    `Version: <b>${version}</b> · Total cost: <b>${cost}</b><br>Project ID: <b>${p.id}</b>`;
 
   const isLive = ['deployed', 'released'].includes(p.status);
   const baseUrl = location.origin;
@@ -4229,7 +4432,6 @@ async function openDetail(id) {
 
   let settingsRows = '';
   settingsRows += menuRowAction(t('detail_edit_info'), 'af-icon-edit-info', 'open-edit-info');
-  settingsRows += menuRowAction(t('detail_quality'), 'af-icon-quality', 'open-quality');
   if (isAdmin) settingsRows += menuRowAction(t('detail_regen_context'), 'af-icon-refresh', 'open-regen-context');
   if (hasFeature(p, 'get_code')) settingsRows += menuRow('Edit Code', 'af-icon-code', `${baseUrl}/editor/${p.id}/`);
   // if (hasFeature(p, 'admin_panel')) settingsRows += menuRow('Admin Panel', 'af-icon-admin', `${baseUrl}/admin/${p.id}/`);
@@ -4237,8 +4439,6 @@ async function openDetail(id) {
 
   document.getElementById('detail-settings-rows').querySelector('[data-action="open-edit-info"]')
     ?.addEventListener('click', () => openEditInfo());
-  document.getElementById('detail-settings-rows').querySelector('[data-action="open-quality"]')
-    ?.addEventListener('click', () => openQuality(p.id));
   document.getElementById('detail-settings-rows').querySelector('[data-action="open-regen-context"]')
     ?.addEventListener('click', () => regenerateContext(p.id));
 
@@ -5510,56 +5710,6 @@ async function openFeatures(projectId) {
   }
 }
 
-// ── Quality Tier ──
-
-const QUALITY_TIERS = [
-  { tier: 1, name: 'Good (Sonnet)', model: 'Sonnet 4.6, 60 iterations', desc: 'Regular pricing' },
-  { tier: 2, name: 'Better (Sonnet+)', model: 'Sonnet 4.6+, 100 iterations', desc: '+~50% pricing' },
-  { tier: 3, name: 'Best (Opus)', model: 'Opus 4.7, 60 iterations', desc: '+~75% pricing' },
-  { tier: 4, name: 'The Best (Opus+)', model: 'Opus 4.7+, 100 iterations', desc: '+~100% pricing' },
-];
-
-function openQuality(projectId) {
-  const currentTier = currentProject?.qualityTier || 1;
-  const listEl = document.getElementById('quality-tier-list');
-
-  let html = '';
-  for (const t of QUALITY_TIERS) {
-    const isActive = t.tier === currentTier;
-    html += `<a class="tm-row tm-row-link quality-tier-row" data-tier="${t.tier}">` +
-      `<span class="select-radio${isActive ? ' select-radio--active' : ''}"></span>` +
-      `<div style="flex:1;min-width:0;">` +
-      `<div class="tm-row-value">${esc(t.name)} — <span class="tm-row-hint">${esc(t.desc)}</span></div>` +
-      `<div class="tm-row-description">${esc(t.model)}</div>` +
-      `</div></a>`;
-  }
-  listEl.innerHTML = html;
-
-  listEl.querySelectorAll('.quality-tier-row').forEach(row => {
-    row.addEventListener('click', async () => {
-      const tier = parseInt(row.dataset.tier, 10);
-      if (tier === currentTier) return;
-      try {
-        const res = await fetch(`${API_BASE}/quality/${projectId}`, {
-          method: 'POST',
-          headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tier }),
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        currentProject.qualityTier = tier;
-        const p = projects.find(pp => pp.id === projectId);
-        if (p) p.qualityTier = tier;
-        openQuality(projectId);
-      } catch (err) {
-        console.error('Quality tier error:', err);
-        showToast('Failed to update quality tier.', 'error');
-      }
-    });
-  });
-
-  showView('quality');
-}
-
 // ═══ REGENERATE CONTEXT ═══
 
 async function regenerateContext(projectId) {
@@ -6660,7 +6810,6 @@ function showView(view) {
   document.getElementById('view-admin-user').classList.toggle('hidden', view !== 'admin-user');
   document.getElementById('view-versions').classList.toggle('hidden', view !== 'versions');
   document.getElementById('view-version-detail').classList.toggle('hidden', view !== 'version-detail');
-  document.getElementById('view-quality').classList.toggle('hidden', view !== 'quality');
   document.getElementById('view-features').classList.toggle('hidden', view !== 'features');
   document.getElementById('view-slots-full').classList.toggle('hidden', view !== 'slots-full');
   document.getElementById('view-topup').classList.toggle('hidden', view !== 'topup');
@@ -6728,7 +6877,7 @@ async function loadProjects(retry = 0) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     projects = data.projects || data;
-    slots = data.slots || { used: projects.length, total: 1 };
+    slots = data.slots || { used: projects.length, total: 5 };
     renderAppList();
     loadTopupBalance();
     loadSamples();
@@ -7162,6 +7311,11 @@ function openLanguage() {
 
 let onbCurrent = 1;
 let onbWired = false;
+// Active onboarding slide IDs in the order they appear. Slide 2 is currently
+// disabled (commented out in index.html), so we skip from 1 → 3 → 4. The
+// indices into this array map 1:1 to the visible nav dots.
+const ONB_SLIDES = [1, 3, 4];
+const ONB_LAST = ONB_SLIDES[ONB_SLIDES.length - 1];
 
 function onbGo(n) {
   if (n === onbCurrent) return;
@@ -7185,11 +7339,12 @@ function onbGo(n) {
       next.style.transform = 'translateX(0)';
       next.style.pointerEvents = 'all';
     });
+    const activeDotIdx = ONB_SLIDES.indexOf(onbCurrent);
     document.querySelectorAll('#view-onboarding .onb-dot').forEach((d, i) => {
-      d.classList.toggle('active', i === onbCurrent - 1);
+      d.classList.toggle('active', i === activeDotIdx);
     });
     const skip = document.getElementById('onb-skip');
-    if (skip) skip.style.visibility = onbCurrent === 4 ? 'hidden' : 'visible';
+    if (skip) skip.style.visibility = onbCurrent === ONB_LAST ? 'hidden' : 'visible';
   }, 300);
 }
 
@@ -7457,8 +7612,6 @@ async function init() {
         openVersions(currentProject.id);
       } else if (currentView === 'versions') {
         showView('detail');
-      } else if (currentView === 'quality') {
-        showView('detail');
       } else if (currentView === 'features') {
         showView('detail');
       } else if (currentView === 'edit-info') {
@@ -7664,5 +7817,7 @@ function maybeHandleReservedStartParam() {
   const target = sorted[0];
   if (target?.id) openChat(target.id);
 }
+
+init();
 
 init();

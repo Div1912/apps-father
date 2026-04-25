@@ -137,7 +137,6 @@ export function settingsKeyboard(projectId: string, lang: Lang = "en") {
     inline_keyboard: [
       [
         { text: t(lang, "btn_get_info"), callback_data: `info:${projectId}`, icon_custom_emoji_id: EMOJI.help },
-        { text: t(lang, "btn_quality"), callback_data: `quality:${projectId}`, icon_custom_emoji_id: EMOJI.setting },
       ],
       [
         { text: t(lang, "btn_regen_context"), callback_data: `regen_context:${projectId}`, icon_custom_emoji_id: EMOJI.update },
@@ -151,22 +150,6 @@ export function settingsKeyboard(projectId: string, lang: Lang = "en") {
       ],
     ],
   };
-}
-
-export function qualityKeyboard(projectId: string, currentTier: number, lang: Lang = "en") {
-  const tiers = [
-    { tier: 1, name: t(lang, "quality_good"), desc: t(lang, "quality_good_desc") },
-    { tier: 2, name: t(lang, "quality_better"), desc: t(lang, "quality_better_desc") },
-    { tier: 3, name: t(lang, "quality_best"), desc: t(lang, "quality_best_desc") },
-    { tier: 4, name: t(lang, "quality_the_best"), desc: t(lang, "quality_the_best_desc") },
-  ];
-  const rows: any[][] = tiers.map(({ tier, name, desc }) => [{
-    text: `${name} — ${desc}`,
-    callback_data: `qt:${projectId}:${tier}`,
-    icon_custom_emoji_id: tier === currentTier ? EMOJI.indicator_success : EMOJI.indicator_none,
-  }]);
-  rows.push([{ text: t(lang, "btn_back"), callback_data: `settings:${projectId}` }]);
-  return { inline_keyboard: rows };
 }
 
 export function featuresKeyboard(projectId: string, unlockedFeatures: string[], lang: Lang = "en") {

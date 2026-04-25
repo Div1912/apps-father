@@ -14,6 +14,11 @@ import { processingProjects } from "./bot/processing";
 import { commitService } from "./services/commit.service";
 import { chatService } from "./services/chat.service";
 import { startRetentionScheduler } from "./services/retention.service";
+import {
+  startAppLogFlusher,
+  stopAppLogFlusher,
+  drainAppLogs,
+} from "./services/app-log.service";
 
 async function recoverStuckProjects() {
   const stuck = await prisma.project.findMany({ where: { status: "building" } });
@@ -41,6 +46,11 @@ async function main() {
 
   console.log("[1/4] Connecting to database...");
   await connectDatabase();
+
+  // Persist runtime logs from now on. Lines written before this point
+  // (during module init) were buffered by the tee but won't be flushed
+  // until the timer fires — no data lost. Safe to call before / after DB.
+  startAppLogFlusher();
 
   await recoverStuckProjects();
 
@@ -118,6 +128,14 @@ async function gracefulShutdown(signal: string) {
   } else {
     console.log("[Shutdown] All agents finished. Exiting.");
   }
+
+  // Best-effort drain of any buffered log lines so the final shutdown
+  // messages above land in the DB before we exit.
+  try {
+    stopAppLogFlusher();
+    await drainAppLogs();
+  } catch { /* swallow — we're exiting */ }
+
   process.exit(0);
 }
 

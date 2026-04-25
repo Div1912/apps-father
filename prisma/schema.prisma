@@ -13,7 +13,7 @@ model User {
   username   String?
   firstName  String?   @map("first_name")
   balance    Decimal   @default(0) @db.Decimal(12, 4)
-  appSlots   Int       @default(1) @map("app_slots")
+  appSlots   Int       @default(5) @map("app_slots")
   referredBy BigInt?   @map("referred_by")
   utmSource  String?   @map("utm_source")
   language   String    @default("en")
@@ -32,14 +32,33 @@ model User {
   // award them again, even if they unsubscribe and resubscribe later.
   subBonusClaimedAt   DateTime? @map("sub_bonus_claimed_at")
 
+  // CRM-only: comma-free JSON array of free-form tags ("VIP", "Refunded", …).
+  // Stored as JSON-encoded String so we don't need a junction table.
+  adminTags  String?  @map("admin_tags")
+
   projects        Project[]
   conversations   Conversation[]
   payments        Payment[]
   usageLogs       UsageLog[]
   withdrawals     Withdrawal[]
   retentionPushes RetentionPush[]
+  adminNotes      AdminUserNote[]
 
   @@map("users")
+}
+
+// CRM-only: timeline of admin-authored notes attached to a user.
+model AdminUserNote {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  body      String
+  authorTag String   @default("admin") @map("author_tag")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("admin_user_notes")
 }
 
 model RetentionPush {
@@ -83,6 +102,7 @@ model Project {
   assets        Asset[]
   conversations Conversation[]
   usageLogs     UsageLog[]
+  appLogs       AppLog[]
 
   @@map("projects")
 }
@@ -199,4 +219,33 @@ model UsageLog {
   project Project? @relation(fields: [projectId], references: [id])
 
   @@map("usage_logs")
+}
+
+// Persistent runtime log line. Captured by the tee installed in
+// console-tagger.service.ts and flushed in batches by app-log.service.ts.
+//
+// `projectId` is nullable: lines emitted outside a `runWithProject` ALS
+// context (i.e. core daemon / cron / startup output) are stored with
+// `projectId = null` and surfaced as the "System" scope in the Admin UI.
+//
+// `category` is derived from existing bracket prefixes (`[Agent]`,
+// `[Builder]`, `[BotRunner]`, `[API]`, …); see `parseCategory` in
+// app-log.service.ts. Lines without a recognized tag fall back to
+// "Backend" (when project-scoped) or "System" (when not).
+model AppLog {
+  id        BigInt   @id @default(autoincrement())
+  ts        DateTime @default(now())
+  projectId String?  @map("project_id")
+  category  String
+  level     String
+  source    String
+  message   String
+
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([ts(sort: Desc)])
+  @@index([projectId, ts(sort: Desc)])
+  @@index([category, ts(sort: Desc)])
+  @@index([projectId, category, ts(sort: Desc)])
+  @@map("app_logs")
 }

@@ -75,8 +75,26 @@ function findPm2Log(suffix: "out" | "error"): string {
   return findPm2LogViaScan(suffix);
 }
 
-function getOutLog(): string { return findPm2Log("out"); }
-function getErrLog(): string { return findPm2Log("error"); }
+export function getOutLog(): string { return findPm2Log("out"); }
+export function getErrLog(): string { return findPm2Log("error"); }
+
+/** Read the tail (last N lines) of a log file. Caps the read at 512 KB so
+ *  enormous log files still respond quickly. Returns an array of trimmed
+ *  lines from oldest → newest. */
+export function readTailLines(filePath: string, lines: number): string[] {
+  if (!filePath || !fs.existsSync(filePath)) return [];
+  try {
+    const stat = fs.statSync(filePath);
+    const chunkSize = Math.min(stat.size, 512 * 1024);
+    const buf = Buffer.alloc(chunkSize);
+    const fd = fs.openSync(filePath, "r");
+    fs.readSync(fd, buf, 0, chunkSize, stat.size - chunkSize);
+    fs.closeSync(fd);
+    return buf.toString("utf8").split("\n").filter((l) => l.length).slice(-Math.max(1, lines));
+  } catch {
+    return [];
+  }
+}
 
 // Simple token auth — use WEBHOOK_SECRET as the token
 function isAuthorized(req: Request): boolean {
