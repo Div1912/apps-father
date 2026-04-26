@@ -701,6 +701,31 @@ function setInputDisabled(disabled) {
 
 // ── WS Message Handler ──
 
+// Filled SVG icons — fill="currentColor" so they inherit step state color
+// and are solid/visible at small sizes in all WebViews.
+function agentStepIcon(kind) {
+  const F = (p) => `<svg class="step-svg-icon" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">${p}</svg>`;
+  const MAP = {
+    thinking:   F('<path fill="currentColor" d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 2a5 5 0 110 10A5 5 0 018 3zm.75 2.5H7.25V9l3.5 2.1.75-1.25-2.75-1.65V5.5z"/>'),
+    reading:    F('<path fill="currentColor" d="M8 3C4.5 3 1.5 8 1.5 8S4.5 13 8 13s6.5-5 6.5-5S11.5 3 8 3zm0 2a3 3 0 110 6A3 3 0 018 5zm0 1.5a1.5 1.5 0 100 3 1.5 1.5 0 000-3z"/>'),
+    writing:    F('<path fill="currentColor" d="M3 1h7.5L14 4.5V15H3V1zm1 1v12h9V5.5L9.5 2H4zm1.5 3.5h5v1h-5V5.5zm0 2h5v1h-5v-1zm0 2h3.5v1H5.5v-1z"/>'),
+    editing:    F('<path fill="currentColor" d="M12 1.5l2.5 2.5-9 9L3 14l.5-2.5 9-10zm0 1.5L5 10.6l-.3 1.7 1.7-.3L13.5 5 12 3zM1 14.5h14v1H1v-1z"/>'),
+    searching:  F('<path fill="currentColor" d="M7 2a5 5 0 100 10A5 5 0 007 2zm0 1.5a3.5 3.5 0 110 7 3.5 3.5 0 010-7zm4.47 5.53l1.06 1.06L15 12.56 13.94 13.6l-2.47-2.47 1.06-1.06-.06.06z"/>'),
+    shell:      F('<path fill="currentColor" d="M1 2.5h14v11H1v-11zm1.5 2v7.5h11V4.5h-11zM4 6l3.5 2L4 10V8.5l2-.5-2-.5V6zm4 4h4v1H8v-1z"/>'),
+    fetch:      F('<path fill="currentColor" d="M10.5 1.5a4 4 0 012.83 6.83l-1.06-1.06a2.5 2.5 0 10-3.54-3.54L7.67 2.67A4 4 0 0110.5 1.5zM5.5 14.5a4 4 0 01-2.83-6.83l1.06 1.06a2.5 2.5 0 003.54 3.54l1.06 1.06A4 4 0 015.5 14.5zm5.56-3.5L9.5 9.44l1.06-1.06 1.56 1.56-1.06 1.06zM5.44 6.56L4.38 5.5 5.44 4.44 6.5 5.5 5.44 6.56z"/>'),
+    db:         F('<path fill="currentColor" d="M8 2C5.24 2 3 3.12 3 4.5v7C3 12.88 5.24 14 8 14s5-1.12 5-2.5v-7C13 3.12 10.76 2 8 2zm0 1.5c2.21 0 3.5.75 3.5 1 0 .25-1.29 1-3.5 1S4.5 4.75 4.5 4.5c0-.25 1.29-1 3.5-1zM4.5 6.4c.9.4 2.1.6 3.5.6s2.6-.2 3.5-.6v1.1c0 .25-1.29 1-3.5 1s-3.5-.75-3.5-1V6.4zm0 3c.9.4 2.1.6 3.5.6s2.6-.2 3.5-.6v1.1c0 .25-1.29 1-3.5 1s-3.5-.75-3.5-1V9.4z"/>'),
+    telegram:   F('<path fill="currentColor" d="M14.5 2L1 7.5l5 1.5 1.5 5 2.5-3.5L14 13 14.5 2zm-2 2L6.5 9l-.8-2.8L12.5 4z"/>'),
+    deploying:  F('<path fill="currentColor" d="M8 1l5.5 5.5H10V14H6V6.5H2.5L8 1zm-7 13.5h14V16H1v-1.5z"/>'),
+    configuring:F('<path fill="currentColor" d="M8 5.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zm0 1.5a1 1 0 110 2 1 1 0 010-2z"/><path fill="currentColor" d="M8.75 0h-1.5l-.5 2a5.5 5.5 0 00-1.7.7L3 1.75l-1.05 1.05 1.2 2A5.5 5.5 0 002.5 6.5H.5v1.5l2 .3a5.5 5.5 0 00.65 1.7L2 12.25l1.05 1.05 2-1.2a5.5 5.5 0 001.7.65L7.25 15h1.5l.3-2.25a5.5 5.5 0 001.7-.65l2 1.2 1.05-1.05-1.25-2a5.5 5.5 0 00.65-1.7L15.5 8V6.5h-2a5.5 5.5 0 00-.65-1.7l1.2-2L13 1.75l-2 1.25a5.5 5.5 0 00-1.7-.7L8.75 0z"/>'),
+    skill:      F('<polygon fill="currentColor" points="10,1 5.5,9 9.5,9 6,15 13.5,6.5 9.5,6.5"/>'),
+    ask:        F('<path fill="currentColor" d="M1 1h14v10.5H9.5l-3.5 3.5v-3.5H1V1zm6 2.5v3h2v-3H7zm0 4v1.5h2V7.5H7z"/>'),
+    done:       F('<path fill="currentColor" d="M6.5 11.5l-4-4L4 6l2.5 2.5 6-6 1.5 1.5z"/>'),
+  };
+  return MAP[kind] || F('<circle cx="8" cy="8" r="3.5" fill="currentColor"/>');
+}
+
+const AGENT_DONE_SVG = '<svg class="step-svg-icon" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" d="M6.5 11.5l-4-4L4 6l2.5 2.5 6-6 1.5 1.5z"/></svg>';
+
 function handleWSMessage(data) {
   if (data.type === 'auth_ok') {
     chatWs.send(JSON.stringify({ type: 'subscribe', projectId: activeProjectId }));
@@ -742,6 +767,128 @@ function handleWSMessage(data) {
       el.id = `msg-${msg.id}`;
       addCollapsible(el);
       scrollToBottom();
+    }
+    return;
+  }
+
+  // ── Agent narration events (collapsible "thinking" blocks) ───────────────
+  if (data.type === 'agent_narration_start') {
+    const el = $(`msg-${data.messageId}`);
+    if (!el) return;
+    if (!el.classList.contains('agent-process')) {
+      el.classList.add('agent-process');
+      el.innerHTML = '';
+    }
+    el.querySelectorAll('.agent-think-block.running').forEach(b => {
+      b.classList.remove('running');
+      b.classList.add('done');
+      const ic = b.querySelector('.agent-think-icon');
+      if (ic) ic.innerHTML = AGENT_DONE_SVG;
+      const hdr = b.querySelector('.agent-think-header');
+      if (hdr && !hdr._clickBound) { hdr._clickBound = true; hdr.addEventListener('click', () => b.classList.toggle('open')); }
+    });
+    const existingFooter = el.querySelector('.agent-footer');
+    if (existingFooter) existingFooter.remove();
+    const block = document.createElement('div');
+    block.id = `narr-${data.stepId}`;
+    block.className = 'agent-think-block running';
+    block.innerHTML = `
+      <div class="agent-think-header">
+        <span class="agent-think-icon"><span class="step-spinner"></span></span>
+        <span class="agent-think-preview">Thinking…</span>
+        <span class="agent-think-toggle">›</span>
+      </div>
+      <div class="agent-think-body"></div>`;
+    el.appendChild(block);
+    scrollToBottom();
+    return;
+  }
+
+  if (data.type === 'agent_narration_chunk') {
+    const block = $(`narr-${data.stepId}`);
+    if (!block) return;
+    const body = block.querySelector('.agent-think-body');
+    const preview = block.querySelector('.agent-think-preview');
+    if (body) body.innerHTML = formatContent(data.text || '') + '<span class="stream-cursor"></span>';
+    if (preview) {
+      const plain = (data.text || '').replace(/[#*`_~\n]/g, ' ').trim();
+      preview.textContent = plain.length > 72 ? plain.slice(0, 72) + '…' : (plain || 'Thinking…');
+    }
+    scrollToBottom();
+    return;
+  }
+
+  if (data.type === 'agent_narration_end') {
+    const block = $(`narr-${data.stepId}`);
+    if (!block) return;
+    const body = block.querySelector('.agent-think-body');
+    if (body) { const cur = body.querySelector('.stream-cursor'); if (cur) cur.remove(); }
+    const iconEl = block.querySelector('.agent-think-icon');
+    if (iconEl) iconEl.innerHTML = AGENT_DONE_SVG;
+    block.classList.remove('running');
+    block.classList.add('done');
+    const header = block.querySelector('.agent-think-header');
+    if (header && !header._clickBound) {
+      header._clickBound = true;
+      header.addEventListener('click', () => block.classList.toggle('open'));
+    }
+    return;
+  }
+
+  // ── Agent step-card events ────────────────────────────────────────────────
+  if (data.type === 'agent_step_start') {
+    const el = $(`msg-${data.messageId}`);
+    if (!el) return;
+    if (!el.classList.contains('agent-process')) {
+      el.classList.add('agent-process');
+      el.innerHTML = '';
+    }
+    const existingFooter = el.querySelector('.agent-footer');
+    if (existingFooter) existingFooter.remove();
+    const targetHtml = data.target?.file || data.target?.url || data.target?.key
+      ? `<div class="agent-step-target">${esc(data.target.file || data.target.url || data.target.key || '')}</div>` : '';
+    const step = document.createElement('div');
+    step.id = `step-${data.stepId}`;
+    step.className = 'agent-step agent-step--running';
+    step.innerHTML = `
+      <div class="agent-step-icon agent-step-icon--kind">${agentStepIcon(data.kind)}</div>
+      <div class="agent-step-body">
+        <div class="agent-step-title">${esc(data.title || data.toolName || data.kind || '')}</div>
+        ${targetHtml}
+      </div>`;
+    el.appendChild(step);
+    scrollToBottom();
+    return;
+  }
+
+  if (data.type === 'agent_step_end') {
+    const step = $(`step-${data.stepId}`);
+    if (!step) return;
+    const ok = data.status !== 'error';
+    step.classList.remove('agent-step--running');
+    step.classList.add(ok ? 'agent-step--done' : 'agent-step--error');
+    if (!ok) {
+      const iconEl = step.querySelector('.agent-step-icon');
+      if (iconEl) iconEl.innerHTML = '<svg class="step-svg-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/></svg>';
+    }
+    const body = step.querySelector('.agent-step-body');
+    if (body && data.meta) {
+      const m = data.meta;
+      const bits = [];
+      if (typeof m.lines === 'number') bits.push(`<span class="meta-neutral">${m.lines} lines</span>`);
+      if (typeof m.added === 'number' && m.added > 0) bits.push(`<span class="meta-added">+${m.added}</span>`);
+      if (typeof m.removed === 'number' && m.removed > 0) bits.push(`<span class="meta-removed">-${m.removed}</span>`);
+      if (typeof m.bytes === 'number') bits.push(`<span class="meta-neutral">${(m.bytes/1024).toFixed(1)}KB</span>`);
+      if (m.error) bits.push(`<span class="meta-removed">${esc(m.error)}</span>`);
+      if (bits.length) {
+        let meta = body.querySelector('.agent-step-meta');
+        if (!meta) {
+          meta = document.createElement('div');
+          meta.className = 'agent-step-meta';
+          body.appendChild(meta);
+        }
+        meta.innerHTML = bits.join('');
+      }
     }
     return;
   }
@@ -1089,16 +1236,32 @@ function updateProgressBubble(data) {
   if (!el) return;
 
   const pct = data.percent || 0;
+
+  // Agent-process mode: only update cost/abort footer (no percent, no checklist).
+  if (el.classList.contains('agent-process')) {
+    let footer = el.querySelector('.agent-footer');
+    if (!footer) {
+      footer = document.createElement('div');
+      footer.className = 'agent-footer';
+      el.appendChild(footer);
+    }
+    let html = '';
+    if (typeof data.costUsd === 'number' && data.costUsd > 0) {
+      html += `<div class="chat-progress-cost">Cost: $${data.costUsd.toFixed(4)}${typeof data.balance === 'number' ? ` · Balance: $${data.balance.toFixed(2)}` : ''}</div>`;
+    }
+    html += `<button class="chat-abort-btn" onclick="abortProcess()">Stop Update</button>`;
+    footer.innerHTML = html;
+    return;
+  }
+
   let html = `<div class="chat-progress-text"><span class="loader"></span> Working... <b>${pct}%</b></div>`;
   html += `<div class="chat-progress-bar"><div class="chat-progress-fill" style="width:${pct}%"></div></div>`;
-
   if (data.checklist && data.checklist.length > 0) html += renderChecklist(data.checklist);
   if (data.message) html += `<div class="chat-progress-status">${esc(data.message)}</div>`;
   if (typeof data.costUsd === 'number' && data.costUsd > 0) {
     html += `<div class="chat-progress-cost">Cost: $${data.costUsd.toFixed(4)}${typeof data.balance === 'number' ? ` · Balance: $${data.balance.toFixed(2)}` : ''}</div>`;
   }
   html += `<button class="chat-abort-btn" onclick="abortProcess()">Stop Update</button>`;
-
   el.innerHTML = html;
 }
 

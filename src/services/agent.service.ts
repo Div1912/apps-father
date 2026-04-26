@@ -19,6 +19,8 @@ import { ConventionExtractor } from "./convention-extractor";
 import { parseProjectPreferences, buildPreferencesPrompt, DEFAULT_PREFERENCES } from "./preferences.catalog";
 import { forceReloadProjectWs } from "../web/ws-manager";
 import { runWithProject } from "./console-tagger.service";
+import { botRunnerService } from "./bot-runner.service";
+import { prisma } from "../db";
 
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
 const KNOWLEDGE_DIR = path.join(process.cwd(), "agent_knowledge");
@@ -30,29 +32,43 @@ const SKILLS_DIR = path.join(KNOWLEDGE_DIR, "skills");
 // it's the order they appear in the system prompt. To add a new section, drop
 // a .md into agent_knowledge/instructions/ and add an entry here.
 type AgentMode = "new" | "update";
-const INSTRUCTION_MANIFEST: Array<{ file: string; modes?: AgentMode[] }> = [
+type ProjectKind = "app" | "game" | "textBot";
+const VALID_PROJECT_KINDS = new Set<ProjectKind>(["app", "game", "textBot"]);
+const DEFAULT_PROJECT_KIND: ProjectKind = "app";
+
+const NEW_WORKFLOW_BY_KIND: Record<ProjectKind, string> = {
+  app: "workflow-new-app.md",
+  game: "workflow-new-game.md",
+  textBot: "workflow-new-textbot.md",
+};
+
+const UPDATE_WORKFLOW_BY_KIND: Record<ProjectKind, string> = {
+  app: "workflow-update-app.md",
+  game: "workflow-update-game.md",
+  textBot: "workflow-update-textbot.md",
+};
+
+const INSTRUCTION_MANIFEST: Array<{ file: string; modes?: AgentMode[]; kinds?: ProjectKind[] }> = [
   { file: "identity.md" },
   { file: "architecture.md" },
-  { file: "frontend-rules.md" },
-  { file: "backend-rules.md" },
-  { file: "database-design.md" },
-  { file: "routes-hot-reload.md" },
-  { file: "bot-webhook.md" },
-  { file: "technology-choice.md" },
+  { file: "frontend-rules.md", kinds: ["app"] },
+  { file: "backend-rules.md", kinds: ["app", "textBot"] },
+  { file: "database-design.md", kinds: ["app", "textBot"] },
+  { file: "routes-hot-reload.md", kinds: ["app", "textBot"] },
+  { file: "bot-webhook.md", kinds: ["app", "textBot"] },
+  { file: "technology-choice.md", kinds: ["app"] },
 
   { file: "best-practices.md" },
   { file: "efficiency.md" },
-  // { file: "debugging.md" },
 
   { file: "workflow-new.md", modes: ["new"] },
   { file: "workflow-update.md", modes: ["update"] },
   { file: "telegram-api.md" },
-  { file: "bot-side-updates.md" },
+  { file: "bot-side-updates.md", kinds: ["app", "textBot"] },
   { file: "after-writing.md" },
   { file: "ask-user.md" },
-  { file: "progress-reporting.md" },
   { file: "skills-index.md" },
-  { file: "frontend-design.md" }, // last — the always-loaded design skill block
+  { file: "frontend-design.md", kinds: ["app"] }, // last — the always-loaded design skill block
 ];
 
 // Cache file contents in memory so we don't hit the disk on every build.
@@ -106,16 +122,39 @@ function loadInstruction(file: string): string {
   }
 }
 
-function buildSystemPrompt(mode: AgentMode): string {
+function normalizeProjectKind(kind?: string | null): ProjectKind {
+  return VALID_PROJECT_KINDS.has(kind as ProjectKind) ? kind as ProjectKind : DEFAULT_PROJECT_KIND;
+}
+
+function workflowFileFor(mode: AgentMode, kind?: string | null): string {
+  const normalized = normalizeProjectKind(kind);
+  return mode === "new"
+    ? NEW_WORKFLOW_BY_KIND[normalized]
+    : UPDATE_WORKFLOW_BY_KIND[normalized];
+}
+
+function buildSystemPrompt(mode: AgentMode, kind?: string): string {
   const parts: string[] = [];
   const missing: string[] = [];
   const vars = buildTemplateVars();
+  const normalizedKind = normalizeProjectKind(kind);
 
   for (const entry of INSTRUCTION_MANIFEST) {
     if (entry.modes && !entry.modes.includes(mode)) continue;
-    const content = loadInstruction(entry.file);
+    if (entry.kinds && !entry.kinds.includes(normalizedKind)) continue;
+
+    let file = entry.file;
+    if ((file === "workflow-new.md" && mode === "new") || (file === "workflow-update.md" && mode === "update")) {
+      const kindFile = workflowFileFor(mode, normalizedKind);
+      const kindContent = loadInstruction(kindFile);
+      if (kindContent) {
+        file = kindFile;
+      }
+    }
+
+    const content = loadInstruction(file);
     if (content) parts.push(renderTemplate(content, vars));
-    else missing.push(entry.file);
+    else missing.push(file);
   }
   const prompt = parts.join("\n----------------------\n");
   // Fail fast with a clear error instead of sending empty system to Anthropic
@@ -129,7 +168,7 @@ function buildSystemPrompt(mode: AgentMode): string {
     );
   }
   if (missing.length > 0) {
-    console.warn(`[Agent] buildSystemPrompt(${mode}): ${missing.length} instruction file(s) missing: ${missing.join(", ")}`);
+    console.warn(`[Agent] buildSystemPrompt(${mode}, kind=${kind ?? "?"}): ${missing.length} instruction file(s) missing: ${missing.join(", ")}`);
   }
   return prompt;
 }
@@ -161,6 +200,37 @@ function getAvailableSkills(): string[] {
   try {
     return fs.readdirSync(SKILLS_DIR).filter(f => f.endsWith(".md")).map(f => f.replace(".md", ""));
   } catch { return []; }
+}
+
+function buildFakeTelegramUser(args: any = {}): any {
+  const rawUserId = args.userId ?? args.id ?? -100;
+  const userId = Number(rawUserId);
+  const suffix = String(rawUserId).replace(/^-/, "");
+  return {
+    id: Number.isFinite(userId) ? userId : -100,
+    first_name: String(args.firstName || args.first_name || `Simulate${rawUserId}`),
+    username: String(args.username || `simulate_${suffix}`),
+    language_code: String(args.languageCode || args.language_code || "en"),
+  };
+}
+
+function fakeInitDataFor(userArgs: any = {}): string {
+  const user = buildFakeTelegramUser(userArgs);
+  return `user=${encodeURIComponent(JSON.stringify(user))}&auth_date=${Math.floor(Date.now() / 1000)}&hash=${"0".repeat(64)}`;
+}
+
+function isJsonLookingString(value: any): boolean {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  return (trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"));
+}
+
+function jsonLookingStringError(context: string): string {
+  return `${context} received a JSON-looking string. Pass a real array/object instead, not a stringified JSON value.`;
+}
+
+function parseJsonValueForDisplay(raw: string): any {
+  try { return JSON.parse(raw); } catch { return raw; }
 }
 
 // All instruction blocks moved to agent_knowledge/instructions/*.md and assembled
@@ -244,25 +314,9 @@ const TOOLS_DEFS: Array<{ name: string; description: string; input_schema: Recor
       required: ["command"],
     },
   },
-  // DISABLED: http_request was wasted on testing auth-protected endpoints
-  // (always returned 401) — burning ~$0.10 per call. Re-enable only if needed.
-  // {
-  //   name: "http_request",
-  //   description: "Make an HTTP request. Use to test API endpoints, fetch external resources, etc. Timeout: 10s.",
-  //   input_schema: {
-  //     type: "object" as const,
-  //     properties: {
-  //       url: { type: "string" as const, description: "Full URL" },
-  //       method: { type: "string" as const, description: "HTTP method (GET, POST, PUT, DELETE). Default: GET" },
-  //       headers: { type: "object" as const, description: "Request headers (optional)" },
-  //       body: { type: "string" as const, description: "Request body as string (optional)" },
-  //     },
-  //     required: ["url"],
-  //   },
-  // },
   {
     name: "db",
-    description: "Read/write project database (JSON key-value store backed by SQLite). get(key) returns parsed JSON or null. set(key, value) stores any JSON value. delete(key) removes a key. keys() lists all keys.",
+    description: "Read/write project database (JSON key-value store backed by SQLite). get(key) returns parsed JSON or null. set(key, value) stores any JSON value. Pass real arrays/objects, not stringified JSON. delete(key) removes a key. keys() lists all keys.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -273,18 +327,6 @@ const TOOLS_DEFS: Array<{ name: string; description: string; input_schema: Recor
       required: ["operation"],
     },
   },
-  // {
-  //   name: "telegram_api",
-  //   description: "Call Telegram Bot API method using the project's bot token.",
-  //   input_schema: {
-  //     type: "object" as const,
-  //     properties: {
-  //       method: { type: "string" as const, description: "API method name, e.g. 'setMyDescription'" },
-  //       params: { type: "object" as const, description: "Method parameters as JSON object" },
-  //     },
-  //     required: ["method", "params"],
-  //   },
-  // },
   {
     name: "fetch_url",
     description: "Fetch a web page or API documentation URL and return its text content (HTML tags stripped). Use to read API docs, READMEs, examples, etc.",
@@ -307,20 +349,6 @@ const TOOLS_DEFS: Array<{ name: string; description: string; input_schema: Recor
       required: ["name"],
     },
   },
-  // DISABLED: server_logs reads the host PM2 process logs (apps-father), which
-  // mixes in OTHER projects' output and rarely shows project-specific errors.
-  // It was costing ~$0.10/call for noise. Re-enable only with per-project tailing.
-  // {
-  //   name: "server_logs",
-  //   description: "Read recent server logs (last N lines). Use to see console.log/console.error output from your backend routes.js, API errors, etc.",
-  //   input_schema: {
-  //     type: "object" as const,
-  //     properties: {
-  //       lines: { type: "number" as const, description: "Number of recent log lines to read (default 30, max 100)" },
-  //     },
-  //     required: [],
-  //   },
-  // },
   {
     name: "ask_user",
     description: "Ask the app owner a question and wait for their answer. Use ONLY when you truly need user input (API keys, credentials, choosing between fundamentally different approaches). Do NOT use for trivial or implementation decisions you can make yourself. Provide options as buttons when possible. The user can also type free text or press Skip.",
@@ -333,34 +361,137 @@ const TOOLS_DEFS: Array<{ name: string; description: string; input_schema: Recor
       required: ["question"],
     },
   },
-  // NOTE: `set_progress` was removed. The frontend now drives the progress bar
-  // dynamically from the message's createdAtUtc using y = 1 - e^(-Δsec/100).
-  // The agent only needs to call create_todo + check_todo for user-visible status.
   {
-    name: "create_todo",
-    description: "Create the USER-FACING task checklist shown live in the mini-app. Call this FIRST before any work. Items must be short, plain-language descriptions a non-technical end user can read — like 'Building a design system', 'Adding login screen', 'Fixing the upload bug'. NEVER include tech specs, file names, tool names, function calls, npm commands, 'deploy', 'finish', 'configure bot' etc. — those are internal steps you still perform but must NOT appear in this list.",
+    name: "technical_plan",
+    description: "MANDATORY first planning tool for new builds. Submit the concrete implementation contract before writing code. The schema is kind-specific: App uses dbKeys/restEndpoints/wsMessages/screens; Text Bot uses stateShape/conversationFlow/keyboards/commands/testScenarios; Game uses coordinateSystem/sceneGraph/camera/input/collision/stateMachine/performanceBudget. After this, code must match the submitted names exactly.",
     input_schema: {
       type: "object" as const,
       properties: {
-        items: { type: "array" as const, items: { type: "string" as const }, description: "Array of 2-8 short, user-friendly task descriptions. NO tech jargon, NO file names, NO 'deploy'/'finish'." },
+        kind: { type: "string" as const, enum: ["app", "game", "textBot"], description: "Project kind this plan targets" },
+        summary: { type: "string" as const, description: "One-sentence architecture summary" },
+        dbKeys: { type: "array" as const, items: { type: "object" as const }, description: "DB key contracts: key pattern + stored shape" },
+        restEndpoints: { type: "array" as const, items: { type: "object" as const }, description: "REST contracts: method, path, auth, input, output" },
+        wsMessages: { type: "array" as const, items: { type: "object" as const }, description: "WebSocket message contracts with direction/type/fields" },
+        screens: { type: "array" as const, items: { type: "object" as const }, description: "Frontend screens/components and their data/events" },
+        botBehavior: { type: "array" as const, items: { type: "object" as const }, description: "Optional bot commands/callback/deep-link behaviour for Mini Apps" },
+        stateShape: { type: "object" as const, description: "Text Bot state object stored under state:{uid}" },
+        conversationFlow: { type: "array" as const, items: { type: "object" as const }, description: "Text Bot steps/buttons/callbacks and transitions" },
+        keyboards: { type: "array" as const, items: { type: "object" as const }, description: "Text Bot reply/inline keyboards with exact button labels/callback_data" },
+        commands: { type: "array" as const, items: { type: "object" as const }, description: "Bot slash commands: command + description" },
+        testScenarios: { type: "array" as const, items: { type: "object" as const }, description: "Test cases the agent must run with simulate_* before finish" },
+        coordinateSystem: { type: "string" as const, description: "Game coordinate system" },
+        sceneGraph: { type: "array" as const, items: { type: "object" as const }, description: "Game scene/group/object graph" },
+        camera: { type: "object" as const, description: "Game camera type/follow/smoothing" },
+        input: { type: "array" as const, items: { type: "object" as const }, description: "Game input mapping" },
+        collision: { type: "object" as const, description: "Game collision/win-loss rules" },
+        stateMachine: { type: "array" as const, items: { type: "string" as const }, description: "Game state machine" },
+        performanceBudget: { type: "object" as const, description: "Game FPS, pixel ratio, reuse/instancing budget" },
       },
-      required: ["items"],
+      required: ["kind", "summary"],
     },
   },
   {
-    name: "check_todo",
-    description: "Mark a checklist item as done. Call this only with some other tools like: write_file, shell, deploy_to_dev. For example: (write_file(html) + check_todo(2)). The user sees a live checklist that updates when you call this.",
+    name: "server_logs",
+    description: "Read recent logs for this project: routes.js console.log/error output, webhook errors, simulate_telegram and simulate_api results. Call after deploy_to_dev or simulate_* to debug behaviour.",
     input_schema: {
       type: "object" as const,
       properties: {
-        id: { type: "number" as const, description: "Task ID (1-based index from your checklist)" },
+        lines: { type: "number" as const, description: "How many recent log lines to return (default 50, max 200)" },
       },
-      required: ["id"],
+      required: [],
+    },
+  },
+  {
+    name: "simulate_telegram",
+    description: "Simulate a Telegram update (message or callback_query) hitting the bot webhook WITHOUT a real Telegram account. The test user always gets id=-100. All tg() API calls the bot makes are intercepted and returned. Also logged so server_logs shows them. Use after deploy_to_dev to test the bot flow end-to-end.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        update: {
+          type: "object" as const,
+          description: "Telegram Update object. For a text message: { message: { from: { id: -100, first_name: 'Test', language_code: 'en' }, chat: { id: -100, type: 'private' }, text: '/start' } }. For a callback: { callback_query: { id: '1', from: { id: -100, first_name: 'Test' }, message: { chat: { id: -100 }, message_id: 1 }, data: 'like:123' } }",
+        },
+      },
+      required: ["update"],
+    },
+  },
+  {
+    name: "simulate_api",
+    description: "Simulate an HTTP request to the app's backend API routes as a Telegram test user. Defaults to id=-100; pass userId/firstName/username to test multi-user flows. Returns status and response body. Use to test REST endpoints in routes.js.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        method: { type: "string" as const, description: "HTTP method: GET, POST, PUT, DELETE (default GET)" },
+        path: { type: "string" as const, description: "API path relative to the project, e.g. /tasks or /tasks/123" },
+        body: { type: "object" as const, description: "Request body for POST/PUT" },
+        expectStatus: { type: "number" as const, description: "Optional expected HTTP status for negative tests, e.g. 400 or 401" },
+        userId: { type: "number" as const, description: "Telegram user id for this request (default -100). Use different ids for multi-user tests." },
+        firstName: { type: "string" as const, description: "Optional Telegram first_name for this simulated user" },
+        username: { type: "string" as const, description: "Optional Telegram username for this simulated user" },
+      },
+      required: ["path"],
+    },
+  },
+  {
+    name: "simulate_ws",
+    description: "Simulate project WebSocket traffic without real clients. Creates fake clients (default: a=-100, b=-101), initializes module.exports.ws from development/backend/routes.js, can seed DB state, run REST API steps in the same module/db context, send JSON messages, and assert expected outbound event types. Mandatory before finish when technical_plan has wsMessages.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        scenarioId: { type: "string" as const, description: "Optional id matching a technical_plan.testScenarios item" },
+        clients: {
+          type: "array" as const,
+          items: { type: "object" as const },
+          description: "Optional clients: [{ id: 'a', userId: -100 }, { id: 'b', userId: -101 }]",
+        },
+        seedDb: {
+          type: "array" as const,
+          items: { type: "object" as const },
+          description: "Optional DB seed values before simulation: [{ key: 'matches', value: [{ id: 'm1', users: ['-100','-101'] }] }]. Values must be real JSON, not stringified JSON.",
+        },
+        messages: {
+          type: "array" as const,
+          items: { type: "object" as const },
+          description: "Messages to send: [{ clientId: 'a', data: { type: 'auth', initData: '...' } }, ...]. Defaults to initData auth for a and b.",
+        },
+        steps: {
+          type: "array" as const,
+          items: { type: "object" as const },
+          description: "Ordered scenario steps. Supports {type:'ws', clientId, data}, {type:'api', userId, method, path, body, expectStatus}, and {type:'expectWs', expectTypes:['new_msg']}.",
+        },
+        expectTypes: {
+          type: "array" as const,
+          items: { type: "string" as const },
+          description: "Server WebSocket event types expected from this simulation. If omitted, validation falls back to planned server WS types.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "set_bot_commands",
+    description: "Safely set the bot slash-command menu with Telegram setMyCommands. Use for Text Bots after configure_bot. Commands must all be handled in /bot-webhook.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        commands: {
+          type: "array" as const,
+          items: {
+            type: "object" as const,
+            properties: {
+              command: { type: "string" as const, description: "Command without leading slash, e.g. start" },
+              description: { type: "string" as const, description: "Short user-facing description" },
+            },
+            required: ["command", "description"],
+          },
+        },
+      },
+      required: ["commands"],
     },
   },
   {
     name: "deploy_to_dev",
-    description: "Deploy your current code to the development environment for live testing. After calling this, your frontend is available at /dev/{projectId}/ and API at /devapi/{projectId}/. Call this BEFORE testing with http_request.",
+    description: "Deploy your current code to the development environment for live testing. Runs syntax/contract validators first. After calling this, frontend is available at /dev/{projectId}/, API at /devapi/{projectId}/, and WS at /devws/{projectId}. Call this before simulate_api, simulate_telegram, or simulate_ws.",
     input_schema: {
       type: "object" as const,
       properties: {},
@@ -373,7 +504,7 @@ const TOOLS_DEFS: Array<{ name: string; description: string; input_schema: Recor
   // handlers stay in code for backward compatibility but are NOT exposed in TOOLS.
   {
     name: "finish",
-    description: "Atomically finish the build: save short user-facing summary, detailed technical summary, and signal completion — all in ONE call. This is the ONLY way to finish a build. Call this LAST, after deploy_to_dev. There is NO separate done/summary/short_summary tool.",
+    description: "Atomically finish the build: save short user-facing summary, detailed technical summary, and signal completion — all in ONE call. This is the ONLY way to finish a build. Call this LAST, after technical_plan, file writes, deploy_to_dev, validators, and required simulate_* tests pass. There is NO separate done/summary/short_summary tool.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -418,12 +549,57 @@ const BLOCKED_COMMANDS = [
   "systemctl", "service ", "kill -9 1", "pkill",
 ];
 
+const BLOCKED_INFRA_SHELL_PATTERNS = [
+  /\bfind\s+\//i,
+  /\/opt\/apps-father-dev\/(?:dist|projects)/i,
+  /\b(?:ps|netstat|ss|lsof)\b/i,
+  /\blocalhost:\d+\b/i,
+];
+
+export type AgentStepKind =
+  | "thinking"
+  | "reading"
+  | "writing"
+  | "editing"
+  | "searching"
+  | "shell"
+  | "fetch"
+  | "db"
+  | "telegram"
+  | "deploying"
+  | "configuring"
+  | "skill"
+  | "ask"
+  | "done";
+
+export type AgentEventType =
+  | "step_start"
+  | "step_end"
+  | "narration_start"
+  | "narration_chunk"
+  | "narration_end";
+
 export interface AgentProgress {
   action: string;
   detail: string;
   percent?: number;
   costUsd?: number;
   balance?: number;
+  // Structured event vocabulary (additive — legacy consumers ignore these).
+  // When `event` is set, the message represents one of:
+  //   step_start / step_end        — per-tool action with kind + target + meta
+  //   narration_start / _chunk / _end — streamed assistant text per iteration
+  // When `event` is undefined, this is a legacy progress tick.
+  event?: AgentEventType;
+  stepId?: string;
+  kind?: AgentStepKind;
+  toolName?: string;
+  title?: string;
+  target?: { file?: string; range?: string; url?: string; key?: string };
+  status?: "ok" | "error";
+  meta?: Record<string, any>;
+  delta?: string;
+  text?: string;
 }
 
 export class AgentAbortedError extends Error {
@@ -456,13 +632,22 @@ export interface AgentResult {
 }
 
 export class AgentService {
-  private isEmptyResponse(response: OpenAI.Chat.Completions.ChatCompletion): boolean {
-    const msg = response.choices[0]?.message as any;
+  private isEmptyResponse(response: any): boolean {
+    const choices = Array.isArray(response?.choices) ? response.choices : [];
+    const msg = choices[0]?.message as any;
     const toolCalls = msg?.tool_calls || [];
     const content = typeof msg?.content === "string" ? msg.content : "";
     const reasoning = msg?.reasoning_content || msg?.reasoning || "";
     const completionTokens = (response.usage as any)?.completion_tokens || 0;
-    return toolCalls.length === 0 && !content.trim() && !String(reasoning || "").trim() && completionTokens === 0;
+    return choices.length === 0 || (toolCalls.length === 0 && !content.trim() && !String(reasoning || "").trim() && completionTokens === 0);
+  }
+
+  private invalidResponseReason(response: any): string | null {
+    if (!response || typeof response !== "object") return "response is not an object";
+    if (!Array.isArray(response.choices)) return "response.choices is missing or not an array";
+    if (response.choices.length === 0) return "response.choices is empty";
+    if (!response.choices[0]?.message) return "response.choices[0].message is missing";
+    return null;
   }
 
   private getProviderRouting(modelId: string, provider?: string): any | undefined {
@@ -470,32 +655,427 @@ export class AgentService {
     if (selectedProvider) {
       return { only: [selectedProvider], allow_fallbacks: false };
     }
-    if (modelId.toLowerCase().startsWith("minimax/")) {
-      return { only: ["Minimax"], allow_fallbacks: false };
-    }
     return undefined;
   }
 
-  private validateBackendRoutes(projectDir: string, projectId: string): string | null {
+  private validateBackendRoutes(
+    projectDir: string,
+    projectId: string,
+    kind: ProjectKind = DEFAULT_PROJECT_KIND,
+    technicalPlan?: any,
+  ): string | null {
+    const errors: string[] = [];
     const routesPath = path.join(projectDir, "backend", "routes.js");
-    if (!fs.existsSync(routesPath)) return null;
+    const frontendDir = path.join(projectDir, "frontend");
+    const frontendIndex = path.join(frontendDir, "index.html");
+    const frontendApp = path.join(frontendDir, "app.js");
+    const frontendStyles = path.join(frontendDir, "styles.css");
+    const frontendText = [frontendIndex, frontendApp, frontendStyles]
+      .filter(p => fs.existsSync(p))
+      .map(p => fs.readFileSync(p, "utf-8"))
+      .join("\n");
+
+    const hasFrontendFiles = this.dirHasFiles(frontendDir);
+
+    if (kind === "textBot" && hasFrontendFiles) {
+      errors.push("Text Bot builds must not contain frontend files. Delete frontend/ files and keep only backend/routes.js.");
+    }
+    if (kind === "game") {
+      if (fs.existsSync(frontendApp) || fs.existsSync(frontendStyles)) {
+        errors.push("Game builds must be single-file: frontend/index.html only. Remove frontend/app.js and frontend/styles.css.");
+      }
+      if (fs.existsSync(routesPath)) {
+        const gameBackend = fs.readFileSync(routesPath, "utf-8").trim();
+        const gameNeedsBackend = this.plannedEndpoints(technicalPlan).length > 0 || this.plannedWsTypes(technicalPlan).length > 0;
+        if (gameBackend.length > 0 && !gameNeedsBackend) {
+          errors.push("Game builds must not include backend/routes.js unless the game truly needs server-side multiplayer or shared persistence.");
+        }
+      }
+    }
+
+    if (!fs.existsSync(routesPath)) {
+      if (kind === "textBot") {
+        errors.push("Text Bot builds must create backend/routes.js with router.post(\"/bot-webhook\", ...).");
+      }
+      if (this.plannedEndpoints(technicalPlan).length > 0 || this.plannedWsTypes(technicalPlan).length > 0) {
+        errors.push("Technical plan includes backend endpoints or WebSocket messages, but backend/routes.js does not exist.");
+      }
+      return errors.length ? errors.join(" ") : null;
+    }
 
     const content = fs.readFileSync(routesPath, "utf-8");
+    try {
+      new Function(content);
+    } catch (err: any) {
+      errors.push(`backend/routes.js has a JavaScript syntax error: ${err.message}.`);
+    }
+
+    // SQL-style comments (-- ...) are a syntax error in JavaScript.
+    if (/^--\s/m.test(content)) {
+      errors.push(`backend/routes.js contains SQL-style comments (-- ...) which are a syntax error in JavaScript. Replace every -- comment with a // comment and redeploy.`);
+    }
+
     const hasPlatformExport = /module\.exports\s*=\s*function\s*\(\s*router\s*,\s*db\s*,\s*projectId\s*\)/.test(content);
     if (!hasPlatformExport) {
-      return `backend/routes.js has invalid Apps Father format. It must export exactly: module.exports = function(router, db, projectId) { ... }. Do not export a route map/object.`;
+      errors.push(`backend/routes.js has invalid Apps Father format. It must export exactly: module.exports = function(router, db, projectId) { ... }. Do not export a route map/object.`);
     }
     if (/module\.exports\s*=\s*routes\b/.test(content) || /^\s*const\s+routes\s*=\s*\{/m.test(content)) {
-      return `backend/routes.js uses object-style routes. Rewrite with Express router calls inside module.exports = function(router, db, projectId) { router.get('/path', ...); }.`;
+      errors.push(`backend/routes.js uses object-style routes. Rewrite with Express router calls inside module.exports = function(router, db, projectId) { router.get('/path', ...); }.`);
     }
     if (/['"`]\s*(GET|POST|PUT|PATCH|DELETE)\s+\/api\//i.test(content)) {
-      return `backend/routes.js contains object-style API route keys like "GET /api/...". Use router.get('/path', ...) and never include /api/{projectId} in backend route paths.`;
+      errors.push(`backend/routes.js contains object-style API route keys like "GET /api/...". Use router.get('/path', ...) and never include /api/{projectId} in backend route paths.`);
     }
     const escapedProjectId = projectId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     if (new RegExp(`/api/${escapedProjectId}(?:/|['"\`])`).test(content) || /\/api\/[0-9a-f]{8}-[0-9a-f-]{27,}/i.test(content)) {
-      return `backend/routes.js hardcodes /api/{projectId}. Backend routes must be relative, for example router.get('/videos', ...).`;
+      errors.push(`backend/routes.js hardcodes /api/{projectId}. Backend routes must be relative, for example router.get('/videos', ...).`);
+    }
+
+    if (kind === "textBot") {
+      if (!/router\.post\s*\(\s*["']\/bot-webhook["']/.test(content)) {
+        errors.push(`Text Bot backend must register router.post("/bot-webhook", ...).`);
+      }
+      if (/Telegram\.WebApp/.test(content + "\n" + frontendText)) {
+        errors.push("Text Bot code must not reference Telegram.WebApp because there is no Mini App frontend.");
+      }
+      if (/\b(?:setWebhook|deleteWebhook)\b/.test(content)) {
+        errors.push("Project code must not call setWebhook/deleteWebhook; the platform owns the webhook.");
+      }
+      if (/db\.[A-Za-z_$][\w$]*\s*=/.test(content)) {
+        errors.push("Text Bot state must use db.get/db.set, not direct db.property assignments.");
+      }
+      if (/state\.step\s*=/.test(content) && !/\b(?:saveState|setState)\s*\(/.test(content)) {
+        errors.push("Text Bot changes state.step but has no saveState/setState helper call.");
+      }
+    }
+
+    if (kind === "app") {
+      if (/\b(?:const|let|var)\s+db\s*=\s*\{[\s\S]{0,800}\bget\s*\([^)]*\)[\s\S]{0,800}\bset\s*\([^)]*\)/.test(frontendText)) {
+        errors.push("Frontend contains a fake client-side db mock. Mini App frontend must use REST/WS APIs for persisted state, not a local db object.");
+      }
+      if (/text\.split\s*\(\s*\/\\t\/\s*\)|text\.split\s*\(\s*["']\\t["']\s*\)/.test(content)) {
+        errors.push("Bot /start parsing splits only on tabs. Use text.split(/\\s+/) so deep-link parameters work from normal Telegram messages.");
+      }
+    }
+
+    const frontendUsesWs = /new\s+WebSocket\s*\(/.test(frontendText);
+    const backendHasWs = /module\.exports\.ws\s*=/.test(content);
+    if (frontendUsesWs && !backendHasWs) {
+      errors.push("Frontend opens a WebSocket, but backend/routes.js does not export module.exports.ws.");
+    }
+    if (backendHasWs && kind !== "textBot") {
+      if (!frontendUsesWs) errors.push("Backend exports module.exports.ws, but frontend does not create a WebSocket client.");
+      if (frontendUsesWs && !/onclose\s*=|addEventListener\(\s*["']close/.test(frontendText)) {
+        errors.push("WebSocket frontend must implement reconnect/onclose handling.");
+      }
+      if (frontendUsesWs && /type\s*:\s*["']auth["']/.test(content) && !/type\s*:\s*["']auth["']/.test(frontendText)) {
+        errors.push("Backend expects WS auth messages, but frontend does not send { type: 'auth', ... }.");
+      }
+      const trustsClientUserId =
+        /data\.type\s*={2,3}\s*["']auth["'][\s\S]{0,500}(?:myUserId|userId)\s*=\s*String\s*\(\s*data\.userId\s*\)/.test(content) ||
+        /online\.set\s*\(\s*String\s*\(\s*data\.userId\s*\)/.test(content);
+      if (trustsClientUserId) {
+        errors.push("WebSocket auth trusts data.userId from the client. Send Telegram initData (or another signed platform token) and derive the user id server-side before routing private events.");
+      }
+      if (/["']send_msg["']/.test(content) && /matches?/.test(content)) {
+        const checksMatchMembership =
+          (
+            /\.users\.includes\s*\(/.test(content) ||
+            /matchUsers[\s\S]{0,300}\.includes\s*\(/.test(content) ||
+            /matchUsers[\s\S]{0,300}\.indexOf\s*\([^)]*\)\s*!={1,2}\s*-1/.test(content) ||
+            /matchUsers[\s\S]{0,300}\.indexOf\s*\([^)]*\)\s*={2,3}\s*-1[\s\S]{0,200}(?:not_allowed|return)/.test(content) ||
+            /\.users\.some\s*\(/.test(content)
+          ) &&
+          (
+            /(?:match|matches)\.find\s*\(/.test(content) ||
+            /for\s*\([^)]*matches\.length[\s\S]{0,700}\bmatch\s*=/.test(content) ||
+            /matches\.some\s*\(/.test(content)
+          ) &&
+          /(?:myUserId|auth\.telegramId|telegramId|senderId|fromUserId)/.test(content) &&
+          /(?:toUserId|recipientId|targetId|otherUserId)/.test(content) &&
+          /(?:not_allowed|403|Unauthorized|Forbidden)/i.test(content);
+        if (!checksMatchMembership) {
+          errors.push("Private chat send_msg handler must verify the sender belongs to the match before persisting or forwarding messages.");
+        }
+      }
+    }
+
+    const plannedEndpointError = this.validatePlannedEndpoints(content, technicalPlan);
+    if (plannedEndpointError) errors.push(plannedEndpointError);
+    const plannedWsError = this.validatePlannedWsTypes(content + "\n" + frontendText, technicalPlan);
+    if (plannedWsError) errors.push(plannedWsError);
+
+    return errors.length ? errors.join(" ") : null;
+  }
+
+  private validateFinishReadiness(
+    kind: ProjectKind,
+    mode: AgentMode,
+    technicalPlan: any,
+    testsRun: { telegram: boolean; api: boolean; ws: boolean },
+    deployed: boolean,
+    testResults: Array<{ tool: string; ok: boolean; detail: string }> = [],
+    wsCoverage: { types: Set<string>; scenarios: Set<string> } = { types: new Set(), scenarios: new Set() },
+  ): string | null {
+    const latestResult = (tool: string) => {
+      const r = [...testResults].reverse().find(t => t.tool === tool);
+      return r ? ` Last ${tool} result: ${r.detail}` : "";
+    };
+    if (mode === "new" && !technicalPlan) {
+      return "technical_plan is required before finish().";
+    }
+    if (!deployed) {
+      return "deploy_to_dev() must succeed before finish().";
+    }
+    if (kind === "textBot" && !testsRun.telegram) {
+      return `Text Bot builds must pass simulate_telegram before finish().${latestResult("simulate_telegram")}`;
+    }
+    if (kind === "app" && Array.isArray(technicalPlan?.botBehavior) && technicalPlan.botBehavior.length > 0 && !testsRun.telegram) {
+      return `App builds with planned bot behavior must pass simulate_telegram before finish().${latestResult("simulate_telegram")}`;
+    }
+    if (kind === "app" && this.plannedEndpoints(technicalPlan).length > 0 && !testsRun.api) {
+      return `App builds with planned REST endpoints must pass simulate_api before finish().${latestResult("simulate_api")}`;
+    }
+    if (this.plannedWsTypes(technicalPlan).length > 0) {
+      const wsScenarioIds = this.plannedWsScenarioIds(technicalPlan);
+      if (wsScenarioIds.length > 0) {
+        const missingScenarios = wsScenarioIds.filter(id => !wsCoverage.scenarios.has(id));
+        if (missingScenarios.length > 0) {
+          return `Real-time builds must pass planned WebSocket test scenario(s) before finish(): ${missingScenarios.join(", ")}.${latestResult("simulate_ws")}`;
+        }
+      } else {
+        const missingTypes = this.plannedServerWsTypes(technicalPlan).filter(type => !wsCoverage.types.has(type));
+        if (missingTypes.length > 0) {
+          return `Real-time builds with planned WebSocket messages must pass simulate_ws before finish(). Missing observed server type(s): ${missingTypes.join(", ")}.${latestResult("simulate_ws")}`;
+        }
+        if (this.plannedServerWsTypes(technicalPlan).length === 0 && !testsRun.ws) {
+          return `Real-time builds with planned WebSocket messages must pass simulate_ws before finish().${latestResult("simulate_ws")}`;
+        }
+      }
     }
     return null;
+  }
+
+  private dirHasFiles(dir: string): boolean {
+    if (!fs.existsSync(dir)) return false;
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isFile()) return true;
+      if (entry.isDirectory() && this.dirHasFiles(path.join(dir, entry.name))) return true;
+    }
+    return false;
+  }
+
+  private extractRoutes(content: string): Array<{ method: string; path: string }> {
+    const routes: Array<{ method: string; path: string }> = [];
+    const re = /router\.(get|post|put|delete|patch)\s*\(\s*["'`]([^"'`]+)["'`]/gi;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(content))) routes.push({ method: m[1].toUpperCase(), path: m[2] });
+    return routes;
+  }
+
+  private plannedEndpoints(plan: any): Array<{ method: string; path: string }> {
+    const endpoints = Array.isArray(plan?.restEndpoints) ? plan.restEndpoints : [];
+    return endpoints.map((e: any) => {
+      if (typeof e === "string") {
+        const m = e.match(/^\s*(GET|POST|PUT|PATCH|DELETE)\s+(\S+)/i);
+        return m ? { method: m[1].toUpperCase(), path: m[2] } : null;
+      }
+      const method = (e?.method || e?.verb || "").toString().toUpperCase();
+      const p = (e?.path || e?.route || "").toString();
+      return method && p ? { method, path: p } : null;
+    }).filter(Boolean) as Array<{ method: string; path: string }>;
+  }
+
+  private validatePlannedEndpoints(routesContent: string, plan: any): string | null {
+    const planned = this.plannedEndpoints(plan);
+    if (planned.length === 0) return null;
+    const actual = this.extractRoutes(routesContent);
+    const missing = planned.filter(p => !actual.some(a => a.method === p.method && a.path === p.path));
+    return missing.length > 0
+      ? `Backend is missing planned REST endpoint(s): ${missing.map(e => `${e.method} ${e.path}`).join(", ")}.`
+      : null;
+  }
+
+  private plannedWsTypes(plan: any): string[] {
+    const messages = Array.isArray(plan?.wsMessages) ? plan.wsMessages : [];
+    const types: string[] = messages.map((m: any) => typeof m === "string" ? m : m?.type).filter(Boolean).map(String);
+    return [...new Set(types)];
+  }
+
+  private plannedServerWsTypes(plan: any): string[] {
+    const messages = Array.isArray(plan?.wsMessages) ? plan.wsMessages : [];
+    const types: string[] = [];
+    for (const msg of messages) {
+      if (typeof msg === "string") {
+        types.push(msg);
+        continue;
+      }
+      const type = msg?.type ? String(msg.type) : "";
+      if (!type) continue;
+      const direction = String(msg?.direction || msg?.dir || "").toLowerCase();
+      const clientToServer = /^client\s*(?:→|->|to)\s*server/.test(direction) || direction.includes("client→server") || direction.includes("client->server");
+      const serverToClient = /^server\s*(?:→|->|to)\s*client/.test(direction) || direction.includes("server→client") || direction.includes("server->client") || direction.includes("client←server");
+      if (!direction || serverToClient || (!clientToServer && direction.includes("server"))) {
+        types.push(type);
+      }
+    }
+    return [...new Set(types)];
+  }
+
+  private validatePlannedWsTypes(allCode: string, plan: any): string | null {
+    const types = this.plannedWsTypes(plan);
+    if (types.length === 0) return null;
+    const missing = types.filter(t => !new RegExp(`["']${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']`).test(allCode));
+    return missing.length > 0
+      ? `Code is missing planned WebSocket message type(s): ${missing.join(", ")}.`
+      : null;
+  }
+
+  private plannedWsScenarioIds(plan: any): string[] {
+    const scenarios = Array.isArray(plan?.testScenarios) ? plan.testScenarios : [];
+    return scenarios
+      .map((scenario: any, index: number) => {
+        if (typeof scenario === "string") return null;
+        const hasWs =
+          scenario?.tool === "simulate_ws" ||
+          scenario?.type === "simulate_ws" ||
+          scenario?.kind === "ws" ||
+          Array.isArray(scenario?.expectTypes) ||
+          Array.isArray(scenario?.wsMessages) ||
+          Array.isArray(scenario?.steps) && scenario.steps.some((step: any) => String(step?.type || step?.action || "").toLowerCase().includes("ws"));
+        if (!hasWs) return null;
+        return String(scenario?.id || scenario?.scenarioId || scenario?.name || `scenario-${index + 1}`);
+      })
+      .filter(Boolean) as string[];
+  }
+
+  private observedWsTypes(sim: any): Set<string> {
+    const captured = Object.values(sim?.captured || {}).flat().map(String);
+    const observed = new Set<string>();
+    for (const raw of captured) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed?.type) observed.add(String(parsed.type));
+      } catch {
+        const match = raw.match(/"type"\s*:\s*"([^"]+)"/);
+        if (match) observed.add(match[1]);
+      }
+    }
+    return observed;
+  }
+
+  private validateWsSimulation(sim: any, plan: any): string | null {
+    const explicitExpected = Array.isArray(sim?.expectedTypes) ? sim.expectedTypes.map(String).filter(Boolean) : [];
+    const expected: string[] = explicitExpected.length > 0 ? [...new Set<string>(explicitExpected)] : this.plannedServerWsTypes(plan);
+    if (expected.length === 0) return null;
+
+    const observed = this.observedWsTypes(sim);
+
+    const missing = expected.filter(type => !observed.has(type));
+    if (missing.length > 0) {
+      return `simulate_ws did not observe expected server WebSocket message type(s): ${missing.join(", ")}. Send scenario messages that trigger the expected event(s), or pass only the expectTypes for this scenario.`;
+    }
+    return null;
+  }
+
+  /**
+   * Stream a chat.completions call and assemble it into a synthetic
+   * ChatCompletion so the rest of runAgent stays unchanged.
+   *
+   * Assembles:
+   *   - assistant text from delta.content (forwarded via onTextDelta)
+   *   - reasoning from delta.reasoning_content / delta.reasoning
+   *   - tool_calls from delta.tool_calls[index] fragments (id / name / arguments)
+   *   - usage from the final chunk (requires stream_options.include_usage)
+   *
+   * Caller is responsible for the one-shot fallback if this throws.
+   */
+  private async streamAgentCall(
+    params: any,
+    opts: {
+      onTextDelta?: (delta: string, full: string) => void;
+      onReasoningDelta?: (delta: string, full: string) => void;
+    } = {},
+  ): Promise<OpenAI.Chat.Completions.ChatCompletion> {
+    const client = getOpenRouterClient();
+    const streamParams = {
+      ...params,
+      stream: true,
+      stream_options: { include_usage: true },
+    };
+
+    const stream = (await client.chat.completions.create(streamParams as any)) as any;
+
+    let assistantText = "";
+    let reasoning = "";
+    const toolCallAcc = new Map<number, { id?: string; name: string; args: string }>();
+    let usage: any = undefined;
+    let finishReason: string | null = null;
+    let modelEcho: string | undefined;
+    let id: string | undefined;
+
+    for await (const chunk of stream as AsyncIterable<any>) {
+      if (!chunk) continue;
+      if (chunk.id) id = chunk.id;
+      if (chunk.model) modelEcho = chunk.model;
+      if (chunk.usage) usage = chunk.usage;
+
+      const choice = chunk.choices?.[0];
+      if (!choice) continue;
+
+      const delta = choice.delta || {};
+      if (typeof delta.content === "string" && delta.content.length > 0) {
+        assistantText += delta.content;
+        try { opts.onTextDelta?.(delta.content, assistantText); } catch {}
+      }
+      const reasonDelta = (delta as any).reasoning_content || (delta as any).reasoning;
+      if (typeof reasonDelta === "string" && reasonDelta.length > 0) {
+        reasoning += reasonDelta;
+        try { opts.onReasoningDelta?.(reasonDelta, reasoning); } catch {}
+      }
+
+      if (Array.isArray(delta.tool_calls)) {
+        for (const tc of delta.tool_calls as any[]) {
+          const idx = typeof tc.index === "number" ? tc.index : 0;
+          const acc = toolCallAcc.get(idx) || { name: "", args: "" };
+          if (tc.id) acc.id = tc.id;
+          if (tc.function?.name) acc.name = (acc.name || "") + tc.function.name;
+          if (tc.function?.arguments) acc.args += tc.function.arguments;
+          toolCallAcc.set(idx, acc);
+        }
+      }
+
+      if (choice.finish_reason) finishReason = choice.finish_reason;
+    }
+
+    const tool_calls = [...toolCallAcc.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([idx, v]) => ({
+        id: v.id || `call_${idx}`,
+        type: "function" as const,
+        function: { name: v.name || "", arguments: v.args || "{}" },
+      }));
+
+    const fakeMessage: any = {
+      role: "assistant",
+      content: assistantText,
+    };
+    if (tool_calls.length > 0) fakeMessage.tool_calls = tool_calls;
+    if (reasoning) fakeMessage.reasoning_content = reasoning;
+
+    return {
+      id: id || "stream",
+      object: "chat.completion",
+      created: Math.floor(Date.now() / 1000),
+      model: modelEcho || params.model,
+      choices: [{
+        index: 0,
+        message: fakeMessage,
+        finish_reason: (finishReason || (tool_calls.length > 0 ? "tool_calls" : "stop")) as any,
+        logprobs: null,
+      }],
+      usage,
+    } as any;
   }
 
   private async callWithRetry(params: any, maxRetries = 3): Promise<OpenAI.Chat.Completions.ChatCompletion> {
@@ -503,6 +1083,16 @@ export class AgentService {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         const response = await client.chat.completions.create(params);
+        const invalidReason = this.invalidResponseReason(response);
+        if (invalidReason && attempt < maxRetries) {
+          const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
+          console.warn(`[Agent] Malformed model response (${invalidReason}). Retry ${attempt + 1}/${maxRetries} after ${delay}ms`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        if (invalidReason) {
+          throw new Error(`Malformed model response from ${params.model}: ${invalidReason}`);
+        }
         if (this.isEmptyResponse(response) && attempt < maxRetries) {
           const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
           console.warn(`[Agent] Empty model response. Retry ${attempt + 1}/${maxRetries} after ${delay}ms`);
@@ -609,7 +1199,7 @@ ${dbSummary ? `DB KEYS SUMMARY:\n${dbSummary}\n` : ""}`;
     let inputTokens = 0;
     let outputTokens = 0;
     for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content;
+      const delta = chunk.choices?.[0]?.delta?.content;
       if (delta) {
         fullText += delta;
         onChunk(delta, fullText);
@@ -699,14 +1289,250 @@ Keep suggestions practical and specific to THIS app.${langInstruction}`;
     } catch { return null; }
   }
 
+  private async simulateProjectWs(projectRootDir: string, projectId: string, args: any): Promise<any> {
+    const routesPath = path.join(projectRootDir, "development", "backend", "routes.js");
+    if (!fs.existsSync(routesPath)) {
+      throw new Error("development/backend/routes.js not found. Call deploy_to_dev first.");
+    }
+
+    const Database = require("better-sqlite3");
+    const dataDir = path.join(projectRootDir, "development", "data");
+    fs.mkdirSync(dataDir, { recursive: true });
+    const sqlite = new Database(path.join(dataDir, "app.db"));
+    sqlite.pragma("journal_mode = WAL");
+    sqlite.exec("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)");
+    const project = await projectService.getProject(projectId);
+    const db = {
+      get(key: string) {
+        const row = sqlite.prepare("SELECT value FROM kv WHERE key = ?").get(key) as any;
+        return row ? JSON.parse(row.value) : null;
+      },
+      set(key: string, value: any) {
+        if (isJsonLookingString(value)) throw new Error(jsonLookingStringError(`DB seed/set for "${key}"`));
+        sqlite.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)").run(key, JSON.stringify(value));
+      },
+      delete(key: string) {
+        sqlite.prepare("DELETE FROM kv WHERE key = ?").run(key);
+      },
+      keys() {
+        return (sqlite.prepare("SELECT key FROM kv").all() as any[]).map((r: any) => r.key);
+      },
+      getAll() {
+        const rows = sqlite.prepare("SELECT key, value FROM kv").all() as any[];
+        const all: Record<string, any> = {};
+        for (const row of rows) all[row.key] = JSON.parse(row.value);
+        return all;
+      },
+      botToken: project?.botTokenEncrypted ? decryptToken(project.botTokenEncrypted) : "SIMULATE_TOKEN",
+      botUsername: project?.botUsername || "simulate_bot",
+      projectId,
+    };
+
+    try {
+      for (const seed of Array.isArray(args.seedDb) ? args.seedDb : []) {
+        if (!seed?.key) throw new Error("simulate_ws seedDb entries require { key, value }.");
+        if (isJsonLookingString(seed.value)) throw new Error(jsonLookingStringError(`simulate_ws.seedDb "${seed.key}"`));
+        db.set(String(seed.key), seed.value);
+      }
+
+      try { delete require.cache[require.resolve(routesPath)]; } catch {}
+      const routeModule = require(routesPath);
+      if (typeof routeModule.ws !== "function") {
+        throw new Error("backend/routes.js does not export module.exports.ws");
+      }
+
+      const routeHandlers: Array<{ method: string; path: string; handlers: Function[] }> = [];
+      const router: any = {};
+      for (const method of ["get", "post", "put", "patch", "delete"]) {
+        router[method] = (routePath: string, ...handlers: Function[]) => {
+          routeHandlers.push({ method: method.toUpperCase(), path: routePath, handlers });
+        };
+      }
+      if (typeof routeModule === "function") {
+        routeModule(router, db, projectId);
+      }
+
+      const matchRoute = (routePath: string, requestPath: string): Record<string, string> | null => {
+        const routeParts = routePath.replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
+        const reqParts = requestPath.replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
+        if (routeParts.length !== reqParts.length) return null;
+        const params: Record<string, string> = {};
+        for (let i = 0; i < routeParts.length; i++) {
+          const rp = routeParts[i];
+          const qp = reqParts[i];
+          if (rp.startsWith(":")) params[rp.slice(1)] = decodeURIComponent(qp);
+          else if (rp !== qp) return null;
+        }
+        return params;
+      };
+
+      const apiResults: any[] = [];
+      const runApiStep = async (step: any) => {
+        const method = String(step.method || "GET").toUpperCase();
+        const rawPath = String(step.path || "").replace(/^\//, "");
+        const [pathPart, queryPart = ""] = rawPath.split("?");
+        const found = routeHandlers
+          .map(route => ({ route, params: matchRoute(route.path, pathPart) }))
+          .find(entry => entry.route.method === method && entry.params);
+        if (!found) {
+          const payload = { ok: false, method, path: rawPath, status: 404, body: { error: "Endpoint not found" } };
+          apiResults.push(payload);
+          return payload;
+        }
+        const fakeUser = buildFakeTelegramUser(step);
+        const query = Object.fromEntries(new URLSearchParams(queryPart).entries());
+        const req: any = {
+          body: step.body || {},
+          params: found.params,
+          query,
+          headers: { "x-telegram-init-data": fakeInitDataFor(fakeUser) },
+          telegramUser: fakeUser,
+        };
+        let statusCode = 200;
+        let responseBody: any = undefined;
+        let ended = false;
+        const res: any = {
+          status(code: number) { statusCode = code; return res; },
+          json(body: any) { responseBody = body; ended = true; return res; },
+          send(body: any) { responseBody = body; ended = true; return res; },
+          end(body?: any) { if (body !== undefined) responseBody = body; ended = true; return res; },
+        };
+        let index = 0;
+        const next = () => { index++; };
+        while (index < found.route.handlers.length && !ended) {
+          const handler = found.route.handlers[index];
+          const before = index;
+          await Promise.resolve(handler(req, res, next));
+          if (index === before) index++;
+        }
+        const expectedStatus = Number.isFinite(Number(step.expectStatus)) ? Number(step.expectStatus) : null;
+        const ok = expectedStatus != null ? statusCode === expectedStatus : statusCode >= 200 && statusCode < 300;
+        const payload = { ok, method, path: rawPath, status: statusCode, body: responseBody };
+        apiResults.push(payload);
+        return payload;
+      };
+
+      const clientsInput = Array.isArray(args.clients) && args.clients.length > 0
+        ? args.clients
+        : [{ id: "a", userId: -100 }, { id: "b", userId: -101 }];
+      const captured: Record<string, string[]> = {};
+      const handlers = new Map<string, Map<string, Function[]>>();
+      const clients = new Map<string, any>();
+      const clientSet = new Set<any>();
+
+      const makeClient = (id: string) => {
+        captured[id] = [];
+        const eventHandlers = new Map<string, Function[]>();
+        handlers.set(id, eventHandlers);
+        const socket: any = {
+          id,
+          readyState: 1,
+          send(data: any) { captured[id].push(typeof data === "string" ? data : JSON.stringify(data)); },
+          on(event: string, cb: Function) {
+            const arr = eventHandlers.get(event) || [];
+            arr.push(cb);
+            eventHandlers.set(event, arr);
+          },
+          close() {
+            socket.readyState = 3;
+            for (const cb of eventHandlers.get("close") || []) cb();
+          },
+        };
+        clients.set(id, socket);
+        clientSet.add(socket);
+        return socket;
+      };
+
+      for (const c of clientsInput) makeClient(String(c.id || c.userId));
+
+      let connectionHandler: ((socket: any, req: any) => void) | null = null;
+      const wss = {
+        clients: clientSet,
+        broadcast(data: any) {
+          const msg = typeof data === "string" ? data : JSON.stringify(data);
+          for (const client of clientSet) if (client.readyState === 1) client.send(msg);
+        },
+        broadcastExcept(sender: any, data: any) {
+          const msg = typeof data === "string" ? data : JSON.stringify(data);
+          for (const client of clientSet) if (client !== sender && client.readyState === 1) client.send(msg);
+        },
+        onConnection(handler: (socket: any, req: any) => void) {
+          connectionHandler = handler;
+        },
+      };
+
+      routeModule.ws(wss, db, projectId);
+      if (!connectionHandler) throw new Error("module.exports.ws did not call wss.onConnection(handler)");
+      const onConnection = connectionHandler as (socket: any, req: any) => void;
+      for (const c of clientsInput) {
+        const id = String(c.id || c.userId);
+        onConnection(clients.get(id), { url: `/devws/${projectId}`, headers: {} });
+      }
+
+      const sendWsMessage = (msg: any) => {
+        const clientId = String(msg.clientId || msg.id || "a");
+        const socket = clients.get(clientId);
+        if (!socket) throw new Error(`simulate_ws unknown clientId "${clientId}"`);
+        const clientDef = clientsInput.find((c: any) => String(c.id || c.userId) === clientId) || {};
+        const dataObj = msg.data || {};
+        const data = typeof dataObj === "string"
+          ? dataObj
+          : JSON.stringify({
+            ...dataObj,
+            ...(dataObj.type === "auth" && !dataObj.initData ? { initData: fakeInitDataFor(clientDef) } : {}),
+          });
+        for (const cb of handlers.get(clientId)?.get("message") || []) {
+          cb(Buffer.from(data));
+        }
+      };
+
+      const expectedTypes = new Set<string>((Array.isArray(args.expectTypes) ? args.expectTypes : []).map(String));
+      const steps = Array.isArray(args.steps) ? args.steps : [];
+      if (steps.length > 0) {
+        for (const step of steps) {
+          const stepType = String(step.type || step.action || "ws");
+          if (stepType === "api") {
+            await runApiStep(step);
+          } else if (stepType === "seedDb") {
+            if (!step.key) throw new Error("simulate_ws seedDb step requires { key, value }.");
+            if (isJsonLookingString(step.value)) throw new Error(jsonLookingStringError(`simulate_ws seedDb step "${step.key}"`));
+            db.set(String(step.key), step.value);
+          } else if (stepType === "expectWs") {
+            for (const type of Array.isArray(step.expectTypes) ? step.expectTypes : []) expectedTypes.add(String(type));
+          } else if (stepType === "wait") {
+            await new Promise(r => setTimeout(r, Math.max(0, Math.min(Number(step.ms) || 50, 1000))));
+          } else {
+            sendWsMessage(step);
+          }
+        }
+      } else {
+        const messages = Array.isArray(args.messages) && args.messages.length > 0
+          ? args.messages
+          : clientsInput.map((c: any) => ({
+            clientId: String(c.id || c.userId),
+            data: { type: "auth", initData: fakeInitDataFor(c) },
+          }));
+        for (const msg of messages) sendWsMessage(msg);
+      }
+      await new Promise(r => setTimeout(r, 50));
+      return {
+        scenarioId: args.scenarioId,
+        clients: clientsInput,
+        captured,
+        apiResults,
+        expectedTypes: [...expectedTypes],
+      };
+    } finally {
+      try { sqlite.close(); } catch {}
+    }
+  }
+
   async buildApp(
     projectId: string,
     description: string,
     plan: string,
     onProgress?: (p: AgentProgress) => Promise<void>,
     onAskUser?: (question: string, options: string[]) => Promise<string>,
-    onCreateTodo?: (items: string[]) => Promise<void>,
-    onCheckTodo?: (id: number) => Promise<void>,
     lang?: string,
     userBalance?: number,
   ): Promise<AgentResult> {
@@ -723,24 +1549,31 @@ Keep suggestions practical and specific to THIS app.${langInstruction}`;
 
     const buildProject: any = await projectService.getProject(projectId);
     const buildPrefs = parseProjectPreferences(buildProject?.preferences ?? null);
+    const buildKind = normalizeProjectKind(buildPrefs?.kind);
     const prefsBlock = `${buildPreferencesPrompt(buildPrefs)}\n\n`;
-
-    const prompt = `${prefsBlock}Build a complete Telegram Mini App from scratch.
-
-Project ID: ${projectId}
+    const baseProjectInfo = `Project ID: ${projectId}
 Development App URL: ${config.baseUrl}/dev/${projectId}/
 Development API URL: ${config.baseUrl}/devapi/${projectId}/
 Production App URL: ${config.baseUrl}/app/${projectId}/
 Production API URL: ${config.baseUrl}/api/${projectId}/
+Telegram Bot Link: ${buildProject?.botUsername ? `https://t.me/${buildProject.botUsername}` : "(bot not linked yet)"}
 
 Description: ${description}
 
 Plan:
 ${plan}
-${featureGating}
-Create all necessary files (frontend/index.html, frontend/styles.css, frontend/app.js, backend/routes.js) and configure the bot. Database is handled via db.get/db.set in routes.js — no schema setup needed. Make it beautiful and functional. Use deploy_to_dev() to deploy and test your code via the Dev URLs. In frontend code, use /api/${projectId}/ as the API base URL (this will be rewritten to /devapi/ in dev mode automatically).${langInstruction}`;
+${featureGating}`;
 
-    return this.runAgent(projectId, prompt, onProgress, onAskUser, onCreateTodo, onCheckTodo, userBalance, undefined, "new");
+    const kindTask =
+      buildKind === "textBot"
+        ? `Build a new Telegram Text Bot from scratch.\n\n${baseProjectInfo}\nCreate ONLY backend/routes.js. Do not create frontend files. The bot UX happens entirely in Telegram messages, keyboards, callbacks, and /bot-webhook. Use db.get/db.set for persistence, deploy_to_dev(), test with simulate_telegram/server_logs, then finish.${langInstruction}`
+      : buildKind === "game"
+        ? `Build a new Telegram Mini App game from scratch.\n\n${baseProjectInfo}\nCreate a single-file Three.js game in frontend/index.html. Do not create frontend/app.js, frontend/styles.css, or backend/routes.js unless the game truly needs server-side multiplayer/shared persistence. Use deploy_to_dev(), then finish.${langInstruction}`
+      : `Build a complete Telegram Mini App from scratch.\n\n${baseProjectInfo}\nCreate all necessary files (frontend/index.html, frontend/styles.css, frontend/app.js, backend/routes.js) and configure the bot. Database is handled via db.get/db.set in routes.js — no schema setup needed. Make it beautiful and functional. Use deploy_to_dev() to deploy and test your code via the Dev URLs. In frontend code, use /api/${projectId}/ as the API base URL (this will be rewritten to /devapi/ in dev mode automatically).${langInstruction}`;
+
+    const prompt = `${prefsBlock}${kindTask}`;
+
+    return this.runAgent(projectId, prompt, onProgress, onAskUser, userBalance, undefined, "new", buildKind);
     }); // end runWithProject
   }
 
@@ -750,8 +1583,6 @@ Create all necessary files (frontend/index.html, frontend/styles.css, frontend/a
     onProgress?: (p: AgentProgress) => Promise<void>,
     attachments?: { localPath: string; projectPath: string; originalName: string; caption?: string }[],
     onAskUser?: (question: string, options: string[]) => Promise<string>,
-    onCreateTodo?: (items: string[]) => Promise<void>,
-    onCheckTodo?: (id: number) => Promise<void>,
     lang?: string,
     userBalance?: number,
   ): Promise<AgentResult> {
@@ -801,12 +1632,10 @@ Create all necessary files (frontend/index.html, frontend/styles.css, frontend/a
       : "";
 
     const updatePrefs = parseProjectPreferences(project?.preferences ?? null);
+    const updateKind = normalizeProjectKind(updatePrefs?.kind);
     const updatePrefsBlock = `${buildPreferencesPrompt(updatePrefs)}\n\n`;
 
-    const prompt = 
-`${updatePrefsBlock}Update an existing Telegram Mini App.
-
-Project ID: ${projectId}
+    const updateProjectInfo = `Project ID: ${projectId}
 Development App URL: ${config.baseUrl}/dev/${projectId}/
 Development API URL: ${config.baseUrl}/devapi/${projectId}/
 Production App URL: ${config.baseUrl}/app/${projectId}/
@@ -822,13 +1651,18 @@ ${context}
 Update request: 
 ${updateDescription}
 ${attachmentInfo}
-${featureGating}
+${featureGating}`;
 
-Use grep and read_file to verify current state before making changes. Use edit_file for targeted modifications. 
-Use deploy_to_dev() to deploy and test your changes via the Dev URLs.
-${langInstruction}`;
+    const updateTask =
+      updateKind === "textBot"
+        ? `Update an existing Telegram Text Bot.\n\n${updateProjectInfo}\nUse targeted read_file on backend/routes.js only. Do not create frontend files. Use edit_file for targeted changes. Use deploy_to_dev(), simulate_telegram/server_logs for changed flows, then finish.${langInstruction}`
+      : updateKind === "game"
+        ? `Update an existing Telegram game.\n\n${updateProjectInfo}\nThe game should normally be a single file in frontend/index.html. Do not create frontend/app.js, frontend/styles.css, or backend/routes.js unless the user explicitly asked for server-side functionality. Use deploy_to_dev(), then finish.${langInstruction}`
+      : `Update an existing Telegram Mini App.\n\n${updateProjectInfo}\nUse grep and read_file to verify current state before making changes. Use edit_file for targeted modifications. Use deploy_to_dev(), simulate_api/server_logs for changed backend behavior, simulate_ws for changed real-time behavior, then finish.${langInstruction}`;
 
-    return this.runAgent(projectId, prompt, onProgress, onAskUser, onCreateTodo, onCheckTodo, userBalance, attachments, "update");
+    const prompt = `${updatePrefsBlock}${updateTask}`;
+
+    return this.runAgent(projectId, prompt, onProgress, onAskUser, userBalance, attachments, "update", updateKind);
     }); // end runWithProject
   }
 
@@ -837,16 +1671,16 @@ ${langInstruction}`;
     userPrompt: string,
     onProgress?: (p: AgentProgress) => Promise<void>,
     onAskUser?: (question: string, options: string[]) => Promise<string>,
-    onCreateTodo?: (items: string[]) => Promise<void>,
-    onCheckTodo?: (id: number) => Promise<void>,
     userBalance?: number,
     attachments?: { localPath: string; projectPath: string; originalName: string; caption?: string }[],
     mode: AgentMode = "update",
+    kind?: string,
   ): Promise<AgentResult> {
     // Build the system prompt from agent_knowledge/instructions/ for THIS run.
-    // Mode-gated files (workflow-new.md / workflow-update.md) are filtered by manifest.
-    const systemPrompt = buildSystemPrompt(mode);
-    console.log(`[Agent] system prompt built (mode=${mode}, ${systemPrompt.length} chars)`);
+    // Mode-gated files are filtered by manifest; kind-specific workflow file is selected here.
+    const systemPrompt = buildSystemPrompt(mode, kind);
+    const promptKind = normalizeProjectKind(kind);
+    console.log(`[Agent] system prompt built (mode=${mode}, kind=${promptKind}, workflow=${workflowFileFor(mode, promptKind)}, ${systemPrompt.length} chars)`);
     let liveCostUsd = 0;
     const startBalance = userBalance ?? 0;
     const rawProgress = onProgress || (async () => {});
@@ -855,6 +1689,115 @@ ${langInstruction}`;
       p.balance = startBalance > 0 ? Math.max(0, startBalance - liveCostUsd) : undefined;
       return rawProgress(p);
     };
+
+    // ─── structured event emitters ──────────────────────────────────────────
+    // These ride on top of the legacy `progress` callback. Older consumers
+    // ignore the new fields (`event`, `stepId`, `kind`, …); the WS forwarder
+    // in src/web/server.ts maps them to dedicated `agent_*` WS events.
+    let stepCounter = 0;
+    const newStepId = (prefix: string) =>
+      `${prefix}-${Date.now().toString(36)}-${++stepCounter}`;
+    const emitStepStart = async (
+      kind: AgentStepKind,
+      title: string,
+      toolName: string,
+      target?: AgentProgress["target"],
+    ): Promise<string> => {
+      const stepId = newStepId(toolName || kind);
+      await progress({
+        event: "step_start",
+        stepId,
+        kind,
+        title,
+        toolName,
+        target,
+        action: title,
+        detail: target?.file || target?.url || target?.key || "",
+        percent: currentPercent,
+      });
+      return stepId;
+    };
+    const emitStepEnd = async (
+      stepId: string,
+      status: "ok" | "error",
+      meta?: Record<string, any>,
+    ) => {
+      await progress({
+        event: "step_end",
+        stepId,
+        status,
+        meta,
+        action: "",
+        detail: "",
+        percent: currentPercent,
+      });
+    };
+    const emitNarrationStart = async (stepId: string) => {
+      await progress({
+        event: "narration_start",
+        stepId,
+        action: "",
+        detail: "",
+        percent: currentPercent,
+      });
+    };
+    const emitNarrationChunk = async (stepId: string, delta: string, text: string) => {
+      await progress({
+        event: "narration_chunk",
+        stepId,
+        delta,
+        text,
+        action: "",
+        detail: "",
+        percent: currentPercent,
+      });
+    };
+    const emitNarrationEnd = async (stepId: string) => {
+      await progress({
+        event: "narration_end",
+        stepId,
+        action: "",
+        detail: "",
+        percent: currentPercent,
+      });
+    };
+
+    // Fast lookup: tool name → step kind + human title + which arg holds the
+    // primary "target" for the UI (file path / URL / DB key / skill name).
+    const TOOL_KIND_MAP: Record<string, { kind: AgentStepKind; title: string; targetKey?: string; targetField?: "file" | "url" | "key" }> = {
+      list_files:    { kind: "searching",  title: "Scanning files" },
+      read_file:     { kind: "reading",    title: "Reading",         targetKey: "path", targetField: "file" },
+      write_file:    { kind: "writing",    title: "Writing",         targetKey: "path", targetField: "file" },
+      edit_file:     { kind: "editing",    title: "Editing",         targetKey: "path", targetField: "file" },
+      grep:          { kind: "searching",  title: "Searching",       targetKey: "pattern", targetField: "key" },
+      shell:         { kind: "shell",      title: "Running command", targetKey: "command", targetField: "key" },
+      fetch_url:     { kind: "fetch",      title: "Fetching URL",    targetKey: "url", targetField: "url" },
+      db:            { kind: "db",         title: "Database",        targetKey: "key", targetField: "key" },
+      telegram_api:  { kind: "telegram",   title: "Telegram API",    targetKey: "method", targetField: "key" },
+      deploy_to_dev: { kind: "deploying",  title: "Deploying to dev" },
+      load_skill:    { kind: "skill",      title: "Loading skill",   targetKey: "name", targetField: "key" },
+      ask_user:      { kind: "ask",        title: "Waiting for your answer" },
+      technical_plan:{ kind: "thinking",   title: "Technical plan",  targetKey: "kind", targetField: "key" },
+      configure_bot: { kind: "configuring",title: "Configuring bot" },
+      set_bot_commands: { kind: "configuring", title: "Setting bot commands" },
+      set_progress:    { kind: "thinking",   title: "Updating progress" },
+      done:            { kind: "done",       title: "Wrapping up" },
+      finish:          { kind: "done",       title: "Finishing" },
+      server_logs:     { kind: "searching",  title: "Reading logs" },
+      simulate_telegram: { kind: "shell",    title: "Simulating bot message" },
+      simulate_api:    { kind: "fetch",      title: "Simulating API call" },
+      simulate_ws:     { kind: "shell",      title: "Simulating WebSocket" },
+    };
+    const buildStepTarget = (toolName: string, args: any): AgentProgress["target"] | undefined => {
+      const cfg = TOOL_KIND_MAP[toolName];
+      if (!cfg?.targetKey) return undefined;
+      const raw = args?.[cfg.targetKey];
+      if (typeof raw !== "string" || !raw) return undefined;
+      const trimmed = raw.length > 200 ? raw.slice(0, 197) + "…" : raw;
+      const field = cfg.targetField || "file";
+      return { [field]: trimmed } as AgentProgress["target"];
+    };
+    // ────────────────────────────────────────────────────────────────────────
     const projectRootDir = path.join(PROJECTS_DIR, projectId);
 
     // Prepare commit folder — agent works inside commits/N/
@@ -883,23 +1826,24 @@ ${langInstruction}`;
       const parsed = parseProjectPreferences((project as any)?.preferences ?? null);
       if (parsed) runPrefs = parsed;
     } catch {}
+    const runKind = normalizeProjectKind(kind || runPrefs.kind);
+    const setRuntimeMenuButton = async () => {
+      if (!botToken) return;
+      const menuButton = runKind === "textBot"
+        ? { type: "default" as const }
+        : { type: "web_app" as const, text: "Launch App", web_app: { url: `${config.baseUrl}/app/${projectId}/` } };
+      await fetch(`https://api.telegram.org/bot${botToken}/setChatMenuButton`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ menu_button: menuButton }),
+      });
+    };
 
     // Project quality tiers are disabled. Builds and updates now use one
     // runtime-configurable Code Gen model/limits profile.
     const tierConfig = runtimeConfig.getModelConfig("codegen");
 
-    let finalPrompt = userPrompt;
-    const checklistDone = new Set<number>();
-    let checklist: string[] = [];
-    // Mandatory tech steps (deploy_to_dev, finish) are NOT part of the user-visible
-    // checklist any more — keep them only in agent memory via prompt instructions.
-    const mandatoryTasks: string[] = [];
-    finalPrompt += `\n\nFIRST STEP: Call create_todo() with a SHORT, USER-FRIENDLY task breakdown before starting any work. The checklist is shown directly to the end user — write items the way you'd describe progress to a non-technical person.
-- GOOD items: "Building a design system", "Adding the login screen", "Fixing the upload bug", "Creating the database for users".
-- BAD items (do NOT include): "deploy_to_dev", "finish()", "Write backend/routes.js", "Configure bot description", "Run npm install", file names, tool names, function calls, internal step names.
-- Do NOT include "Deploy" or "Finish" as a checklist item — those steps are tracked internally and you must still perform them at the end (deploy_to_dev() then finish(shortSummary, summary)) but they MUST NOT appear in the user-visible list.
-
-FINAL STEP (internal — never put in the checklist): After your last code change, call deploy_to_dev() once more, then call finish(shortSummary, summary). That single finish() call replaces the old short_summary/summary/done sequence. There are NO separate short_summary/summary/done tools any more.`;
+    const finalPrompt = userPrompt;
 
     logger.header(tierConfig.modelId, finalPrompt);
 
@@ -950,12 +1894,36 @@ FINAL STEP (internal — never put in the checklist): After your last code chang
       request: any;
       response: any;
     }> = [];
+    const selectedWorkflow = workflowFileFor(mode, runKind);
+    const loadedSkills = new Set<string>();
+    const validatorResults: Array<{ stage: string; ok: boolean; message?: string }> = [];
+    const testResults: Array<{ tool: string; ok: boolean; detail: string }> = [];
+    let technicalPlan: any = null;
+    let technicalPlanSubmitted = mode === "update";
+    let wroteFiles = false;
+    let deployed = false;
+    let finished = false;
+    const testsRun = { telegram: false, api: false, ws: false };
+    const wsCoverage = { types: new Set<string>(), scenarios: new Set<string>() };
     const writeDetailedLog = (reason: string) => {
       try {
         const detailedLogPath = path.join(commitDir, "detailed-log.json");
         fs.writeFileSync(
           detailedLogPath,
-          JSON.stringify({ projectId, commitNum, mode, reason, entries: detailedEntries }, null, 2),
+          JSON.stringify({
+            projectId,
+            commitNum,
+            mode,
+            kind: runKind,
+            selectedWorkflow,
+            reason,
+            loadedSkills: [...loadedSkills],
+            technicalPlan,
+            state: { technicalPlanSubmitted, wroteFiles, deployed, finished, testsRun },
+            validatorResults,
+            testResults,
+            entries: detailedEntries,
+          }, null, 2),
           "utf-8"
         );
       } catch (err: any) {
@@ -965,16 +1933,27 @@ FINAL STEP (internal — never put in the checklist): After your last code chang
     let totalCacheReadTokens = 0;
     let currentPercent: number | undefined;
     let deployCount = 0;
+    let deployLocked = false;
+    let lastWsFailureSignature = "";
+    let repeatedWsFailureCount = 0;
     let consecutiveNoWrite = 0;
 
     const maxIterations = tierConfig.maxIterations ?? 60;
     const staticModelPricing = MODEL_PRICING[tierConfig.modelId] || MODEL_PRICING["anthropic/claude-sonnet-4-5"] || { input: 0, output: 0, cache_write: 0, cache_read: 0 };
     const liveModelPricing = await getModelPricing(tierConfig.modelId);
+    // For cache_read/write: use OpenRouter's catalog price when available (models like MiniMax,
+    // Anthropic via OpenRouter expose this). Fall back to static pricing, then to a fraction
+    // of input price (1.25x write, 0.1x read) as a conservative estimate.
+    const baseInputPrice = liveModelPricing?.promptPerToken ?? staticModelPricing.input;
     const agentPricing = {
-      input: liveModelPricing?.promptPerToken ?? staticModelPricing.input,
+      input: baseInputPrice,
       output: liveModelPricing?.completionPerToken ?? staticModelPricing.output,
-      cache_write: liveModelPricing?.promptPerToken ?? staticModelPricing.cache_write,
-      cache_read: liveModelPricing?.promptPerToken ?? staticModelPricing.cache_read,
+      cache_write: liveModelPricing != null
+        ? (liveModelPricing.cacheWritePerToken || baseInputPrice * 1.25)
+        : staticModelPricing.cache_write,
+      cache_read: liveModelPricing != null
+        ? (liveModelPricing.cacheReadPerToken || baseInputPrice * 0.1)
+        : staticModelPricing.cache_read,
     };
     while (iterations < maxIterations) {
       if (abortedProjects.has(projectId)) {
@@ -989,13 +1968,11 @@ FINAL STEP (internal — never put in the checklist): After your last code chang
       // Build OpenAI-format request. Thinking is passed via extra_body for
       // Claude models on OpenRouter — non-Claude models ignore it gracefully.
       const thinkingBudget = tierConfig.thinkingBudget ?? 0;
+      const requestMessages = this.applyCacheBreakpoint(tierConfig.modelId, systemPrompt, messages);
       const requestPayload: any = {
         model: tierConfig.modelId,
         max_tokens: tierConfig.maxTokens,
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...messages,
-        ],
+        messages: requestMessages,
         tools: TOOLS,
         tool_choice: "auto" as const,
         ...(this.getProviderRouting(tierConfig.modelId, tierConfig.provider) ? { provider: this.getProviderRouting(tierConfig.modelId, tierConfig.provider) } : {}),
@@ -1003,10 +1980,56 @@ FINAL STEP (internal — never put in the checklist): After your last code chang
           extra_body: { thinking: { type: "enabled", budget_tokens: thinkingBudget } },
         } : {}),
       };
+      // Streaming is on by default; an action can opt out via runtime config
+      // (`modelConfigs.<action>.streaming === false`). On any stream failure we
+      // transparently fall back to a single non-streaming call so providers
+      // with flaky tool-call streaming (e.g. some MiniMax variants) still work.
+      const streamingEnabled = (tierConfig as any).streaming !== false;
+      const iterStepId = `iter-${iterations}-${Date.now().toString(36)}`;
+      let narrationOpen = false;
       let response: OpenAI.Chat.Completions.ChatCompletion;
       try {
-        response = await this.callWithRetry(requestPayload);
+        if (streamingEnabled) {
+          try {
+            await emitNarrationStart(iterStepId);
+            narrationOpen = true;
+            // Track combined reasoning + content text so the narration body
+            // shows the model's actual thinking stream (reasoning_content) as
+            // well as any regular text in delta.content.
+            let narrationAccum = "";
+            response = await this.streamAgentCall(requestPayload, {
+              onTextDelta: (delta) => {
+                narrationAccum += delta;
+                void emitNarrationChunk(iterStepId, delta, narrationAccum);
+              },
+              onReasoningDelta: (delta) => {
+                narrationAccum += delta;
+                void emitNarrationChunk(iterStepId, delta, narrationAccum);
+              },
+            });
+            await emitNarrationEnd(iterStepId);
+            narrationOpen = false;
+            // If the stream returned an empty turn, retry once via the
+            // non-streaming path which has its own empty-response retry.
+            if (this.isEmptyResponse(response)) {
+              console.warn(`[Agent] stream returned empty response, falling back to non-stream`);
+              response = await this.callWithRetry(requestPayload);
+            }
+          } catch (streamErr: any) {
+            if (narrationOpen) {
+              await emitNarrationEnd(iterStepId);
+              narrationOpen = false;
+            }
+            console.warn(`[Agent] stream failed (${streamErr?.message}), falling back to non-stream`);
+            response = await this.callWithRetry(requestPayload);
+          }
+        } else {
+          response = await this.callWithRetry(requestPayload);
+        }
       } catch (apiErr: any) {
+        if (narrationOpen) {
+          try { await emitNarrationEnd(iterStepId); } catch {}
+        }
         try {
           const cloneSafe = (v: any) => {
             try {
@@ -1040,13 +2063,14 @@ FINAL STEP (internal — never put in the checklist): After your last code chang
       const usage = response.usage as any;
       const iterIn = usage?.prompt_tokens || 0;
       const iterOut = usage?.completion_tokens || 0;
-      // OpenRouter may report cached token counts in non-standard fields
+      // OpenRouter reports cached tokens inside prompt_tokens_details.cached_tokens.
+      // prompt_tokens already INCLUDES cached tokens, so we must subtract them to avoid
+      // double-charging: fresh tokens at input_rate + cached tokens at cache_read_rate.
       const cached = usage?.prompt_tokens_details?.cached_tokens || 0;
-      const cacheCreated = 0;
-      totalInputTokens += iterIn;
+      totalInputTokens += iterIn - cached;   // non-cached (fresh) input tokens only
       totalOutputTokens += iterOut;
       totalCacheReadTokens += cached;
-      // totalCacheWriteTokens stays 0 — OpenRouter handles caching transparently
+      // totalCacheWriteTokens stays 0 — OpenRouter handles cache writes transparently
 
       const markupMultiplier = tierConfig.markupMultiplier ?? runtimeConfig.getMarkupMultiplier();
       liveCostUsd =
@@ -1056,7 +2080,7 @@ FINAL STEP (internal — never put in the checklist): After your last code chang
         totalCacheReadTokens * agentPricing.cache_read) *
         markupMultiplier;
 
-      const assistantMsg = response.choices[0]?.message;
+      const assistantMsg = response.choices?.[0]?.message;
       const assistantToolCalls = assistantMsg?.tool_calls || [];
       const assistantText = assistantMsg?.content || "";
       // Thinking may come back as reasoning_content from OpenRouter for Claude models
@@ -1070,7 +2094,7 @@ FINAL STEP (internal — never put in the checklist): After your last code chang
       } as any);
 
       logger.iteration(iterations, tierConfig.modelId);
-      logger.tokens(totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens, iterIn, iterOut, cached, cacheCreated, liveCostUsd);
+      logger.tokens(totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens, iterIn, iterOut, cached, 0, liveCostUsd);
 
       if (reasoning?.trim()) {
         logger.thinking(reasoning);
@@ -1082,11 +2106,23 @@ FINAL STEP (internal — never put in the checklist): After your last code chang
       }
       if (assistantToolCalls.length > 0) {
         const toolNames = assistantToolCalls.map((tc: any) => tc.function?.name).join(", ");
-        console.log(`[Agent] 🔧 Iteration ${iterations} | Tools: [${toolNames}] | Tokens so far: in=${totalInputTokens} out=${totalOutputTokens} | finish=${response.choices[0]?.finish_reason}`);
+        console.log(`[Agent] 🔧 Iteration ${iterations} | Tools: [${toolNames}] | Tokens so far: in=${totalInputTokens} out=${totalOutputTokens} | finish=${response.choices?.[0]?.finish_reason}`);
       }
 
-      const finishReason = response.choices[0]?.finish_reason;
-      if (finishReason === "stop" || (finishReason as string) === "end_turn" || assistantToolCalls.length === 0) {
+      if (assistantToolCalls.length === 0) {
+        if (mode === "new" && (!technicalPlanSubmitted || !wroteFiles || !deployed)) {
+          consecutiveNoWrite++;
+          const needed = [
+            !technicalPlanSubmitted ? "call technical_plan first" : "",
+            !wroteFiles ? "write the required project files with write_file/edit_file" : "",
+            !deployed ? "call deploy_to_dev after writing files" : "",
+          ].filter(Boolean).join(", ");
+          const corrective = `You responded with text only, but this is a build run and text does not create files. Continue now with tool calls only: ${needed}. Do not finish until validators pass and required simulate_* tests are done.`;
+          messages.push({ role: "user", content: corrective });
+          writeDetailedLog("end_turn_no_tools_retry");
+          console.warn(`[Agent] no-tool turn during new build; injected corrective prompt (${consecutiveNoWrite})`);
+          continue;
+        }
         if (assistantText) summary = assistantText;
         logger.done(summary, iterations, totalInputTokens, totalOutputTokens);
         writeDetailedLog("end_turn_no_tools");
@@ -1106,36 +2142,52 @@ FINAL STEP (internal — never put in the checklist): After your last code chang
         ...assistantToolCalls.filter((tc: any) => TERMINAL_TOOLS.has((tc as any).function?.name)),
       ];
 
-      // HARD REJECT for UI-only batches: check_todo / set_progress are allowed
+      // HARD REJECT for UI-only batches: set_progress is allowed
       // ONLY when the same turn also contains a real action.
       const ALLOWED_WITH_UI = new Set(["write_file", "edit_file", "deploy_to_dev", "shell"]);
       const turnHasAllowedAction = assistantToolCalls.some((tc: any) => ALLOWED_WITH_UI.has((tc as any).function?.name));
 
       for (const toolCall of orderedToolCalls) {
         const id = (toolCall as any).id as string;
-        const name = (toolCall as any).function?.name as string;
+        let name = (toolCall as any).function?.name as string;
         let args: any;
         try {
           args = JSON.parse((toolCall as any).function?.arguments || "{}");
         } catch {
           args = {};
         }
+
+        // Some models (e.g. MiniMax) occasionally embed the argument directly
+        // in the tool name, e.g. `load_skill("frontend")` instead of calling
+        // `load_skill` with `{name: "frontend"}`. Canonicalise these.
+        const inlineArgMatch = name?.match(/^(\w+)\("([^"]+)"\)$/);
+        if (inlineArgMatch) {
+          const [, baseName, inlineArg] = inlineArgMatch;
+          if (baseName === "load_skill" && !args.name) {
+            name = "load_skill";
+            args = { ...args, name: inlineArg };
+          }
+        }
+
         let result = "";
         const argsSummary = this.summarizeArgs(name, args);
         logger.toolCall(name, args);
 
-        // // HARD REJECT: UI tools without an allowed action in the same turn.
-        // // The actual handler is skipped entirely — no checklist update, no progress.
-        // if (!turnHasAllowedAction && (name === "check_todo" || name === "set_progress")) {
-        //   result = `Error: ${name} REJECTED — must be batched in the SAME turn with one of: write_file, edit_file, deploy_to_dev, shell. Your batch contains none of these. The action was NOT executed and produced no UI update. Either include a real action together with this call, or skip the UI update entirely (don't call ${name} alone).`;
-        //   logger.toolResult(name, result);
-        //   console.warn(`[Agent] 🚫 Iter ${iterations}: HARD REJECTED ${name}(${argsSummary}) — no allowed action in batch`);
-        //   toolResults.push({ type: "tool_result", tool_use_id: id, content: result });
-        //   continue;
-        // }
+        // Open a structured step card for this tool call. We always close it
+        // in the `finally` below (with status + meta computed from `result`).
+        const stepKindCfg = TOOL_KIND_MAP[name] || { kind: "thinking" as AgentStepKind, title: name };
+        const stepTarget = buildStepTarget(name, args);
+        const stepId = await emitStepStart(stepKindCfg.kind, stepKindCfg.title, name, stepTarget);
 
         try {
           switch (name) {
+            case "technical_plan": {
+              technicalPlan = { ...args, kind: normalizeProjectKind(args.kind || runKind) };
+              technicalPlanSubmitted = true;
+              result = `OK: Technical plan accepted for kind=${technicalPlan.kind}. Code must now follow this contract exactly.`;
+              break;
+            }
+
             case "list_files": {
               await progress({ action: "📂 Scanning files", detail: "", percent: currentPercent });
               const files = this.walkDirWithStats(projectDir, projectDir);
@@ -1227,6 +2279,14 @@ FINAL STEP (internal — never put in the checklist): After your last code chang
             }
 
             case "write_file": {
+              if (deployLocked) {
+                result = "Error: Deploy limit has been reached. Further file edits cannot be deployed or verified in this run. Call finish to produce a blocked build report instead of editing.";
+                break;
+              }
+              if (mode === "new" && !technicalPlanSubmitted) {
+                result = "Error: technical_plan must be called before writing code in a new build.";
+                break;
+              }
               if (this.isProtectedPath(args.path)) { result = "Error: You can only write to frontend/ and backend/ directories."; break; }
               const filePath = this.safePath(projectDir, args.path);
               if (!filePath) { result = "Error: Invalid path"; break; }
@@ -1252,11 +2312,20 @@ Pick one and proceed.`;
               fs.writeFileSync(filePath, args.content, "utf-8");
               const lineCount = args.content.split("\n").length;
               result = `OK: Written ${lineCount} lines to ${args.path}`;
+              wroteFiles = true;
               await progress({ action: "✏️ Writing", detail: args.path, percent: currentPercent });
               break;
             }
 
             case "edit_file": {
+              if (deployLocked) {
+                result = "Error: Deploy limit has been reached. Further file edits cannot be deployed or verified in this run. Call finish to produce a blocked build report instead of editing.";
+                break;
+              }
+              if (mode === "new" && !technicalPlanSubmitted) {
+                result = "Error: technical_plan must be called before editing code in a new build.";
+                break;
+              }
               if (this.isProtectedPath(args.path)) { result = "Error: You can only edit files in frontend/ and backend/ directories."; break; }
               const filePath = this.safePath(projectDir, args.path);
               if (!filePath) { result = "Error: Invalid path"; break; }
@@ -1281,6 +2350,7 @@ Pick one and proceed.`;
                 fs.writeFileSync(filePath, content, "utf-8");
                 result = `OK: Replaced 1 occurrence in ${args.path}`;
               }
+              wroteFiles = true;
               await progress({ action: "✏️ Editing", detail: args.path, percent: currentPercent });
               break;
             }
@@ -1331,6 +2401,10 @@ Pick one and proceed.`;
                 result = "Error: Command blocked for safety";
                 break;
               }
+              if (BLOCKED_INFRA_SHELL_PATTERNS.some(re => re.test(cmd))) {
+                result = "Error: Platform infrastructure diagnostics are not allowed from project shell. Use deploy_to_dev, simulate_api, simulate_telegram, simulate_ws, and server_logs; fix project files based on those tool results.";
+                break;
+              }
               await progress({ action: "⚡ Running system commands...", detail: "", percent: currentPercent });
               try {
                 const { stdout } = await execAsync(cmd, {
@@ -1347,30 +2421,6 @@ Pick one and proceed.`;
               }
               break;
             }
-
-            // DISABLED: see TOOLS array comment for http_request.
-            // case "http_request": {
-            //   await progress({ action: "🌐 Testing server...", detail: "", percent: currentPercent });
-            //   try {
-            //     const controller = new AbortController();
-            //     const timeout = setTimeout(() => controller.abort(), 10000);
-            //
-            //     const resp = await fetch(args.url, {
-            //       method: (args.method || "GET").toUpperCase(),
-            //       headers: args.headers || {},
-            //       body: args.body || undefined,
-            //       signal: controller.signal,
-            //     });
-            //     clearTimeout(timeout);
-            //
-            //     const body = await resp.text();
-            //     result = `HTTP ${resp.status} ${resp.statusText}\n${body.substring(0, 5000)}`;
-            //   } catch (err: any) {
-            //     result = `Error: ${err.message}`;
-            //     console.error(`[Agent] http_request error:`, err.message);
-            //   }
-            //   break;
-            // }
 
             case "fetch_url": {
               await progress({ action: "🔗 Fetching data...", detail: "", percent: currentPercent });
@@ -1420,10 +2470,19 @@ Pick one and proceed.`;
                 switch (op) {
                   case "get": {
                     const row = sqlite.prepare("SELECT value FROM kv WHERE key = ?").get(args.key);
-                    result = row ? `OK: ${row.value.substring(0, 8000)}` : "OK: null";
+                    if (row) {
+                      const parsed = parseJsonValueForDisplay(row.value);
+                      result = `OK: ${JSON.stringify(parsed, null, 2).substring(0, 8000)}`;
+                    } else {
+                      result = "OK: null";
+                    }
                     break;
                   }
                   case "set": {
+                    if (isJsonLookingString(args.value)) {
+                      result = `Error: ${jsonLookingStringError("DB set")}`;
+                      break;
+                    }
                     const val = JSON.stringify(args.value);
                     sqlite.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)").run(args.key, val);
                     result = `OK: Stored ${val.length} bytes under "${args.key}"`;
@@ -1472,8 +2531,13 @@ Pick one and proceed.`;
             }
 
             case "deploy_to_dev": {
+              if (deployLocked) {
+                result = `DEPLOY LIMIT REACHED (${deployCount}/4). Deploy is locked for this run. Do not edit or deploy again; call finish to produce a blocked build report.`;
+                break;
+              }
               deployCount++;
               if (deployCount > 4) {
+                deployLocked = true;
                 result = `DEPLOY LIMIT REACHED (${deployCount}/4). You have deployed too many times. Finish your work and call finish(shortSummary, summary) now. Something is wrong with your iteration loop — do NOT deploy again.`;
                 break;
               }
@@ -1485,7 +2549,8 @@ Pick one and proceed.`;
                 await progress({ action: "🚀 Deploying to dev", detail: `(${deployCount}/4)`, percent: currentPercent });
               }
               try {
-                const routeError = this.validateBackendRoutes(projectDir, projectId);
+                const routeError = this.validateBackendRoutes(projectDir, projectId, runKind, technicalPlan);
+                validatorResults.push({ stage: "deploy_to_dev", ok: !routeError, message: routeError || undefined });
                 if (routeError) {
                   result = `Error: ${routeError} Fix backend/routes.js, then call deploy_to_dev() again.`;
                   deployCount--;
@@ -1499,6 +2564,9 @@ Pick one and proceed.`;
 Test frontend: ${config.baseUrl}/dev/${projectId}/
 
 The user will visually verify. If this was your final action, in your NEXT turn call finish(shortSummary, summary) — that single atomic call ends the build. Do NOT call short_summary/summary/done — they don't exist as separate tools.`;
+                deployed = true;
+                lastWsFailureSignature = "";
+                repeatedWsFailureCount = 0;
               } catch (err: any) {
                 result = `Error deploying to dev: ${err.message}`;
               }
@@ -1509,24 +2577,9 @@ The user will visually verify. If this was your final action, in your NEXT turn 
               await progress({ action: "📚 Loading skill", detail: args.name, percent: currentPercent });
               const skillContent = loadSkill(args.name);
               result = skillContent || `Error: Skill "${args.name}" not found. Available: ${getAvailableSkills().join(", ")}`;
+              if (skillContent && args.name) loadedSkills.add(String(args.name));
               break;
             }
-
-            // DISABLED: see TOOLS array comment for server_logs.
-            // case "server_logs": {
-            //   await progress({ action: "📋 Reading logs", detail: "", percent: currentPercent });
-            //   try {
-            //     const numLines = Math.min(args.lines || 30, 100);
-            //     const { stdout } = await execAsync(`pm2 logs apps-father --lines ${numLines} --nostream 2>&1`, {
-            //       timeout: 5000,
-            //       maxBuffer: 512 * 1024,
-            //     });
-            //     result = stdout.substring(0, 8000);
-            //   } catch (err: any) {
-            //     result = `Error reading logs: ${err.message}`;
-            //   }
-            //   break;
-            // }
 
             case "ask_user": {
               const question = args.question || "Please provide input:";
@@ -1559,45 +2612,133 @@ The user will visually verify. If this was your final action, in your NEXT turn 
               }
               break;
             }
-
-            // case "set_progress": {
-            //   // DEPRECATED: kept only so re-played transcripts don't blow up.
-            //   // Progress bar is now computed in the frontend from createdAtUtc.
-            //   result = "OK (set_progress is deprecated and ignored — the progress bar is now driven by elapsed time on the frontend; just use check_todo).";
-            //   break;
-            // }
-
-            case "create_todo": {
-              const items = (args.items || []).filter((s: any) => typeof s === "string").slice(0, 10);
-              checklist = [...items, ...mandatoryTasks];
-              checklistDone.clear();
-              if (onCreateTodo) {
-                try { await onCreateTodo(items); } catch {}
-              }
-              result = `OK: Checklist created with ${checklist.length} user-facing tasks. Use check_todo(id) to mark each done. Remember: deploy_to_dev() and finish() are internal steps — perform them at the end but they are NOT in this checklist.`;
-              console.log(`[Agent] 📋 create_todo: ${checklist.length} user tasks`);
+            case "server_logs": {
+              const n = Math.min(args.lines || 50, 200);
+              const rows = await prisma.appLog.findMany({
+                where: { projectId },
+                orderBy: { ts: "desc" },
+                take: n,
+                select: { ts: true, level: true, category: true, message: true },
+              });
+              result = rows.reverse()
+                .map(r => `[${(r.ts as Date).toISOString()}] [${r.level.toUpperCase()}] ${r.message}`)
+                .join("\n") || "(no logs yet for this project)";
               break;
             }
 
-            case "check_todo": {
-              const todoId = Math.round(args.id);
-              if (checklist.length > 0 && todoId >= 1 && todoId <= checklist.length) {
-                checklistDone.add(todoId);
-                const userItemCount = checklist.length - mandatoryTasks.length;
-                if (onCheckTodo && todoId <= userItemCount) {
-                  try { await onCheckTodo(todoId); } catch {}
-                }
-                result = `OK: Task ${todoId} marked as done (${checklistDone.size}/${checklist.length} completed)`;
-                console.log(`[Agent] ✅ check_todo(${todoId}): "${checklist[todoId - 1]}" — ${checklistDone.size}/${checklist.length} done`);
+            case "simulate_telegram": {
+              const update = { ...(args.update || {}) };
+              if (update.update_id == null) update.update_id = Date.now();
+              // Force test user id = -100
+              if (update.message?.from) update.message = { ...update.message, from: { ...update.message.from, id: -100 } };
+              if (update.callback_query?.from) update.callback_query = { ...update.callback_query, from: { ...update.callback_query.from, id: -100 } };
+              const captured = await botRunnerService.simulateBotWebhook(projectId, update, { deployment: "development" });
+              const requiresTelegramReply =
+                runKind === "textBot" ||
+                (runKind === "app" && Array.isArray(technicalPlan?.botBehavior) && technicalPlan.botBehavior.length > 0);
+              const ok = !requiresTelegramReply || captured.length > 0;
+              if (ok) {
+                testsRun.telegram = true;
+                result = captured.length === 0
+                  ? "OK: Bot webhook processed update; no Telegram API call was required by the plan."
+                  : `OK: Captured ${captured.length} tg() call(s):\n` +
+                    captured.map((c: any, i: number) => `${i + 1}. ${c.method}(${JSON.stringify(c.body).slice(0, 300)})`).join("\n");
               } else {
-                result = `Error: Invalid task ID ${todoId}. ${checklist.length === 0 ? "Call create_todo first." : ""}`;
+                result = "Error: simulate_telegram expected at least one Telegram API call for the planned bot behavior, but captured none. Check backend/routes.js /bot-webhook and server_logs.";
+              }
+              testResults.push({ tool: "simulate_telegram", ok, detail: result.slice(0, 500) });
+              break;
+            }
+
+            case "simulate_api": {
+              const apiMethod = (args.method || "GET").toUpperCase();
+              const apiPath = String(args.path || "").replace(/^\//, "");
+              const fakeUser = buildFakeTelegramUser(args);
+              const fakeInitData = fakeInitDataFor(fakeUser);
+              const apiUrl = `http://localhost:${config.port}/devapi/${projectId}/${apiPath}`;
+              try {
+                const resp = await fetch(apiUrl, {
+                  method: apiMethod,
+                  headers: { "Content-Type": "application/json", "x-telegram-init-data": fakeInitData },
+                  body: args.body ? JSON.stringify(args.body) : undefined,
+                });
+                let respBody: any;
+                try { respBody = await resp.json(); } catch { respBody = await resp.text(); }
+                const expectedStatus = Number.isFinite(Number(args.expectStatus)) ? Number(args.expectStatus) : null;
+                const infrastructure404 =
+                  resp.status === 404 &&
+                  typeof respBody?.error === "string" &&
+                  /No backend routes configured|Endpoint not found/i.test(respBody.error);
+                const ok = !infrastructure404 && (
+                  expectedStatus != null ? resp.status === expectedStatus : resp.status >= 200 && resp.status < 300
+                );
+                const payload = { ok, method: apiMethod, url: apiUrl, status: resp.status, body: respBody };
+                if (ok) {
+                  testsRun.api = true;
+                  result = JSON.stringify(payload, null, 2);
+                } else {
+                  result = `Error: simulate_api failed\n${JSON.stringify(payload, null, 2)}`;
+                }
+                testResults.push({ tool: "simulate_api", ok, detail: result.slice(0, 500) });
+              } catch (err: any) {
+                result = `Error: ${err.message}`;
+                testResults.push({ tool: "simulate_api", ok: false, detail: result });
               }
               break;
             }
 
-            // NOTE: short_summary / summary / done handlers are kept for backward
-            // compatibility (e.g. older transcripts re-played) but are NOT exposed
-            // to the model in TOOLS — model must use `finish(shortSummary, summary)`.
+            case "simulate_ws": {
+              try {
+                const sim = await this.simulateProjectWs(projectRootDir, projectId, args);
+                const wsError = this.validateWsSimulation(sim, technicalPlan);
+                const observedTypes = this.observedWsTypes(sim);
+                for (const type of observedTypes) wsCoverage.types.add(type);
+                if (wsError) {
+                  const signature = wsError.replace(/\s+/g, " ").trim();
+                  repeatedWsFailureCount = signature === lastWsFailureSignature ? repeatedWsFailureCount + 1 : 1;
+                  lastWsFailureSignature = signature;
+                  result = `Error: ${wsError}\n${JSON.stringify(sim, null, 2).slice(0, 6000)}`;
+                  if (repeatedWsFailureCount >= 2) {
+                    result += "\nRepeated simulate_ws failure: change the scenario setup (seedDb/steps/expectTypes) instead of retrying the same test. If the deploy limit is exhausted, stop and call finish for a blocked build report.";
+                  }
+                  testResults.push({ tool: "simulate_ws", ok: false, detail: result.slice(0, 500) });
+                } else {
+                  lastWsFailureSignature = "";
+                  repeatedWsFailureCount = 0;
+                  if (sim.scenarioId) wsCoverage.scenarios.add(String(sim.scenarioId));
+                  testsRun.ws = true;
+                  result = JSON.stringify({ ok: true, ...sim }, null, 2).slice(0, 6000);
+                  testResults.push({ tool: "simulate_ws", ok: true, detail: result.slice(0, 500) });
+                }
+              } catch (err: any) {
+                result = `Error: ${err.message}`;
+                testResults.push({ tool: "simulate_ws", ok: false, detail: result });
+              }
+              break;
+            }
+
+            case "set_bot_commands": {
+              if (!botToken) { result = "Error: No bot token available"; break; }
+              const commands = (Array.isArray(args.commands) ? args.commands : [])
+                .map((c: any) => ({
+                  command: String(c.command || "").replace(/^\//, "").trim(),
+                  description: String(c.description || "").trim().slice(0, 256),
+                }))
+                .filter((c: any) => c.command && c.description);
+              if (commands.length === 0) {
+                result = "Error: set_bot_commands requires at least one valid command.";
+                break;
+              }
+              const resp = await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ commands }),
+              });
+              const body = await resp.text();
+              result = `setMyCommands: ${resp.status} ${body.slice(0, 1000)}`;
+              break;
+            }
+
             case "short_summary": {
               shortSummary = args.text || "";
               result = "OK: Short summary saved. (Tool deprecated — use finish(shortSummary, summary) instead.)";
@@ -1616,38 +2757,38 @@ The user will visually verify. If this was your final action, in your NEXT turn 
               if (!summary) summary = "Changes applied";
               if (!shortSummary) shortSummary = summary.split("\n")[0].substring(0, 200);
               currentPercent = 100;
-              // Auto-check anything the model forgot — work was clearly finished if
-              // we're at done(). Only emit onCheckTodo for user-visible items
-              // (mandatory tasks aren't shown to the user).
-              if (checklist.length > 0 && checklistDone.size < checklist.length) {
-                const userItemCount = checklist.length - mandatoryTasks.length;
-                const missing = checklist.filter((_, i) => !checklistDone.has(i + 1));
-                console.log(`[Agent] auto-checking ${checklist.length - checklistDone.size} remaining tasks at done(): ${missing.join(", ")}`);
-                for (let i = 1; i <= checklist.length; i++) {
-                  if (checklistDone.has(i)) continue;
-                  checklistDone.add(i);
-                  if (onCheckTodo && i <= userItemCount) {
-                    try { await onCheckTodo(i); } catch {}
-                  }
-                }
-              }
               console.log(`[Agent] ✅ Done after ${iterations} iterations | Total tokens: in=${totalInputTokens} out=${totalOutputTokens}`);
 
-              if (botToken) {
-                try {
-                  const appUrl = `${config.baseUrl}/app/${projectId}/`;
-                  await fetch(`https://api.telegram.org/bot${botToken}/setChatMenuButton`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      menu_button: { type: "web_app", text: "Launch App", web_app: { url: appUrl } },
-                    }),
-                  });
-                } catch {}
-              }
+              try { await setRuntimeMenuButton(); } catch {}
 
-              const routeError = this.validateBackendRoutes(projectDir, projectId);
+              const readinessError = this.validateFinishReadiness(runKind, mode, technicalPlan, testsRun, deployed, testResults, wsCoverage);
+              if (readinessError) {
+                if (deployLocked) {
+                  summary = `Build blocked after deploy limit was reached.\n\n${readinessError}\n\nNo further edits can be deployed or verified in this run. Start a fresh run after addressing the last failing test setup or code issue.`;
+                  shortSummary = shortSummary || "Build blocked after deploy limit\n\nThe app could not be safely finished because the deploy limit was reached before required tests passed.";
+                  finished = true;
+                  logger.done(summary, iterations, totalInputTokens, totalOutputTokens);
+                  writeDetailedLog("blocked_deploy_locked");
+                  const logFilePath = logger.getLogPath();
+                  logger.close();
+                  return { summary, shortSummary, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath, commitNum, commitDir };
+                }
+                result = `Error: ${readinessError}`;
+                break;
+              }
+              const routeError = this.validateBackendRoutes(projectDir, projectId, runKind, technicalPlan);
+              validatorResults.push({ stage: "done", ok: !routeError, message: routeError || undefined });
               if (routeError) {
+                if (deployLocked) {
+                  summary = `Build blocked after deploy limit was reached.\n\n${routeError}\n\nNo further edits can be deployed or verified in this run. Start a fresh run to fix and redeploy.`;
+                  shortSummary = shortSummary || "Build blocked after deploy limit\n\nThe app could not be safely finished because validation failed after the deploy limit was reached.";
+                  finished = true;
+                  logger.done(summary, iterations, totalInputTokens, totalOutputTokens);
+                  writeDetailedLog("blocked_deploy_locked_route_error");
+                  const logFilePath = logger.getLogPath();
+                  logger.close();
+                  return { summary, shortSummary, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath, commitNum, commitDir };
+                }
                 result = `Error: ${routeError} Fix backend/routes.js, deploy to dev, then call finish(shortSummary, summary) again.`;
                 break;
               }
@@ -1661,6 +2802,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
               try { commitService.syncToDev(projectId, projectDir); } catch {}
               toolResults.push({ role: "tool", tool_call_id: id, content: "OK" });
               for (const tr of toolResults) messages.push(tr as any);
+              finished = true;
               logger.done(summary, iterations, totalInputTokens, totalOutputTokens);
               writeDetailedLog("done");
               const logFilePath = logger.getLogPath();
@@ -1678,35 +2820,38 @@ The user will visually verify. If this was your final action, in your NEXT turn 
               console.log(`[Agent] 📝 finish.shortSummary: ${shortSummary.substring(0, 100)}`);
               console.log(`[Agent] 📝 finish.summary: ${summary.substring(0, 200)}`);
 
-              if (checklist.length > 0 && checklistDone.size < checklist.length) {
-                const userItemCount = checklist.length - mandatoryTasks.length;
-                const missing = checklist.filter((_, i) => !checklistDone.has(i + 1));
-                console.log(`[Agent] auto-checking ${checklist.length - checklistDone.size} remaining tasks at finish(): ${missing.join(", ")}`);
-                for (let i = 1; i <= checklist.length; i++) {
-                  if (checklistDone.has(i)) continue;
-                  checklistDone.add(i);
-                  if (onCheckTodo && i <= userItemCount) {
-                    try { await onCheckTodo(i); } catch {}
-                  }
-                }
-              }
               console.log(`[Agent] ✅ finish() after ${iterations} iterations | Total tokens: in=${totalInputTokens} out=${totalOutputTokens}`);
 
-              if (botToken) {
-                try {
-                  const appUrl = `${config.baseUrl}/app/${projectId}/`;
-                  await fetch(`https://api.telegram.org/bot${botToken}/setChatMenuButton`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      menu_button: { type: "web_app", text: "Launch App", web_app: { url: appUrl } },
-                    }),
-                  });
-                } catch {}
-              }
+              try { await setRuntimeMenuButton(); } catch {}
 
-              const routeError = this.validateBackendRoutes(projectDir, projectId);
+              const readinessError = this.validateFinishReadiness(runKind, mode, technicalPlan, testsRun, deployed, testResults, wsCoverage);
+              if (readinessError) {
+                if (deployLocked) {
+                  summary = `Build blocked after deploy limit was reached.\n\n${readinessError}\n\nNo further edits can be deployed or verified in this run. Start a fresh run after addressing the last failing test setup or code issue.\n\nAgent summary before blocking:\n${summary}`;
+                  shortSummary = shortSummary || "Build blocked after deploy limit\n\nThe app could not be safely finished because the deploy limit was reached before required tests passed.";
+                  finished = true;
+                  logger.done(summary, iterations, totalInputTokens, totalOutputTokens);
+                  writeDetailedLog("blocked_deploy_locked");
+                  const logFilePath2 = logger.getLogPath();
+                  logger.close();
+                  return { summary, shortSummary, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath2, commitNum, commitDir };
+                }
+                result = `Error: ${readinessError}`;
+                break;
+              }
+              const routeError = this.validateBackendRoutes(projectDir, projectId, runKind, technicalPlan);
+              validatorResults.push({ stage: "finish", ok: !routeError, message: routeError || undefined });
               if (routeError) {
+                if (deployLocked) {
+                  summary = `Build blocked after deploy limit was reached.\n\n${routeError}\n\nNo further edits can be deployed or verified in this run. Start a fresh run to fix and redeploy.\n\nAgent summary before blocking:\n${summary}`;
+                  shortSummary = shortSummary || "Build blocked after deploy limit\n\nThe app could not be safely finished because validation failed after the deploy limit was reached.";
+                  finished = true;
+                  logger.done(summary, iterations, totalInputTokens, totalOutputTokens);
+                  writeDetailedLog("blocked_deploy_locked_route_error");
+                  const logFilePath2 = logger.getLogPath();
+                  logger.close();
+                  return { summary, shortSummary, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath2, commitNum, commitDir };
+                }
                 result = `Error: ${routeError} Fix backend/routes.js, deploy to dev, then call finish(shortSummary, summary) again.`;
                 break;
               }
@@ -1720,6 +2865,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
               try { commitService.syncToDev(projectId, projectDir); } catch {}
               toolResults.push({ role: "tool", tool_call_id: id, content: "OK" });
               for (const tr of toolResults) messages.push(tr as any);
+              finished = true;
               logger.done(summary, iterations, totalInputTokens, totalOutputTokens);
               writeDetailedLog("finish");
               const logFilePath2 = logger.getLogPath();
@@ -1743,7 +2889,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
               const description = (args.description || "").toString().substring(0, 512);
               const shortDescription = (args.shortDescription || "").toString().substring(0, 120);
               // Text Bot projects must NEVER expose a Mini App menu button —
-              // there's no `mini_app/` deployed for them, so a `web_app` button
+              // there's no generated frontend deployed for them, so a `web_app` button
               // would 404 (or hit the textBot fallback page). Force-clear the
               // menu button instead, regardless of what the agent passed in.
               // The textBot.md rules also tell the agent to send `""`, but the
@@ -1804,66 +2950,51 @@ The user will visually verify. If this was your final action, in your NEXT turn 
         logger.toolResult(name, result);
         console.log(`[Agent] 📥 ${name}(${argsSummary}) -> ${result.substring(0, 200).replace(/\n/g, "\\n")}${result.length > 200 ? "..." : ""}`);
         toolResults.push({ role: "tool", tool_call_id: id, content: result });
+
+        // Close the structured step card with derived status + meta. Errors
+        // are surfaced as `status: "error"` so the UI can render a red state.
+        const stepStatus: "ok" | "error" = result.startsWith("Error") ? "error" : "ok";
+        const stepMeta: Record<string, any> = {};
+        try {
+          if (name === "write_file" && typeof args?.content === "string") {
+            stepMeta.lines = args.content.split("\n").length;
+            stepMeta.bytes = Buffer.byteLength(args.content, "utf-8");
+          } else if (name === "edit_file") {
+            stepMeta.added = typeof args?.new_string === "string" ? args.new_string.split("\n").length : 0;
+            stepMeta.removed = typeof args?.old_string === "string" ? args.old_string.split("\n").length : 0;
+            if (args?.replace_all) stepMeta.replaceAll = true;
+          } else if (name === "deploy_to_dev") {
+            stepMeta.deployCount = deployCount;
+          } else if (name === "shell" && typeof args?.command === "string") {
+            stepMeta.command = args.command.length > 120 ? args.command.slice(0, 117) + "…" : args.command;
+          } else if (name === "db") {
+            stepMeta.op = args?.operation;
+            if (args?.key) stepMeta.key = args.key;
+          } else if (name === "fetch_url" && typeof args?.url === "string") {
+            stepMeta.url = args.url;
+          } else if (name === "load_skill") {
+            stepMeta.name = args?.name;
+          } else if (name === "telegram_api") {
+            stepMeta.method = args?.method;
+          }
+          if (stepStatus === "error") {
+            stepMeta.error = result.replace(/^Error:?\s*/i, "").slice(0, 200);
+          }
+        } catch {}
+        await emitStepEnd(stepId, stepStatus, Object.keys(stepMeta).length ? stepMeta : undefined);
       }
 
       // Push each tool result as a separate message (OpenAI format).
       for (const tr of toolResults) messages.push(tr as any);
 
-      // DISABLED: pruneConversation mutates older messages and breaks Anthropic
-      // prompt cache (cacheRead drops to 0 after first prune, causing 5-10x cost
-      // spike on long builds). Cache reads are ~12x cheaper than fresh input,
-      // so keeping the full history cached is far cheaper than pruning it.
-      // Re-enable only if we hit the 200K context window in practice.
-      // this.pruneConversation(messages);
-
-      // (UI-only batches are now hard-rejected up-front in the for-loop above —
-      //  see the HARD REJECT block. No post-hoc warning needed.)
-
       // Metrics: log message sizes and detect stuck exploration
       const msgSize = JSON.stringify(messages).length;
       const estimatedTokens = Math.round(msgSize / 4);
       console.log(`[Agent] 📊 Iter ${iterations} | Messages: ${messages.length} | ~${estimatedTokens} tokens | Cost: $${liveCostUsd.toFixed(4)}`);
-
-      const hasWrite = assistantToolCalls.some((tc: any) =>
-        ["write_file", "edit_file"].includes((tc as any).function?.name)
-      );
-
-      // Track consecutive iterations without writes
-      if (!hasWrite) {
-        consecutiveNoWrite++;
-      } else {
-        consecutiveNoWrite = 0;
-      }
-
-      // // Inject warnings INTO the next tool_result so the agent actually sees them
-      // let budgetWarning = "";
-      // if (consecutiveNoWrite === 5) {
-      //   budgetWarning = "\n\n⚠️ BUDGET WARNING: You have spent 5 iterations without writing code. Commit to a decision and start writing NOW, or call finish(shortSummary, summary) if you cannot make progress.";
-      // } else if (consecutiveNoWrite >= 8) {
-      //   budgetWarning = "\n\n🚨 CRITICAL: 8+ iterations without writing code. This session is burning money on exploration. Write code in your NEXT turn or call finish(shortSummary, summary) with an honest explanation of why you're stuck.";
-      // }
-      // if (iterations === Math.floor(maxIterations * 0.7)) {
-      //   budgetWarning += `\n\n⏳ ITERATION BUDGET: You are at ${iterations}/${maxIterations} iterations (70%). Wrap up remaining work and prepare to call finish(shortSummary, summary).`;
-      // }
-      // if (iterations === Math.floor(maxIterations * 0.9)) {
-      //   budgetWarning += `\n\n🛑 FINAL ITERATIONS: You are at ${iterations}/${maxIterations} (90%). Call finish(shortSummary, summary) NOW. No more exploration.`;
-      // }
-
-      // // Append warning to the last tool_result if there was one
-      // if (budgetWarning && toolResults.length > 0) {
-      //   const last = toolResults[toolResults.length - 1];
-      //   if (typeof last.content === "string") {
-      //     last.content = last.content + budgetWarning;
-      //   }
-      // }
-
-      if (!hasWrite && iterations > 5) {
-        console.warn(`[Agent] ⚠️ Iteration ${iterations} had no writes (streak: ${consecutiveNoWrite}) — agent may be stuck`);
-      }
     }
 
     // Fallback: store code even if done() wasn't called
-    const finalRouteError = this.validateBackendRoutes(projectDir, projectId);
+    const finalRouteError = this.validateBackendRoutes(projectDir, projectId, runKind, technicalPlan);
     if (finalRouteError) {
       summary = `Agent reached iteration limit with invalid backend routes: ${finalRouteError}`;
       console.warn(`[Agent] final sync blocked: ${finalRouteError}`);
@@ -1885,8 +3016,8 @@ The user will visually verify. If this was your final action, in your NEXT turn 
     logger.close();
 
     return {
-      summary: summary || "App updated (agent reached iteration limit)",
-      shortSummary: shortSummary || summary?.split("\n")[0]?.substring(0, 200) || "Update completed",
+      summary: summary || "Agent failed: reached iteration limit before a valid finish().",
+      shortSummary: shortSummary || summary?.split("\n")[0]?.substring(0, 200) || "Build failed: iteration limit",
       model: tierConfig.modelId,
       inputTokens: totalInputTokens,
       outputTokens: totalOutputTokens,
@@ -1940,17 +3071,70 @@ The user will visually verify. If this was your final action, in your NEXT turn 
     return summaryParts.join("\n");
   }
 
+  private isClaudeModel(modelId: string): boolean {
+    return /(?:^|\/)claude/i.test(modelId) || /anthropic\/claude/i.test(modelId);
+  }
+
+  private cloneMessageForRequest(message: any): any {
+    return {
+      ...message,
+      content: Array.isArray(message?.content)
+        ? message.content.map((block: any) => ({ ...block }))
+        : message?.content,
+    };
+  }
+
+  private attachCacheControlToContent(content: any): any {
+    const cacheControl = { type: "ephemeral" as const };
+    if (typeof content === "string") {
+      const text = content.trim();
+      if (!text) return content;
+      return [{ type: "text", text: content, cache_control: cacheControl }];
+    }
+
+    if (!Array.isArray(content)) return content;
+    const blocks = content.map((block: any) => ({ ...block }));
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const block = blocks[i];
+      if (block?.type === "text" && typeof block.text === "string" && block.text.trim()) {
+        blocks[i] = { ...block, cache_control: cacheControl };
+        return blocks;
+      }
+    }
+    return content;
+  }
+
   /**
-   * Attach a cache_control breakpoint on the last message that's at least 4
-   * messages old. Recent messages stay uncached (they change each turn),
-   * everything before them is served from cache at ~10x discount.
-   *
-   * This mutates the messages — but only via a shallow copy of the target
-   * block, so the caller's messages array stays clean for subsequent iters.
+   * Anthropic prompt caching only works when we send explicit cache_control
+   * breakpoints. Use one breakpoint for the large stable system prompt and up
+   * to three more for older conversation turns. Recent turns are left uncached
+   * because they change every iteration.
    */
-  /** @deprecated No longer used — OpenRouter handles caching transparently. */
-  private applyCacheBreakpoint(messages: any[]): any[] {
-    return messages;
+  private applyCacheBreakpoint(modelId: string, systemPrompt: string, messages: any[]): any[] {
+    if (!this.isClaudeModel(modelId)) {
+      return [
+        { role: "system", content: systemPrompt },
+        ...messages,
+      ];
+    }
+
+    const requestMessages = [
+      { role: "system", content: this.attachCacheControlToContent(systemPrompt) },
+      ...messages.map(message => this.cloneMessageForRequest(message)),
+    ];
+
+    let remainingBreakpoints = 3;
+    const newestCacheableIndex = requestMessages.length - 4;
+    for (let i = newestCacheableIndex; i >= 1 && remainingBreakpoints > 0; i--) {
+      const msg = requestMessages[i] as any;
+      if (!msg?.content) continue;
+      const cachedContent = this.attachCacheControlToContent(msg.content);
+      if (cachedContent === msg.content) continue;
+      msg.content = cachedContent;
+      remainingBreakpoints--;
+    }
+
+    return requestMessages;
   }
 
   private pruneConversation(messages: any[]): void {
@@ -1998,7 +3182,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
           }
 
           // UI-only tool calls on old turns — shrink the input
-          if (block.name === "check_todo" || block.name === "set_progress") {
+          if (block.name === "set_progress") {
             block.input = {};
           }
         }
@@ -2082,14 +3266,17 @@ The user will visually verify. If this was your final action, in your NEXT turn 
       case "db": return `${args.operation}(${args.key || ""})${args.value ? ", " + JSON.stringify(args.value).substring(0, 60) : ""}`;
       case "telegram_api": return args.method || "";
       case "load_skill": return args.name || "";
-      // case "server_logs": return `${args.lines || 30} lines`;  // disabled
+      case "technical_plan": return args.kind || "";
+      case "server_logs": return `${args.lines || 50} lines`;
+      case "simulate_telegram": return (args.update?.message?.text || args.update?.callback_query?.data || "update").substring(0, 60);
+      case "simulate_api": return `${args.method || "GET"} /${args.path || ""}`;
+      case "simulate_ws": return `${(args.messages || []).length || 0} message(s)`;
       case "deploy_to_dev": return "";
-      case "check_todo": return `task #${args.id}`;
       case "set_progress": return `${args.percent}%`;
-      case "create_todo": return `${(args.items || []).length} items`;
       case "ask_user": return (args.question || "").substring(0, 60);
       case "finish": return (args.shortSummary || "").split("\n")[0].substring(0, 80);
       case "configure_bot": return `name=${args.name || "(none)"}, desc=${(args.description || "").substring(0, 30)}..., menu=${args.menuButtonText || "Launch App"}`;
+      case "set_bot_commands": return `${(args.commands || []).length} command(s)`;
       case "done": return (args.summary || "").substring(0, 80);
       case "short_summary": return (args.text || "").substring(0, 80);
       case "summary": return (args.text || "").substring(0, 80);

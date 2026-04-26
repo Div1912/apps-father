@@ -16,18 +16,24 @@ export async function verifyInitData(req: Request, res: Response, next: NextFunc
 
   (req as any).projectId = projectId;
 
-  // If no initData provided, allow the request but without user context
-  // This enables testing via direct URL and graceful fallback
+  // If no initData at all — allow through, but no user context.
   if (!initData) {
-    console.log(`[InitData] No initData for ${req.method} ${req.url} - allowing without auth`);
     next();
     return;
+  }
+
+  // Always parse the user out of initData so req.telegramUser is populated
+  // even when we cannot verify the signature (no bot token yet, dev mode, etc.)
+  // HMAC verification is still attempted and logged, but never blocks the request.
+  const parsedUser = parseInitDataUser(initData);
+  if (parsedUser) {
+    (req as any).telegramUser = parsedUser;
   }
 
   try {
     const project = await projectService.getProject(projectId);
     if (!project?.botTokenEncrypted) {
-      // Project exists but no bot token - allow request anyway
+      // No bot token configured yet — user is set from raw initData above.
       next();
       return;
     }
@@ -36,20 +42,16 @@ export async function verifyInitData(req: Request, res: Response, next: NextFunc
     const isValid = validateTelegramInitData(initData, botToken);
 
     if (!isValid) {
-      console.log(`[InitData] Invalid initData for project ${projectId}`);
-      // Still allow the request - verification is best-effort for now
-      // In production with payments, this should return 401
-      next();
-      return;
+      console.log(`[InitData] Hash mismatch for project ${projectId} — allowing with unverified user`);
+    } else {
+      // Full parse when hash is valid (includes all fields, not just user).
+      const parsed = parseInitData(initData);
+      (req as any).telegramUser = parsed.user;
     }
-
-    const parsed = parseInitData(initData);
-    (req as any).telegramUser = parsed.user;
 
     next();
   } catch (err) {
     console.error("[InitData] Verification error:", err);
-    // Don't block on verification errors
     next();
   }
 }
@@ -94,4 +96,17 @@ function parseInitData(initData: string): any {
   }
 
   return result;
+}
+
+// Fast extraction of just the `user` object from initData — no crypto, used as
+// an unverified fallback when the project has no bot token configured yet.
+function parseInitDataUser(initData: string): any {
+  try {
+    const params = new URLSearchParams(initData);
+    const userStr = params.get("user");
+    if (!userStr) return null;
+    return JSON.parse(userStr);
+  } catch {
+    return null;
+  }
 }

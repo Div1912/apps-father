@@ -53,6 +53,7 @@
       title: "Feature Flags",
       desc:  "Kill switches and admin tools",
       fields: [
+        { key: "serviceMode",        label: "Service mode",         type: "bool", help: "Show maintenance page to all non-admin users in the Mini App." },
         { key: "disableNewSignups",  label: "Disable new signups",  type: "bool", help: "Block /start for unknown users." },
         { key: "disableNewProjects", label: "Disable new projects", type: "bool", help: "Block project creation site-wide." },
         { key: "allowAdminShell",    label: "Allow admin shell",    type: "bool", help: "Enable reveal-in-explorer / shell ops." },

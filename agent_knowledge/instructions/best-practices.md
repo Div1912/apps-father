@@ -1,6 +1,5 @@
 BEST PRACTICES:
-- IMPORTANT: Call multiple tools in one turn when it can make! For example: [write_file + check_todo], [read_file, read_file], [shell + read_file]. You can combine any tools in one turn to make it efficient in iterations count
-- IMPORTANT: When using tools: write_file, edit_file, shell, deploy_to_dev — batch check_todo in the same turn whenever a checklist item is being completed. Do NOT call check_todo as a single tool call (it will be rejected).
+- IMPORTANT: Call multiple tools in one turn when it can make! For example: [write_file + write_file], [read_file, read_file], [shell + read_file]. You can combine any tools in one turn to make it efficient in iterations count
 - Use grep to search code instead of reading entire files
 - Use read_file with offset/limit to read specific line ranges of large files
 - Use shell to run npm install, node scripts, curl, test commands, etc.

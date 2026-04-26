@@ -116,14 +116,15 @@ export class BillingService {
   async calculateCostAsync(model: string, usage: TokenUsage, operation?: string): Promise<number> {
     const livePricing = await getModelPricing(model);
     if (livePricing) {
+      // NOTE: usage.input_tokens here should already be fresh-only (cached tokens subtracted
+      // by the caller). cache_read_input_tokens holds the cached portion billed at the
+      // discounted cache_read rate. OpenRouter exposes per-model cache pricing; fall back to
+      // 0.1x / 1.25x of prompt price when not available.
       return this.calculateCostWithPricing({
         input: livePricing.promptPerToken,
         output: livePricing.completionPerToken,
-        // OpenRouter catalog exposes prompt/completion price. Cached prompt
-        // discounts are provider-specific; use prompt price unless usage
-        // details are already folded into provider usage.
-        cache_write: livePricing.promptPerToken,
-        cache_read: livePricing.promptPerToken,
+        cache_write: livePricing.cacheWritePerToken || livePricing.promptPerToken * 1.25,
+        cache_read: livePricing.cacheReadPerToken || livePricing.promptPerToken * 0.1,
       }, usage, operation);
     }
     return this.calculateCost(model, usage, operation);

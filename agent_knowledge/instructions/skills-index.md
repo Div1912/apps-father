@@ -2,6 +2,7 @@ AVAILABLE SKILLS (load via load_skill tool when relevant):
 - frontend — deep frontend patterns (routing, state, event handling)  [load if you need reference]
 - backend — Express + db patterns (auth, middleware, error handling)  [load if you need reference]
 - bot-management — bot webhook patterns, /start params, callback buttons, push notifications  [load if custom bot behavior needed]
+- textbot — Text Bot complete reference: state machine, db persistence, multi-step conversations, deduplication  [REQUIRED for kind=textBot — load before writing any routes.js]
 - websocket — WebSocket handler patterns, reconnection, broadcast  [load if app is real-time]
 - telegram-stars — Telegram Stars (XTR) in-app payment flow: createInvoiceLink, openInvoice, pre_checkout/successful_payment  [load if the app sells anything for Stars]
 - referrals — referral / invite system: share link, /start param attribution, dual mini-app + bot path tracking, bonuses  [load if the app has invites/referrals]

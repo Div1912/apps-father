@@ -90,7 +90,7 @@ const API_BASE = '/api/{PROJECT_ID}';
 async function apiCall(endpoint, options = {}) {
   const headers = {
     'Content-Type': 'application/json',
-    'Authorization': 'Bearer ' + (Telegram.WebApp?.initData || ''),
+    'x-telegram-init-data': Telegram.WebApp?.initData || '',
     ...(options.headers || {})
   };
   const response = await fetch(API_BASE + endpoint, { ...options, headers });

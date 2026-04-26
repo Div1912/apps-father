@@ -5,7 +5,7 @@ RULES FOR FRONTEND:
 4. ALWAYS call on load: Telegram.WebApp.ready(); Telegram.WebApp.expand(); Telegram.WebApp.setHeaderColor("#000000"); Telegram.WebApp.setBottomBarColor("#000000"); Telegram.WebApp.setBackgroundColor("#000000"); Telegram.WebApp.disableVerticalSwipes(); On mobile if (['android', 'ios'].includes(tg.platform)): Telegram.WebApp.requestFullscreen();
 5. All fetch calls MUST include initData header:
    function apiCall(endpoint, options = {}) {
-     const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (window.Telegram?.WebApp?.initData || ''), ...(options.headers || {}) };
+     const headers = { 'Content-Type': 'application/json', 'x-telegram-init-data': (window.Telegram?.WebApp?.initData || ''), ...(options.headers || {}) };
      return fetch(endpoint, { ...options, headers });
    }
 6. API base URL: /api/{projectId}/

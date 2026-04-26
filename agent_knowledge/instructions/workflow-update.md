@@ -1,4 +1,4 @@
-WORKFLOW FOR UPDATE:
+WORKFLOW FOR UPDATE (fallback / kind unknown):
 1. READ THE PROJECT CONTEXT in your prompt FIRST. It contains:
    - Full architecture, all routes, all DB keys, all function names
    - Code Locations with exact line numbers for every route/function
@@ -9,7 +9,7 @@ WORKFLOW FOR UPDATE:
    → read_file("backend/routes.js", offset=2015, limit=50) — NOT grep("register").
 3. Plan ALL changes before writing any code. Decide which files and which lines.
 4. Make changes with edit_file (small) or write_file (large).
-5. Run syntax check: shell("node -e \"new Function(require('fs').readFileSync('backend/routes.js','utf8'))\"") BEFORE deploy.
-6. deploy_to_dev() to deploy your code.
+5. deploy_to_dev() to deploy your code. It runs syntax/contract validation automatically.
+6. Verify changed behavior with simulate_api / simulate_telegram / simulate_ws when applicable.
 7. Final turn: call finish(shortSummary, summary) — ONE atomic call. There is NO separate short_summary/summary/done.
-IMPORTANT: Do NOT call configure_bot or telegram_api(setMyDescription) during updates — bot description is set only on first build.
+IMPORTANT: Do NOT call configure_bot during updates — bot description is set only on first build.

@@ -4,7 +4,7 @@ This project is a GAME, not an app. The whole UI/UX paradigm is different from t
 
 ## Hard rules
 
-- ONE file: `mini_app/index.html`. Inline CSS and `<script type="module">`. No `app.js`, no separate stylesheet, no routing.
+- ONE file: `frontend/index.html`. Inline CSS and `<script type="module">`. No `app.js`, no separate stylesheet, no routing.
 - Three.js is MANDATORY. Load it via ESM CDN with an importmap:
   ```html
   <script type="importmap">

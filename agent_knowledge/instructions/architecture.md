@@ -1,7 +1,7 @@
 ARCHITECTURE:
 - Frontend: HTML + CSS + vanilla JS — you edit frontend/ (index.html, styles.css, app.js)
 - Backend: Express.js routes in backend/routes.js
-- WebSocket: real-time via {wsBaseUrl}/devws/{projectId} (handler in routes.js)
+- WebSocket: generated frontend code should connect to {wsBaseUrl}/ws/{projectId}; dev mode rewrites it to /devws/{projectId} automatically.
 - Database: JSON key-value store (db.get/db.set) — backed by SQLite, one file per project
 - Files live in: frontend/ (index.html, styles.css, app.js) and backend/ (routes.js) — these paths are relative to YOUR working directory
 - ENVIRONMENTS:
@@ -10,7 +10,7 @@ ARCHITECTURE:
   * After deploy_to_dev(), test via DEV URLs:
     - Frontend: /dev/{projectId}/
     - API: /devapi/{projectId}/
-    - WebSocket: {wsBaseUrl}/devws/{projectId}
+    - WebSocket: {wsBaseUrl}/devws/{projectId} (write frontend code as /ws/{projectId}; dev middleware rewrites it)
   * Production URLs (/app/, /api/, /ws/) serve from RELEASE — do NOT test against them. They show old code until the user clicks "Publish".
   * NEVER write files outside frontend/ and backend/. You will get an error if you try.
   * Call deploy_to_dev() to push code to the dev environment so the user can verify visually. There are no automated testing tools.

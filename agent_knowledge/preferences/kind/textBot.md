@@ -1,16 +1,16 @@
 KIND = Text Bot (no Mini App, backend-only).
 
-This project is a TELEGRAM BOT, not an app or a game. There is NO Mini App, NO frontend, NO `mini_app/` folder, NO `index.html`. All UX is delivered through the Telegram Bot API: messages, reply keyboards, inline buttons, slash commands. The user interacts with the bot in their normal Telegram chat — never in a WebApp viewport.
+This project is a TELEGRAM BOT, not an app or a game. There is NO Mini App, NO frontend, NO `frontend/` folder, NO `index.html`. All UX is delivered through the Telegram Bot API: messages, reply keyboards, inline buttons, slash commands. The user interacts with the bot in their normal Telegram chat — never in a WebApp viewport.
 
 The bot token is ALREADY linked at the moment you start planning (the user created the bot in BotFather before triggering the build), so `db.botToken` and `db.botUsername` are non-empty from turn 1. Use them.
 
 ## Hard rules
 
-- BUILD only `backend/routes.js`. Do NOT create `mini_app/index.html`, `mini_app/app.js`, `mini_app/styles.css`, or any HTML/CSS file. If you find yourself writing `<html>` you have misunderstood the project.
+- BUILD only `backend/routes.js`. Do NOT create `frontend/index.html`, `frontend/app.js`, `frontend/styles.css`, or any HTML/CSS file. If you find yourself writing `<html>` you have misunderstood the project.
 - `routes.js` MUST export `router.post("/bot-webhook", async (req, res) => { ... })` — exact path string, no variants. The platform forwards every Telegram `update` to this route. See the bot-management skill for the full webhook contract.
 - `/start` is the entry point. Always answer it with a welcome message and the initial keyboard for the user's first state.
 - `configure_bot(name, description, shortDescription, menuButtonText)` — pass `menuButtonText: ""` (empty string) and DO NOT set `menuButtonUrl`. Text bots have no Mini App, so the chat menu button must stay on Telegram's default ("Menu" / commands list). The platform clears any stale menu button automatically when `kind === "textBot"`, but you should also pass `""` explicitly so the intent is in the prompt and the agent log.
-- `setMyCommands` via `telegram_api` for the slash-command menu (`/start`, `/help`, plus whatever the bot does). Always include `/start` and `/help`.
+- `set_bot_commands({ commands: [...] })` for the slash-command menu (`/start`, `/help`, plus whatever the bot does). Always include `/start` and `/help`.
 - Use `db.botToken` to call Telegram Bot API (`https://api.telegram.org/bot${db.botToken}/sendMessage` etc.) directly with `fetch`. Do NOT install a bot library — fetch is enough and it keeps the bundle tiny.
 
 ## Forbidden
@@ -21,19 +21,62 @@ The bot token is ALREADY linked at the moment you start planning (the user creat
 - Importing `express` directly. The project receives `router` and `db` and `fetch` from the platform — use them.
 - Using `setMyCommands` to list commands that you don't actually handle in `/bot-webhook`. Every command in the menu MUST have a handler.
 
-## State persistence
+## State persistence — CRITICAL
 
-User state lives in `db.userState`, a JSON object keyed by Telegram user ID. The platform persists `db` automatically between requests.
+**The `db` object and the `routes.js` module are recreated from scratch on every webhook call.** Direct property assignments like `db.userState = {}` or `db.anything = value` are lost immediately after the request ends. The ONLY persistence layer is `db.get(key)` / `db.set(key, value)`, which write to SQLite on disk.
+
+### ✅ CORRECT — use db.get / db.set for user state
 
 ```js
-const uid = update.message?.from?.id || update.callback_query?.from?.id;
-db.userState ??= {};
-db.userState[uid] ??= { step: "idle", language: update.message?.from?.language_code || "en" };
-const state = db.userState[uid];
-// ... read/write state.step, state.cart, etc. ...
+function getOrCreateUserState(uid, lang) {
+  const state = db.get("state:" + uid);
+  if (state) return state;
+  const fresh = { step: "idle", lang: (lang || "en").startsWith("ru") ? "ru" : "en" };
+  db.set("state:" + uid, fresh);
+  return fresh;
+}
+
+function saveState(uid, state) {
+  db.set("state:" + uid, state);
+}
 ```
 
-For collections that aren't user-keyed (a global product catalog, scheduled broadcasts, etc.), use top-level `db` keys: `db.products`, `db.broadcasts`. Initialise with `db.products ??= [...]`.
+Usage — always call `saveState` after mutating state:
+
+```js
+const uid = String(msg.from.id);
+const state = getOrCreateUserState(uid, msg.from.language_code);
+
+// mutate, then ALWAYS persist:
+state.step = "setup_name";
+saveState(uid, state);
+```
+
+### ❌ WRONG — never store state as a direct db property
+
+```js
+// This is wiped after every request — NEVER do this:
+db.userState ??= {};
+db.userState[uid] = { step: "idle" };
+
+// Also wrong:
+db.products ??= [];
+db.cart = [];
+```
+
+### Collections (global, not user-keyed)
+
+For global data (catalogs, broadcast lists, etc.) use named keys through `db.get`/`db.set`:
+
+```js
+// Read:
+const products = db.get("products") || [];
+
+// Write:
+const products = db.get("products") || [];
+products.push(newItem);
+db.set("products", products);
+```
 
 ## Webhook handler shape
 
@@ -110,7 +153,7 @@ configure_bot({
 })
 ```
 
-Then call `telegram_api("setMyCommands", { commands: [...] })` with the full command list.
+Then call `set_bot_commands({ commands: [...] })` with the full command list.
 
 ## Messaging rules
 
@@ -122,9 +165,12 @@ Then call `telegram_api("setMyCommands", { commands: [...] })` with the full com
 - For lists with > 10 items, paginate with inline buttons.
 - Never send more than one message per user action — squash into one `editMessageText` if you're updating an existing card.
 
-## Mandatory skill
+## Mandatory skills
 
-Read `agent_knowledge/skills/bot-management.md` BEFORE writing the webhook. It documents the exact `/bot-webhook` contract, payment handling, deep links, and the platform's pre-emptive `/start` behaviour. The Text Bot workflow extends that skill, it does not replace it.
+Load BOTH skills before writing any code:
+
+1. `load_skill("textbot")` — state persistence rules, multi-step conversation scaffold, deduplication. **This is the most important skill for Text Bots.** The db persistence model is non-obvious and getting it wrong means all user state resets on every message.
+2. `load_skill("bot-management")` — `/bot-webhook` contract, payment handling, deep links, platform's pre-emptive `/start` behaviour.
 
 ## Aesthetic / tone
 

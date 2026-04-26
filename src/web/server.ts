@@ -47,6 +47,72 @@ let expressApp: express.Application | null = null;
 let httpServer: http.Server | null = null;
 const avatarCache = new Map<string, string>();
 
+/**
+ * Forward an AgentProgress to the mini-app over the project WebSocket.
+ *
+ * If `p.event` is set, we emit one of the structured events:
+ *   `agent_step_start` | `agent_step_end`
+ *   `agent_narration_start` | `agent_narration_chunk` | `agent_narration_end`
+ *
+ * Otherwise we emit the legacy `progress` event (and update the chat row),
+ * keeping older mini-app builds working unchanged.
+ *
+ * Returns `true` if this was a structured event (caller should NOT also do the
+ * legacy "update progress chat row" work for it).
+ */
+function forwardAgentProgress(
+  projectId: string,
+  progressMsgId: string,
+  p: AgentProgress,
+  checklist: { id: number; text: string; done: boolean }[],
+): boolean {
+  if (!p.event) return false;
+  const base: any = {
+    projectId,
+    messageId: progressMsgId,
+    stepId: p.stepId,
+    costUsd: p.costUsd,
+    balance: p.balance,
+  };
+  switch (p.event) {
+    case "step_start":
+      broadcastToProject(projectId, {
+        ...base,
+        type: "agent_step_start",
+        kind: p.kind,
+        title: p.title,
+        toolName: p.toolName,
+        target: p.target,
+        checklist,
+      });
+      break;
+    case "step_end":
+      broadcastToProject(projectId, {
+        ...base,
+        type: "agent_step_end",
+        status: p.status,
+        meta: p.meta,
+        checklist,
+      });
+      break;
+    case "narration_start":
+      broadcastToProject(projectId, { ...base, type: "agent_narration_start" });
+      break;
+    case "narration_chunk":
+      broadcastToProject(projectId, {
+        ...base,
+        type: "agent_narration_chunk",
+        delta: p.delta,
+        text: p.text,
+      });
+      break;
+    case "narration_end":
+      broadcastToProject(projectId, { ...base, type: "agent_narration_end" });
+      break;
+  }
+  return true;
+}
+
 
 export function createWebServer() {
   const app = express();
@@ -403,7 +469,13 @@ export function createWebServer() {
         void sendBotWelcome(auth.telegramId!, lang, startParam || null);
       }
 
-      res.json({ ok: true, isNew, utmSource: user.utmSource });
+      res.json({
+        ok: true,
+        isNew,
+        utmSource: user.utmSource,
+        serviceMode: runtimeConfig.isServiceMode(),
+        isAdmin: isAdminTelegramId(auth.telegramId),
+      });
     } catch (err: any) {
       console.error("[MiniApp API] Init error:", err);
       res.status(500).json({ error: "Internal error" });
@@ -1028,6 +1100,7 @@ export function createWebServer() {
             let progressDone = false;
             const onProgress = async (p: AgentProgress) => {
               if (!progressMsgId || progressDone) return;
+              if (forwardAgentProgress(projectId, progressMsgId, p, items)) return;
               if ((p.percent ?? 0) >= 100) { progressDone = true; return; }
               chatService.updateMessage(projectId, progressMsgId, {
                 content: `${p.action} ${p.detail}`,
@@ -1070,28 +1143,6 @@ export function createWebServer() {
               });
             };
 
-            const onCreateTodo = async (todoItems: string[]) => {
-              items = todoItems.map((t, i) => ({ id: i + 1, text: t, done: false }));
-              if (progressMsgId) {
-                chatService.updateMessage(projectId, progressMsgId, { checklist: items });
-                broadcastToProject(projectId, {
-                  type: "progress", projectId, messageId: progressMsgId, checklist: items,
-                });
-              }
-            };
-
-            const onCheckTodo = async (id: number) => {
-              if (id >= 1 && id <= items.length) {
-                items[id - 1].done = true;
-                if (progressMsgId) {
-                  chatService.updateMessage(projectId, progressMsgId, { checklist: items });
-                  broadcastToProject(projectId, {
-                    type: "progress", projectId, messageId: progressMsgId, checklist: items,
-                  });
-                }
-              }
-            };
-
             const attachments = userMsg.attachments?.map((a: any) => ({
               localPath: a.path,
               projectPath: `frontend/assets/${a.name}`,
@@ -1100,7 +1151,7 @@ export function createWebServer() {
 
             const result = await agentService.updateApp(
               projectId, text.trim(), onProgress, attachments,
-              onAskUser, onCreateTodo, onCheckTodo, lang, currentBalance,
+              onAskUser, lang, currentBalance,
             );
 
             const usage = await billingService.recordUsage(
@@ -1353,30 +1404,13 @@ export function createWebServer() {
           let progressDone = false;
           const onProgress = async (p: AgentProgress) => {
             if (!progressMsgId || progressDone) return;
+            if (forwardAgentProgress(projectId, progressMsgId, p, items)) return;
             if ((p.percent ?? 0) >= 100) { progressDone = true; return; }
             chatService.updateMessage(projectId, progressMsgId, { content: `${p.action} ${p.detail}`, percent: p.percent, costUsd: p.costUsd, balance: p.balance });
             broadcastToProject(projectId, { type: "progress", projectId, messageId: progressMsgId, percent: p.percent, message: `${p.action} ${p.detail}`, checklist: items, costUsd: p.costUsd, balance: p.balance });
           };
 
-          const onCreateTodo = async (todoItems: string[]) => {
-            items = todoItems.map((t, i) => ({ id: i + 1, text: t, done: false }));
-            if (progressMsgId) {
-              chatService.updateMessage(projectId, progressMsgId, { checklist: items });
-              broadcastToProject(projectId, { type: "progress", projectId, messageId: progressMsgId, checklist: items });
-            }
-          };
-
-          const onCheckTodo = async (id: number) => {
-            if (id >= 1 && id <= items.length) {
-              items[id - 1].done = true;
-              if (progressMsgId) {
-                chatService.updateMessage(projectId, progressMsgId, { checklist: items });
-                broadcastToProject(projectId, { type: "progress", projectId, messageId: progressMsgId, checklist: items });
-              }
-            }
-          };
-
-          const result = await agentService.updateApp(projectId, errorText, onProgress, [], undefined, onCreateTodo, onCheckTodo, ownerLang, currentBalance);
+          const result = await agentService.updateApp(projectId, errorText, onProgress, [], undefined, ownerLang, currentBalance);
 
           const usage = await billingService.recordUsage(
             owner.id, projectId, result.model,
@@ -1599,6 +1633,7 @@ export function createWebServer() {
           let progressDone = false;
           const onProgress = async (p: AgentProgress) => {
             if (!progressMsgId || progressDone) return;
+            if (forwardAgentProgress(projectId, progressMsgId, p, items)) return;
             if ((p.percent ?? 0) >= 100) { progressDone = true; return; }
             chatService.updateMessage(projectId, progressMsgId, {
               content: `${p.action} ${p.detail}`, percent: p.percent, costUsd: p.costUsd, balance: p.balance,
@@ -1626,28 +1661,9 @@ export function createWebServer() {
             });
           };
 
-          const onCreateTodo = async (todoItems: string[]) => {
-            items = todoItems.map((t, i) => ({ id: i + 1, text: t, done: false }));
-            if (progressMsgId) {
-              chatService.updateMessage(projectId, progressMsgId, { checklist: items });
-              broadcastToProject(projectId, { type: "progress", projectId, messageId: progressMsgId, checklist: items });
-            }
-          };
-
-          const onCheckTodo = async (id: number) => {
-            if (id >= 1 && id <= items.length) {
-              items[id - 1].done = true;
-              if (progressMsgId) {
-                chatService.updateMessage(projectId, progressMsgId, { checklist: items });
-                broadcastToProject(projectId, { type: "progress", projectId, messageId: progressMsgId, checklist: items });
-              }
-            }
-          };
-
           const result = await agentService.buildApp(
             projectId, project.description || "", project.plan!,
-            onProgress, onAskUser,
-            onCreateTodo, onCheckTodo, buildLang, balance,
+            onProgress, onAskUser, buildLang, balance,
           );
 
           const usage = await billingService.recordUsage(

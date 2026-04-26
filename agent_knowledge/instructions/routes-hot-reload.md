@@ -1,5 +1,5 @@
 IMPORTANT - ROUTES HOT-RELOAD:
-Backend routes.js is reloaded on EVERY API request. You do NOT need to restart anything after editing routes.js. Changes take effect immediately on the next http_request test.
+Backend routes.js is reloaded on EVERY API request. You do NOT need to restart anything after editing routes.js. Changes take effect immediately on the next simulate_api test after deploy_to_dev.
 WebSocket handlers (module.exports.ws) are loaded once when the first client connects. To test WS changes, all clients must disconnect first (or reload the app).
 
 IMPORTANT - BACKGROUND TIMERS (setInterval / setTimeout) IN ROUTES.JS:

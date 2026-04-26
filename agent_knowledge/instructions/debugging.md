@@ -1,3 +1,3 @@
 DEBUGGING RULES:
 - If you cannot fix a bug after 5 attempts, call finish() with a summary explaining the issue — do NOT keep retrying the same approach
-- Trust your code; the user verifies visually after deploy_to_dev. There are no testing tools available.
+- Use server_logs, simulate_telegram, simulate_api, and simulate_ws when they apply. The user still verifies visuals, but backend/bot/realtime behavior must be tested with tools before finish.

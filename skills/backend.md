@@ -64,30 +64,56 @@ router.post('/user', (req, res) => {
 });
 ```
 
-## Getting User from InitData
+## Getting the Authenticated User (CRITICAL — read carefully)
+
+The platform middleware ALREADY verifies Telegram initData (HMAC-SHA256) before your routes.js runs.
+After verification it sets `req.telegramUser` with the trusted user object.
+
+**ALWAYS use this helper — never use req.query.telegramId or re-parse initData:**
 
 ```js
-function getUserId(req) {
-  try {
-    const authHeader = req.headers.authorization || '';
-    const initData = authHeader.replace('Bearer ', '');
-    const params = new URLSearchParams(initData);
-    const userStr = params.get('user');
-    if (userStr) {
-      const user = JSON.parse(decodeURIComponent(userStr));
-      return user.id?.toString();
-    }
-  } catch {}
-  return null;
+// Returns { telegramId, firstName, username } or null if not authenticated.
+// This relies on platform middleware that verified the Telegram signature.
+function getUser(req) {
+  const u = req.telegramUser;
+  if (!u || !u.id) return null;
+  return {
+    telegramId: String(u.id),
+    firstName: u.first_name || '',
+    username: u.username || '',
+  };
 }
+```
 
+**Usage in routes:**
+
+```js
 router.get('/me', (req, res) => {
-  const telegramId = getUserId(req);
-  if (!telegramId) return res.status(401).json({ error: 'Unauthorized' });
-  const user = db.get('user:' + telegramId);
-  if (!user) return res.status(404).json({ error: 'User not found' });
+  const auth = getUser(req);
+  if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+
+  const user = db.get('user:' + auth.telegramId) || getOrCreateUser(db, auth.telegramId, auth.username, auth.firstName);
   res.json(user);
 });
+
+router.post('/action', (req, res) => {
+  const auth = getUser(req);
+  if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+  // use auth.telegramId safely
+});
+```
+
+**FORBIDDEN patterns — never do these:**
+```js
+// ❌ WRONG — anyone can pass any telegramId, completely insecure
+const telegramId = req.query.telegramId;
+const telegramId = req.body.telegramId;
+
+// ❌ WRONG — platform already verified initData, don't re-parse manually
+const params = new URLSearchParams(req.headers.authorization);
+
+// ✅ CORRECT — always use req.telegramUser via getUser(req)
+const auth = getUser(req);
 ```
 
 ## Update a Record + Leaderboard
@@ -278,6 +304,7 @@ async function sendNotification(chatId, text) {
 ```
 
 ## IMPORTANT RULES
+- **AUTH**: ALWAYS use `getUser(req)` → `req.telegramUser`. NEVER trust `req.query.telegramId` or `req.body.telegramId` for auth — they are spoofable by anyone.
 - NEVER store users in a single array key. Use `db.get('user:' + telegramId)` per-user keys
 - NEVER load all users to find one. Direct key lookup: `db.get('user:' + id)`
 - NEVER compute leaderboards on read. Pre-compute on score change, read from `leaderboard` key

@@ -26,8 +26,10 @@ export function getOpenRouterClient(): OpenAI {
  * calculation. Refreshed lazily at most once per hour.
  */
 interface ORModelPricing {
-  promptPerToken: number;   // USD per input token
-  completionPerToken: number; // USD per output token
+  promptPerToken: number;       // USD per input token (fresh)
+  completionPerToken: number;   // USD per output token
+  cacheReadPerToken: number;    // USD per cached input token (0 if not supported)
+  cacheWritePerToken: number;   // USD per cache-write token (0 if not supported)
 }
 
 const pricingCache = new Map<string, ORModelPricing>();
@@ -58,9 +60,15 @@ export async function fetchOpenRouterPricing(): Promise<Map<string, ORModelPrici
       // Admin UI multiplies this by 1M only for display.
       const promptPerToken = Number(m.pricing?.prompt) || 0;
       const completionPerToken = Number(m.pricing?.completion) || 0;
+      // Cache read/write prices — OpenRouter exposes these for models that support
+      // provider-level caching (e.g. MiniMax, Anthropic via OpenRouter, etc.)
+      const cacheReadPerToken = Number(m.pricing?.input_cache_read) || 0;
+      const cacheWritePerToken = Number(m.pricing?.input_cache_write) || 0;
       pricingCache.set(m.id as string, {
         promptPerToken,
         completionPerToken,
+        cacheReadPerToken,
+        cacheWritePerToken,
       });
     }
     pricingCacheTs = now;

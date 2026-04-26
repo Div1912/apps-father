@@ -66,7 +66,7 @@ setUpdateHandler  ❌ — there is no such concept; you only react to forwarded 
 ```
 
 If you want updates → **define `POST /bot-webhook`** and process the body.
-If you want to display things in the BotFather "menu" or set the bot's profile copy → use `setMyCommands`, `setMyDescription`, `setMyShortDescription`, `setChatMenuButton` via the `telegram_api` tool. These are profile/configuration calls, not webhook calls.
+If you want to display commands in the BotFather "/" menu → use the `set_bot_commands` tool. For bot name/description/menu button → use `configure_bot`. These are profile/configuration calls, not webhook calls.
 
 ---
 
@@ -75,7 +75,7 @@ If you want to display things in the BotFather "menu" or set the bot's profile c
 | The user wants… | Pattern |
 |---|---|
 | Just a button in the chat menu that opens the Mini App | **Pattern A** — `setChatMenuButton` only, no `/bot-webhook` |
-| A list of commands shown in the `/` menu, clicking each one opens the Mini App | **Pattern A** — `setMyCommands` + the platform default `/start` handler is fine |
+| A list of commands shown in the `/` menu, clicking each one opens the Mini App | **Pattern A** — `set_bot_commands` + the platform default `/start` handler is fine |
 | Custom replies to `/help`, `/balance`, `/leaderboard`, etc. directly from the bot (no Mini App round-trip) | **Pattern B** — define `/bot-webhook` |
 | Read `/start <ref_code>` deep-link parameter to attribute a referral / promo | **Pattern B** — `/bot-webhook` parses `text` |
 | Inline-keyboard buttons with `callback_data` (Like / Vote / Confirm) | **Pattern B** — `/bot-webhook` handles `callback_query` |
@@ -88,12 +88,12 @@ You can combine all of them in a single project.
 
 ## 3. Pattern A — Profile / commands menu only
 
-These are one-shot configuration calls. Run them via the `telegram_api` tool **on first build only**, not on updates.
+These are one-shot configuration calls. Run them via `configure_bot` and `set_bot_commands` **on first build only**, not on updates.
 
 ```js
-// During first build, in agent (use telegram_api tool calls IN PARALLEL):
+// During first build, in agent:
 
-telegram_api("setMyCommands", {
+set_bot_commands({
   commands: [
     { command: "start",       description: "Open the app" },
     { command: "help",        description: "How it works" },
@@ -105,22 +105,17 @@ telegram_api("setMyCommands", {
   // language_code: "en",
 })
 
-telegram_api("setMyDescription", {
+configure_bot({
+  name: "Tournament App",
   description: "Compete with friends in real-time tournaments. Open the app to play!",
-})
-
-telegram_api("setMyShortDescription", {
-  short_description: "Real-time tournaments inside Telegram.",
-})
-
-telegram_api("setChatMenuButton", {
-  menu_button: { type: "web_app", text: "Play", web_app: { url: "<APP_URL>" } },
+  shortDescription: "Real-time tournaments inside Telegram.",
+  menuButtonText: "Play"
 })
 ```
 
 Notes:
 - `setMyCommands` only **registers** the menu. Clicking `/help` still sends the literal text `/help` to the bot. If you actually want the bot to reply to `/help`, you also need Pattern B.
-- The platform already calls `setChatMenuButton` with a "Launch App" button when the agent calls `done()`, so you only need to override it if you want a different label or URL.
+- `configure_bot` sets the menu button atomically. Text Bot projects pass `menuButtonText: ""`.
 - Never put empty strings in `commands[].command` — Telegram returns `400 Bad Request`.
 
 ---
@@ -340,11 +335,9 @@ You can use `web_app` buttons in inline keyboards for direct mini-app launches (
 
 Whenever the project includes `/bot-webhook` or sets bot commands, **verify all of these**:
 
-### Build-time configuration (use `telegram_api` tool, in parallel)
-- [ ] `setMyCommands` — commands match what `/bot-webhook` actually handles. No phantom commands.
-- [ ] `setMyShortDescription` — one sentence, ≤120 chars (Telegram limit). Shown above the bot in chat list.
-- [ ] `setMyDescription` — 2–4 sentences, ≤512 chars. Shown on the bot's profile and on first /start.
-- [ ] `setChatMenuButton` — points to the project's mini-app URL (the platform sets a default — only override if you want different copy).
+### Build-time configuration
+- [ ] `set_bot_commands` — commands match what `/bot-webhook` actually handles. No phantom commands.
+- [ ] `configure_bot` — sets name, description, short description, and menu button atomically.
 
 ### Code quality inside `/bot-webhook`
 - [ ] Route is registered at the EXACT path `"/bot-webhook"` (hyphen, lowercase, no prefix). See section 0. If the path is anything else, the route silently never fires.
@@ -358,18 +351,10 @@ Whenever the project includes `/bot-webhook` or sets bot commands, **verify all 
 - [ ] All `tg(...)` calls swallow `403 Forbidden: bot was blocked by the user` — never crash the route.
 
 ### Verification (do this after `deploy_to_dev`)
-1. Confirm the webhook is healthy:
-   ```
-   telegram_api("getWebhookInfo", {})
-   ```
-   Expected: `result.url` set, `last_error_date` = absent or 0, `pending_update_count` ≤ a small number, `last_error_message` = null.
-   If `last_error_message` is set (e.g. "Wrong response from the webhook: 502"), your route is failing — read `server_logs` and fix.
-2. Confirm commands registered:
-   ```
-   telegram_api("getMyCommands", {})
-   ```
-3. Open the bot in Telegram and send `/start`, click the inline button, send `/help`, click a callback button. Each must respond within ~1 second.
-4. Test deep link by opening `https://t.me/<bot_username>?start=test123` and verifying the user record now has `startParam: "test123"`.
+1. Use `simulate_telegram` to send `/start`.
+2. Use `simulate_telegram` for `/help` and at least one callback button if the bot uses callbacks.
+3. Use `server_logs` after simulations to confirm there are no handler errors.
+4. Test deep links by simulating `/start test123` and verifying the user record now has `startParam: "test123"` if the bot tracks deep links.
 
 If any of the above fails, fix and redeploy before calling `done()`.
 

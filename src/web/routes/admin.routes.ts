@@ -1030,6 +1030,29 @@ router.get("/api/openrouter/models", authMiddleware, async (_req: Request, res: 
   }
 });
 
+router.get("/api/openrouter/models/:author/:slug/endpoints", authMiddleware, async (req: Request, res: Response) => {
+  const key = runtimeConfig.getOpenRouterApiKey() || config.openrouterApiKey;
+  if (!key) {
+    res.status(400).json({ error: "OpenRouter API key not configured" });
+    return;
+  }
+  const author = String(req.params.author || "");
+  const slug = String(req.params.slug || "");
+  try {
+    const r = await fetch(`https://openrouter.ai/api/v1/models/${encodeURIComponent(author)}/${encodeURIComponent(slug)}/endpoints`, {
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    if (!r.ok) {
+      res.status(r.status).json({ error: `OpenRouter returned ${r.status}` });
+      return;
+    }
+    const data = await r.json();
+    res.json(data);
+  } catch (err: any) {
+    res.status(502).json({ error: `Failed to fetch endpoints: ${err.message}` });
+  }
+});
+
 router.get(/^\/(?!api(\/|$)).*/, (_req: Request, res: Response) => {
   const indexPath = path.join(ADMIN_DIR, "index.html");
   if (!fs.existsSync(indexPath)) {

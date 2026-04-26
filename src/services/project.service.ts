@@ -277,7 +277,7 @@ export class ProjectService {
   }
 
   async getUserByUsername(username: string) {
-    return prisma.user.findFirst({ where: { username } });
+    return prisma.user.findFirst({ where: { username: { equals: username, mode: "insensitive" } } });
   }
 
   async transferProject(projectId: string, newOwnerId: number) {

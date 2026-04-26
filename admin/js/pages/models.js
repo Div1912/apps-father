@@ -13,6 +13,8 @@ window.AdminPages.models = {
   let orModels = [];    // [{id, name, pricing:{prompt,completion}}] from OR catalog
   let runtimeCfg = {}; // current runtimeConfig from /admin/api/config
   let toast = null;
+  // Cache: modelId → provider names array (or null if fetch failed)
+  const providersByModelId = new Map();
 
   const ACTION_TYPES = [
     { key: "plan",         label: "Plan",           hasIter: false, hasThink: false },
@@ -168,6 +170,7 @@ window.AdminPages.models = {
     const modelConfigs = runtimeCfg.modelConfigs || {};
     tbody.innerHTML = ACTION_TYPES.map(at => renderRow(at, modelConfigs[at.key] || {})).join('');
     attachRowEvents();
+    prefetchProviders();
   }
 
   function renderRow(at, cfg) {
@@ -200,8 +203,10 @@ window.AdminPages.models = {
           <input list="${providerDatalistId}" class="input models-provider-input" data-field="provider"
             value="${esc(provider)}" placeholder="Auto" title="OpenRouter provider name, e.g. Minimax. Empty = auto/fallback by model." />
           <datalist id="${providerDatalistId}">
+            <option value="">Auto</option>
             ${PROVIDER_OPTIONS.map(p => `<option value="${esc(p)}"></option>`).join('')}
           </datalist>
+          <span class="models-provider-note" style="display:none;font-size:10px;color:#f8a;margin-top:2px;"></span>
         </td>
         <td><span class="models-price-cell" data-pricetype="in">${inPriceM}</span></td>
         <td><span class="models-price-cell" data-pricetype="out">${outPriceM}</span></td>
@@ -224,12 +229,73 @@ window.AdminPages.models = {
     `;
   }
 
+  // ── Provider fetching ─────────────────────────────────────────────────────
+
+  /**
+   * Populate the per-row provider datalist from the OpenRouter endpoints API.
+   * Caches results in `providersByModelId`. If the fetch fails, falls back to
+   * PROVIDER_OPTIONS and shows a small note next to the input.
+   */
+  async function fetchAndPopulateProviders(row, modelId) {
+    if (!modelId || !modelId.includes('/')) {
+      populateProviderDatalist(row, PROVIDER_OPTIONS, false);
+      return;
+    }
+
+    if (providersByModelId.has(modelId)) {
+      const cached = providersByModelId.get(modelId);
+      populateProviderDatalist(row, cached || PROVIDER_OPTIONS, cached === null);
+      return;
+    }
+
+    const [author, ...slugParts] = modelId.split('/');
+    const slug = slugParts.join('/');
+
+    try {
+      const data = await Api.request(`/openrouter/models/${encodeURIComponent(author)}/${encodeURIComponent(slug)}/endpoints`);
+      const providers = (data?.data?.endpoints || [])
+        .map(e => e.provider_name)
+        .filter(Boolean)
+        .filter((v, i, a) => a.indexOf(v) === i);  // deduplicate
+
+      if (providers.length > 0) {
+        providersByModelId.set(modelId, providers);
+        populateProviderDatalist(row, providers, false);
+      } else {
+        providersByModelId.set(modelId, null);
+        populateProviderDatalist(row, PROVIDER_OPTIONS, false);
+      }
+    } catch {
+      providersByModelId.set(modelId, null);
+      populateProviderDatalist(row, PROVIDER_OPTIONS, true);
+    }
+  }
+
+  function populateProviderDatalist(row, providers, fetchFailed) {
+    const action = row.dataset.action;
+    const datalist = document.getElementById(`providers-${action}`);
+    const note = row.querySelector('.models-provider-note');
+    if (!datalist) return;
+
+    datalist.innerHTML = '<option value="">Auto</option>' +
+      providers.map(p => `<option value="${esc(p)}"></option>`).join('');
+
+    if (note) {
+      note.textContent = fetchFailed ? '⚠ using static list' : '';
+      note.style.display = fetchFailed ? '' : 'none';
+    }
+  }
+
   function attachRowEvents() {
-    // Update pricing display when model ID changes
+    // When model ID changes: update pricing + reload provider datalist (debounced)
+    const debounceTimers = {};
     document.querySelectorAll('.models-model-input').forEach(inp => {
       inp.addEventListener('input', e => {
         const row = e.target.closest('tr');
+        const action = row?.dataset?.action;
         const modelId = e.target.value.trim();
+
+        // Update pricing display immediately
         const orModel = orModels.find(m => m.id === modelId);
         const inCell  = row.querySelector('[data-pricetype="in"]');
         const outCell = row.querySelector('[data-pricetype="out"]');
@@ -240,12 +306,31 @@ window.AdminPages.models = {
           inCell.textContent  = '—';
           outCell.textContent = '—';
         }
+
+        // Debounced provider fetch (600ms after user stops typing)
+        clearTimeout(debounceTimers[action]);
+        debounceTimers[action] = setTimeout(() => {
+          fetchAndPopulateProviders(row, modelId);
+        }, 600);
       });
     });
 
     document.querySelectorAll('.models-save-row-btn').forEach(btn => {
       btn.addEventListener('click', () => saveRow(btn.dataset.action));
     });
+  }
+
+  // Pre-fetch providers for every row that already has a saved modelId
+  async function prefetchProviders() {
+    const rows = document.querySelectorAll('#models-tbody tr[data-action]');
+    for (const row of rows) {
+      const inp = row.querySelector('.models-model-input');
+      if (inp && inp.value.trim()) {
+        fetchAndPopulateProviders(row, inp.value.trim());
+        // stagger requests so we don't hammer OR API all at once
+        await new Promise(r => setTimeout(r, 120));
+      }
+    }
   }
 
   // ── Save helpers ───────────────────────────────────────────────────────────

@@ -3762,7 +3762,262 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
   background: rgba(255, 59, 48, 0.25);
 }
 
-/* Checklist in chat */
+/* ── Agent timeline: container ──────────────────────────────────────────────
+   Once the first agent_narration_* event arrives, the progress bubble is
+   converted to a transparent timeline wrapper. No percent bar, no checklist.  */
+
+.chat-bubble--progress.agent-process {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* ── Thinking block (per-iteration narration) ────────────────────────────── */
+.agent-think-block {
+  border-left: 2px solid rgba(36,139,218,0.35);
+  border-radius: 0 10px 10px 0;
+  background: rgba(36,139,218,0.06);
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+.agent-think-block.done  { border-left-color: rgba(52,199,89,0.45); background: rgba(52,199,89,0.04); }
+.agent-think-block.error { border-left-color: rgba(255,59,48,0.45); background: rgba(255,59,48,0.04); }
+
+/* Header row — always visible */
+.agent-think-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 8px 10px;
+  cursor: default;
+  user-select: none;
+  min-height: 36px;
+}
+.agent-think-block.done .agent-think-header,
+.agent-think-block.error .agent-think-header {
+  cursor: pointer;
+}
+.agent-think-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--description-text-color, #8e9baa);
+}
+.agent-think-block.done .agent-think-icon  { color: rgba(52,199,89,0.9); }
+.agent-think-block.error .agent-think-icon { color: rgba(255,90,80,0.9); }
+.agent-think-icon .step-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(36,139,218,0.22);
+  border-top-color: #248BDA;
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+  display: inline-block;
+}
+.agent-think-preview {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--description-text-color, #8e9baa);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-style: italic;
+}
+.agent-think-block.running .agent-think-preview { color: #5eb5f7; }
+.agent-think-toggle {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--description-text-color, #8e9baa);
+  transition: transform 0.2s;
+  display: none;
+}
+.agent-think-block.done .agent-think-toggle,
+.agent-think-block.error .agent-think-toggle {
+  display: block;
+}
+.agent-think-block.open .agent-think-toggle {
+  transform: rotate(90deg);
+}
+
+/* Body — collapsed by default, expanded when .open */
+.agent-think-body {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.25s ease;
+  font-size: 12.5px;
+  color: var(--text-color, #d8e4f0);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 0 12px 0 10px;
+}
+.agent-think-block.open .agent-think-body {
+  max-height: 600px;
+  padding-bottom: 10px;
+}
+/* Live streaming — show body while running */
+.agent-think-block.running .agent-think-body {
+  max-height: 300px;
+  padding-bottom: 8px;
+  overflow-y: auto;
+}
+
+/* ── Individual step card ────────────────────────────────────────────────── */
+.agent-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  font-size: 12px;
+  line-height: 1.4;
+  transition: background 0.15s, border-color 0.15s;
+  position: relative;
+  overflow: hidden;
+}
+.agent-step--running {
+  background: rgba(36,139,218,0.07);
+  border-color: rgba(36,139,218,0.2);
+}
+.agent-step--done {
+  background: rgba(52,199,89,0.04);
+  border-color: rgba(52,199,89,0.16);
+}
+.agent-step--error {
+  background: rgba(255,59,48,0.05);
+  border-color: rgba(255,59,48,0.18);
+}
+/* Ghost "still working" step — shown after all green steps while agent runs */
+.agent-step--ghost {
+  background: rgba(36,139,218,0.04);
+  border-color: rgba(36,139,218,0.12);
+  animation: ghost-pulse 1.8s ease-in-out infinite;
+}
+.agent-step--ghost .agent-step-icon { color: #5eb5f7; }
+.agent-step-title--ghost {
+  width: 40%;
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, rgba(94,181,247,0.15) 25%, rgba(94,181,247,0.3) 50%, rgba(94,181,247,0.15) 75%);
+  background-size: 200% 100%;
+  animation: ghost-shimmer 1.4s linear infinite;
+}
+@keyframes ghost-pulse {
+  0%, 100% { opacity: 0.6; }
+  50%       { opacity: 1; }
+}
+@keyframes ghost-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.agent-step--running::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(36,139,218,0.07) 40%,
+    rgba(36,139,218,0.12) 50%,
+    rgba(36,139,218,0.07) 60%,
+    transparent 100%);
+  background-size: 200% 100%;
+  animation: step-shimmer 1.6s linear infinite;
+}
+@keyframes step-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.agent-step-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+  color: var(--description-text-color, #8e9baa);
+}
+/* Icon color per state */
+.agent-step--running .agent-step-icon { color: #5eb5f7; }
+.agent-step--done    .agent-step-icon { color: rgba(52,199,89,0.9); }
+.agent-step--error   .agent-step-icon { color: rgba(255,90,80,0.9); }
+
+/* Shared SVG icon sizing */
+.step-svg-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+  flex-shrink: 0;
+  overflow: visible;
+}
+.agent-think-icon .step-svg-icon { width: 17px; height: 17px; }
+.agent-step-icon .step-svg-icon { width: 18px; height: 18px; }
+
+.agent-step-icon .step-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(36,139,218,0.22);
+  border-top-color: #248BDA;
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+  display: inline-block;
+}
+.agent-step-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.agent-step-title {
+  font-weight: 600;
+  color: var(--text-color, #d8e4f0);
+  font-size: 12px;
+}
+.agent-step--done .agent-step-title  { color: rgba(52,199,89,0.85); }
+.agent-step--error .agent-step-title { color: rgba(255,90,80,0.9); }
+.agent-step-target {
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  color: var(--description-text-color, #8e9baa);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.agent-step-meta {
+  font-size: 11px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+.agent-step-meta .meta-added   { color: rgba(52,199,89,0.85); }
+.agent-step-meta .meta-removed { color: rgba(255,90,80,0.8); }
+.agent-step-meta .meta-neutral { color: var(--description-text-color, #8e9baa); }
+
+/* ── Footer (cost + abort only, no checklist/percent) ───────────────────── */
+.agent-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+}
+.agent-footer .chat-abort-btn {
+  position: static;
+  margin: 0;
+}
+
+/* ── Checklist in chat ──────────────────────────────────────────────────── */
 .chat-checklist {
   list-style: none;
   padding: 8px 12px 12px 12px;

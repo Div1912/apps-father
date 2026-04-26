@@ -49,6 +49,7 @@ export interface RuntimeConfig {
   disableNewSignups: boolean;
   disableNewProjects: boolean;
   allowAdminShell: boolean;
+  serviceMode: boolean;
 
   // External file browser (used by the Admin CRM "Files" sub-tab to embed a
   // remote file explorer for the project directory). Leave empty to fall back
@@ -121,6 +122,7 @@ const DEFAULTS: RuntimeConfig = {
   disableNewSignups: false,
   disableNewProjects: false,
   allowAdminShell: false,
+  serviceMode: false,
 
   // Defaults assume a Filebrowser instance per environment, exposing the
   // ProcessRuntime project folder. Admins can override these from the
@@ -208,6 +210,9 @@ class RuntimeConfigService {
   }
   getOpenRouterApiKey(): string {
     return this.config.openrouterApiKey || "";
+  }
+  isServiceMode(): boolean {
+    return !!this.config.serviceMode;
   }
 }
 

@@ -381,8 +381,8 @@ export class BotRunnerService {
   }
 
   /** Returns the webhook route path registered in routes.js, or null if none. */
-  private getCustomWebhookPath(projectId: string): string | null {
-    const routesFile = path.join(process.cwd(), "projects", projectId, "release", "backend", "routes.js");
+  private getCustomWebhookPath(projectId: string, deployment: "release" | "development" = "release"): string | null {
+    const routesFile = path.join(process.cwd(), "projects", projectId, deployment, "backend", "routes.js");
     if (!fs.existsSync(routesFile)) return null;
     try {
       const content = fs.readFileSync(routesFile, "utf-8");
@@ -404,12 +404,14 @@ export class BotRunnerService {
     token: string,
     botUsername: string,
     body: any,
+    options: { deployment?: "release" | "development" } = {},
   ): Promise<void> {
+    const deployment = options.deployment || "release";
     const projectDir = path.join(process.cwd(), "projects", projectId);
-    const routesFile = path.join(projectDir, "release", "backend", "routes.js");
+    const routesFile = path.join(projectDir, deployment, "backend", "routes.js");
     if (!fs.existsSync(routesFile)) return;
 
-    const webhookPath = this.getCustomWebhookPath(projectId);
+    const webhookPath = this.getCustomWebhookPath(projectId, deployment);
     if (!webhookPath) return;
 
     // Tag console output produced by the project's webhook handler with
@@ -421,8 +423,8 @@ export class BotRunnerService {
       const routeModule = require(routesFile);
       if (typeof routeModule !== "function") return;
 
-      const releaseDir = path.join(projectDir, "release");
-      const dataDir = path.join(releaseDir, "data");
+      const runtimeDir = path.join(projectDir, deployment);
+      const dataDir = path.join(runtimeDir, "data");
       fs.mkdirSync(dataDir, { recursive: true });
       const sqlite = new Database(path.join(dataDir, "app.db"));
       sqlite.pragma("journal_mode = WAL");
@@ -443,37 +445,86 @@ export class BotRunnerService {
       const projectRouter = Router();
       routeModule(projectRouter, db, projectId);
 
-      await new Promise<void>((resolve) => {
-        const fakeReq = {
-          method: "POST",
-          url: webhookPath,
-          path: webhookPath,
-          headers: { "content-type": "application/json" },
-          body,
-          params: {},
-          query: {},
-          get: (h: string) => h === "content-type" ? "application/json" : undefined,
-        } as any;
+      const fakeReq = {
+        method: "POST",
+        url: webhookPath,
+        path: webhookPath,
+        headers: { "content-type": "application/json" },
+        body,
+        params: {},
+        query: {},
+        get: (h: string) => h === "content-type" ? "application/json" : undefined,
+      } as any;
 
-        const fakeRes = {
-          statusCode: 200,
-          _headers: {} as Record<string, string>,
-          setHeader(k: string, v: string) { this._headers[k] = v; },
-          status(code: number) { this.statusCode = code; return this; },
-          json(data: any) { resolve(); },
-          send(data: any) { resolve(); },
-          end() { resolve(); },
-          get: (h: string) => undefined,
-          set: (k: string, v: string) => fakeRes,
-          type: (t: string) => fakeRes,
-        } as any;
+      let fallbackResolve: (() => void) | null = null;
+      let responseSent = false;
+      const fakeRes = {
+        statusCode: 200,
+        _headers: {} as Record<string, string>,
+        get headersSent() { return responseSent; },
+        setHeader(k: string, v: string) { this._headers[k] = v; },
+        status(code: number) { this.statusCode = code; return this; },
+        json(data: any) { responseSent = true; fallbackResolve?.(); return this; },
+        send(data: any) { responseSent = true; fallbackResolve?.(); return this; },
+        end() { responseSent = true; fallbackResolve?.(); return this; },
+        get: (h: string) => undefined,
+        set: (k: string, v: string) => fakeRes,
+        type: (t: string) => fakeRes,
+      } as any;
 
-        projectRouter(fakeReq, fakeRes, () => {
-          resolve();
-        });
-
-        setTimeout(resolve, 5000);
+      const invokeHandler = (handler: any) => new Promise<void>((resolve, reject) => {
+        let settled = false;
+        let timeout: ReturnType<typeof setTimeout>;
+        const done = (err?: any) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          err ? reject(err) : resolve();
+        };
+        timeout = setTimeout(() => done(), 5000);
+        try {
+          const ret = handler(fakeReq, fakeRes, done);
+          if (ret && typeof ret.then === "function") {
+            ret.then(() => done()).catch(done);
+          } else if (handler.length < 3) {
+            done();
+          }
+        } catch (err) {
+          done(err);
+        }
       });
+
+      const dispatchedDirectly = async () => {
+        const stack = ((projectRouter as any).stack || []) as any[];
+        for (const layer of stack) {
+          const route = layer?.route;
+          const routePath = route?.path;
+          const matchesPath = Array.isArray(routePath)
+            ? routePath.includes(webhookPath)
+            : routePath === webhookPath;
+          if (!matchesPath || !route?.methods?.post) continue;
+
+          const handlers = Array.isArray(route.stack)
+            ? route.stack.map((routeLayer: any) => routeLayer?.handle).filter(Boolean)
+            : [];
+          for (const handler of handlers) {
+            await invokeHandler(handler);
+          }
+          return true;
+        }
+        return false;
+      };
+
+      if (!await dispatchedDirectly()) {
+        await new Promise<void>((resolve) => {
+          fallbackResolve = resolve;
+          projectRouter(fakeReq, fakeRes, () => resolve());
+          setTimeout(resolve, 5000);
+        });
+        // Express 4 does not await async handlers after res.json(); keep the DB
+        // open briefly for legacy/fallback dispatch paths.
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
 
       db.close();
     } catch (err: any) {
@@ -481,6 +532,55 @@ export class BotRunnerService {
       throw err;
     }
     });
+  }
+
+  /**
+   * Simulate a Telegram update hitting the bot webhook without a real Telegram
+   * account. All calls to api.telegram.org that the routes.js makes are
+   * intercepted and returned as a captured list. Also logged via ALS so
+   * server_logs can show them.
+   */
+  public async simulateBotWebhook(
+    projectId: string,
+    update: any,
+    options: { deployment?: "release" | "development" } = {},
+  ): Promise<Array<{ method: string; body: any }>> {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { botTokenEncrypted: true, botUsername: true },
+    });
+
+    const token = project?.botTokenEncrypted
+      ? decryptToken(project.botTokenEncrypted)
+      : "SIMULATE_TOKEN";
+    const botUsername = project?.botUsername || "simulate_bot";
+
+    const captured: Array<{ method: string; body: any }> = [];
+    const origFetch = (global as any).fetch;
+
+    (global as any).fetch = async (url: string, opts: any) => {
+      if (String(url).includes("api.telegram.org")) {
+        const method = String(url).split("/").pop() || "unknown";
+        let body: any = {};
+        try { body = JSON.parse(opts?.body || "{}"); } catch {}
+        captured.push({ method, body });
+        console.log(`[simulate] tg.${method}: ${JSON.stringify(body).slice(0, 300)}`);
+        return { ok: true, json: async () => ({ ok: true, result: { message_id: 1 } }) } as any;
+      }
+      if (origFetch) return origFetch(url, opts);
+      throw new Error("fetch not available outside telegram.org simulation");
+    };
+
+    try {
+      if (!update.update_id) update.update_id = Date.now();
+      await this.forwardToAppWebhook(projectId, token, botUsername, update, {
+        deployment: options.deployment || "development",
+      });
+    } finally {
+      (global as any).fetch = origFetch;
+    }
+
+    return captured;
   }
 }
 
