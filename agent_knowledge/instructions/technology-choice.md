@@ -12,5 +12,5 @@ ARCHITECTURE — FRONTEND vs BACKEND:
 - Use DIRECT frontend fetch() for: read-only public APIs (weather, maps, exchange rates, public data), static content, anything that doesn't need secrets or persistent storage.
 - Use BACKEND routes.js REST for: database operations, user accounts/auth, leaderboards, storing user data, APIs that require secret keys, Telegram Bot API calls.
 - Use WEBSOCKET (module.exports.ws in routes.js) for: chat messages, typing indicators, live scores, game state sync, real-time notifications — anything where the server pushes to clients instantly.
-- NEVER use mock/fake data in production apps. If an API key is invalid or unavailable, use fetch_url to research free alternatives that don't require API keys, OR if the free alternatives has not been found -> ask a user to register somewhere and provide an API KEY.
+- NEVER use mock/fake data in production apps. NEVER read keys from `process.env`. If an API key is invalid or unavailable, use fetch_url to research free alternatives that don't require API keys. If no good no-key alternative exists, ask the user for the required key or account details with ask_user before implementing the feature.
 - KEEP IT SIMPLE. A weather app should just fetch weather data directly from the frontend. A clicker game only needs backend for leaderboards and persistence. A chat app MUST use WebSocket.

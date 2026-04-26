@@ -351,7 +351,7 @@ const TOOLS_DEFS: Array<{ name: string; description: string; input_schema: Recor
   },
   {
     name: "ask_user",
-    description: "Ask the app owner a question and wait for their answer. Use ONLY when you truly need user input (API keys, credentials, choosing between fundamentally different approaches). Do NOT use for trivial or implementation decisions you can make yourself. Provide options as buttons when possible. The user can also type free text or press Skip.",
+    description: "Ask the app owner a question and wait for their answer. Use ONLY when you truly need user input (API keys, credentials, external account IDs, design choices, naming, or choosing between fundamentally different approaches). If a requested feature requires an API key/credential and no public no-key alternative exists, you MUST call ask_user instead of inventing placeholders, using process.env, or shipping fake/mock behavior. Do NOT use for trivial implementation details you can decide yourself. Provide options as buttons when possible. The user can also type free text or press Skip.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -363,7 +363,7 @@ const TOOLS_DEFS: Array<{ name: string; description: string; input_schema: Recor
   },
   {
     name: "technical_plan",
-    description: "MANDATORY first planning tool for new builds. Submit the concrete implementation contract before writing code. The schema is kind-specific: App uses dbKeys/restEndpoints/wsMessages/screens; Text Bot uses stateShape/conversationFlow/keyboards/commands/testScenarios; Game uses coordinateSystem/sceneGraph/camera/input/collision/stateMachine/performanceBudget. After this, code must match the submitted names exactly.",
+    description: "MANDATORY first planning tool for new builds. Submit the concrete implementation contract before writing code. The schema is kind-specific: App uses dbKeys/restEndpoints/wsMessages/screens; Text Bot uses stateShape/conversationFlow/keyboards/commands/testScenarios; Game uses coordinateSystem/sceneGraph/camera/input/collision/stateMachine/performanceBudget. If the app needs external APIs, list them in externalDependencies and call ask_user first for any required credentials. After this, code must match the submitted names exactly.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -379,6 +379,7 @@ const TOOLS_DEFS: Array<{ name: string; description: string; input_schema: Recor
         keyboards: { type: "array" as const, items: { type: "object" as const }, description: "Text Bot reply/inline keyboards with exact button labels/callback_data" },
         commands: { type: "array" as const, items: { type: "object" as const }, description: "Bot slash commands: command + description" },
         testScenarios: { type: "array" as const, items: { type: "object" as const }, description: "Test cases the agent must run with simulate_* before finish" },
+        externalDependencies: { type: "array" as const, items: { type: "object" as const }, description: "External APIs/providers used, whether credentials are required, and whether ask_user is needed before implementation" },
         coordinateSystem: { type: "string" as const, description: "Game coordinate system" },
         sceneGraph: { type: "array" as const, items: { type: "object" as const }, description: "Game scene/group/object graph" },
         camera: { type: "object" as const, description: "Game camera type/follow/smoothing" },
@@ -674,8 +675,12 @@ export class AgentService {
       .filter(p => fs.existsSync(p))
       .map(p => fs.readFileSync(p, "utf-8"))
       .join("\n");
+    const routesText = fs.existsSync(routesPath) ? fs.readFileSync(routesPath, "utf-8") : "";
 
     const hasFrontendFiles = this.dirHasFiles(frontendDir);
+    if (/\bprocess\s*\.\s*env\b/.test(routesText + "\n" + frontendText)) {
+      errors.push("Generated app code must not read process.env. Project code cannot access platform environment variables; if a feature needs an API key or credential, call ask_user before coding or use a public no-key API.");
+    }
 
     if (kind === "textBot" && hasFrontendFiles) {
       errors.push("Text Bot builds must not contain frontend files. Delete frontend/ files and keep only backend/routes.js.");
@@ -685,7 +690,7 @@ export class AgentService {
         errors.push("Game builds must be single-file: frontend/index.html only. Remove frontend/app.js and frontend/styles.css.");
       }
       if (fs.existsSync(routesPath)) {
-        const gameBackend = fs.readFileSync(routesPath, "utf-8").trim();
+        const gameBackend = routesText.trim();
         const gameNeedsBackend = this.plannedEndpoints(technicalPlan).length > 0 || this.plannedWsTypes(technicalPlan).length > 0;
         if (gameBackend.length > 0 && !gameNeedsBackend) {
           errors.push("Game builds must not include backend/routes.js unless the game truly needs server-side multiplayer or shared persistence.");
@@ -703,7 +708,7 @@ export class AgentService {
       return errors.length ? errors.join(" ") : null;
     }
 
-    const content = fs.readFileSync(routesPath, "utf-8");
+    const content = routesText;
     try {
       new Function(content);
     } catch (err: any) {

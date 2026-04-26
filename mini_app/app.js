@@ -648,6 +648,7 @@ let topupAnimInstance = null;
 let topupReturnView = null;
 let userBalance = 0;
 let userPaymentCount = 0;
+let topupSubmitting = false;
 let firstDepositBonusEligible = false;
 // Percent-based first-deposit bonus (server-driven). e.g. 100 → double the
 // first deposit. Falls back to 100 if the API hasn't returned yet.
@@ -878,12 +879,14 @@ function updateTopupButton() {
 }
 
 async function submitTopup() {
+  if (topupSubmitting) return;
   const inputVal = parseInt(document.getElementById('topup-input').value);
   const amount = isNaN(inputVal) ? topupAmount : inputVal;
   if (amount < 2) {
     showToast(t('toast_topup_min'), 'error');
     return;
   }
+  topupSubmitting = true;
   tg?.MainButton?.showProgress();
   try {
     const res = await fetch(`${API_BASE}/topup`, {
@@ -944,6 +947,8 @@ async function submitTopup() {
   } catch (err) {
     tg?.MainButton?.hideProgress();
     showToast('Error: ' + err.message, 'error');
+  } finally {
+    topupSubmitting = false;
   }
 }
 

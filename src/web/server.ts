@@ -746,6 +746,7 @@ export function createWebServer() {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const { user } = await getOrCreateUserFromReq(req, auth);
+      await billingService.reconcilePendingTonPaymentsForUser(user.id);
       const [balance, paymentCount, fullUser] = await Promise.all([
         billingService.getUserBalance(user.id),
         prisma.payment.count({ where: { userId: user.id, status: "confirmed" } }),

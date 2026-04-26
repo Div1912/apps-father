@@ -16,4 +16,5 @@ RULES FOR BACKEND (routes.js):
     }
 11. NEVER use req.query.telegramId or req.body.telegramId for authentication — anyone can spoof these.
 12. NEVER use SQL-style comments (-- comment) in routes.js — they are a syntax error in JavaScript. Always use // for single-line comments.
-13. You CAN require npm packages — install them first with shell("npm install <pkg>")
+13. NEVER use `process.env` in generated project code. Project code cannot read Apps Father platform environment variables. If an external API key, credential, or account ID is required, call `ask_user` before coding or choose a public no-key API.
+14. You CAN require npm packages — install them first with shell("npm install <pkg>")

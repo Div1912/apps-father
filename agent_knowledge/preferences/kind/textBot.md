@@ -20,6 +20,7 @@ The bot token is ALREADY linked at the moment you start planning (the user creat
 - Setting a Mini App menu button (`setChatMenuButton` with `type: "web_app"`).
 - Importing `express` directly. The project receives `router` and `db` and `fetch` from the platform — use them.
 - Using `setMyCommands` to list commands that you don't actually handle in `/bot-webhook`. Every command in the menu MUST have a handler.
+- Using `process.env` for API keys, bot tokens, model keys, or any configuration. Use `db.botToken` for Telegram and `ask_user` for user-provided external credentials.
 
 ## State persistence — CRITICAL
 

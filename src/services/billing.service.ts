@@ -2,6 +2,7 @@ import { prisma } from "../db";
 import { config } from "../config";
 import crypto from "crypto";
 import { Decimal } from "@prisma/client/runtime/library";
+import { Cell } from "@ton/core";
 import { runtimeConfig } from "./runtime-config.service";
 import type { ModelConfigs } from "./runtime-config.service";
 import { getModelPricing } from "./openrouter.service";
@@ -62,6 +63,52 @@ export interface UsageResult {
 }
 
 export class BillingService {
+  private decodeTonTextComment(body: string): string {
+    if (!body) return "";
+    try {
+      const cell = Cell.fromBase64(body);
+      const slice = cell.beginParse();
+      if (slice.remainingBits < 32) return "";
+      const op = slice.loadUint(32);
+      if (op !== 0) return "";
+      return slice.loadStringTail();
+    } catch {
+      try {
+        const cells = Cell.fromBoc(Buffer.from(body, "base64"));
+        const slice = cells[0]?.beginParse();
+        if (!slice || slice.remainingBits < 32) return "";
+        const op = slice.loadUint(32);
+        if (op !== 0) return "";
+        return slice.loadStringTail();
+      } catch {
+        return "";
+      }
+    }
+  }
+
+  private extractTonMessageText(inMsg: any): string {
+    const parts: string[] = [];
+    const decoded = inMsg?.message_content?.decoded;
+    if (decoded?.type === "text_comment" && decoded.comment) {
+      parts.push(String(decoded.comment));
+    }
+    if (typeof inMsg?.message === "string") {
+      parts.push(inMsg.message);
+    }
+    if (typeof inMsg?.comment === "string") {
+      parts.push(inMsg.comment);
+    }
+
+    const body = inMsg?.message_content?.body || inMsg?.body;
+    if (typeof body === "string" && body) {
+      parts.push(body);
+      const decodedBody = this.decodeTonTextComment(body);
+      if (decodedBody) parts.push(decodedBody);
+    }
+
+    return parts.join("\n");
+  }
+
   async getUserBalance(userId: number): Promise<number> {
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -403,14 +450,7 @@ export class BillingService {
         const inMsg = tx.in_msg;
         if (!inMsg) continue;
 
-        let msgBody = "";
-        try {
-          if (inMsg.message_content?.decoded?.type === "text_comment") {
-            msgBody = inMsg.message_content.decoded.comment || "";
-          } else if (inMsg.message_content?.body) {
-            msgBody = inMsg.message_content.body;
-          }
-        } catch {}
+        const msgBody = this.extractTonMessageText(inMsg);
 
         if (!msgBody.includes(paymentIdStr)) continue;
 
@@ -429,6 +469,32 @@ export class BillingService {
     }
 
     return { confirmed: false };
+  }
+
+  async reconcilePendingTonPaymentsForUser(userId: number): Promise<number> {
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const pending = await prisma.payment.findMany({
+      where: {
+        userId,
+        status: "pending",
+        nowpaymentsId: { startsWith: "ton:" },
+        createdAt: { gte: since },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+      select: { id: true },
+    });
+
+    let confirmed = 0;
+    for (const payment of pending) {
+      try {
+        const result = await this.verifyTonPayment(payment.id);
+        if (result.confirmed) confirmed++;
+      } catch (err: any) {
+        console.error(`[Billing] TON reconcile failed for payment #${payment.id}:`, err.message || err);
+      }
+    }
+    return confirmed;
   }
 
   private async confirmTonPayment(paymentId: number): Promise<void> {
