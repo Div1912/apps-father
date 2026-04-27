@@ -25,8 +25,9 @@
       desc:  "Promo budget knobs",
       fields: [
         { key: "firstTopupBonusPercent", label: "First top-up bonus (%)",  type: "number", step: "1",   help: "Percent-based first-deposit bonus. 100 = double the first deposit. 0 disables." },
-        { key: "referralBonusUsd",     label: "Referral bonus (USD)",      type: "number", step: "0.5", help: "Awarded to referrer when invitee tops up." },
-        { key: "partnerDefaultPercent",label: "Partner default %",         type: "number", step: "1",   help: "Default revenue share for new partners." },
+        { key: "referralBonusPercent", label: "Referral bonus (%)",        type: "number", step: "1",   help: "% of purchased credits given to the referrer as credits (default 15)." },
+        { key: "referralBonusUsd",     label: "Referral bonus USD (legacy)",type: "number", step: "0.5",help: "Legacy USD referral bonus — no longer used." },
+        { key: "partnerDefaultPercent",label: "Partner default %",         type: "number", step: "1",   help: "Default revenue share for new partners (% of deposit USD)." },
       ],
     },
     {

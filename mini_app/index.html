@@ -15,7 +15,7 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <link href="bootstrap.min.css" rel="stylesheet">
   <link href="bootstrap-extra.css" rel="stylesheet">
-  <link href="styles.css?r=231" rel="stylesheet">
+  <link href="styles.css?r=300" rel="stylesheet">
   <script>
     window.op=window.op||function(){var n=[];return new Proxy(function(){arguments.length&&n.push([].slice.call(arguments))},{get:function(t,r){return"q"===r?n:function(){n.push([r].concat([].slice.call(arguments)))}} ,has:function(t,r){return"q"===r}}) }();
     window.op('init', {
@@ -92,20 +92,21 @@
       <main class="tm-main">
         <section class="tm-main-intro">
           <img src="apps-father-avatar.png?r=1" class="tm-main-intro-picture" style="
-              box-shadow: 0px 16px 60px 60px #1aa6fe52;
+              box-shadow: 0px 16px 120px 60px #1aa6fe52;
               border-radius: 50%;
           ">
           <h1 class="tm-main-intro-header" style="
           position: relative;
           overflow: visible;
-          margin-left: -12px;
-      ">Apps Father<span style="
+      ">Apps Father
+      <!-- <span style="
           font-weight: 300;
           font-size: 10pt;
           position: absolute;
           right: -32px;
           color: #10b9ec;
-      ">beta</span></h1>
+      ">beta</span> -->
+    </h1>
           <button id="btn-admin" class="admin-fab hidden" aria-label="Admin Panel">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15v2"/><path d="M12 3a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2h-2V7a4 4 0 0 0-4-4z"/></svg>
           </button>
@@ -119,7 +120,7 @@
 
         <section class="tm-section" id="balance-section">
           <div class="tm-table-wrap">
-            <a class="tm-row tm-row-link" id="btn-topup">
+            <a class="tm-row tm-row-link tm-row-balance" id="btn-topup">
               <span class="tm-icon tm-icon--coin">
                 <svg viewBox="0 0 211.551 144.439" xmlns="http://www.w3.org/2000/svg" width="28" height="20" fill="currentColor">
                   <path d="M129.743,95.01c-15.97-.027-35.976,5.02-55.714,15.292-19.706,10.273-35.326,23.73-44.495,36.873-9.174,13.1-11.654,25.3-7.141,34,4.517,8.658,15.938,13.637,31.948,13.637,16.01.045,36.017-5.024,55.709-15.252,19.738-10.273,35.348-23.775,44.5-36.873,9.2-13.1,11.618-25.3,7.132-34-4.531-8.658-15.925-13.677-31.939-13.677Zm41.225,31.531a60.545,60.545,0,0,1-9.779,20.769C151.051,161.8,134.5,175.93,113.774,186.7c-20.725,10.811-41.763,16.239-59.437,16.239a60.477,60.477,0,0,1-22.6-3.9l4.75,9.151c4.522,8.7,15.911,13.682,31.93,13.682s36.021-5.024,55.714-15.3c19.738-10.228,35.348-23.73,44.5-36.873,9.151-13.1,11.663-25.3,7.132-33.958Zm12.919,7.536c5.024,11.977.987,26.556-8.613,40.238-8.478,12.157-21.442,23.954-37.5,33.823a144.6,144.6,0,0,0,15.476.807c22.2,0,42.3-4.755,56.477-12.157,14.22-7.4,22.025-17.091,22.025-26.87s-7.805-19.468-22.025-26.87a103.163,103.163,0,0,0-25.838-8.972Zm47.864,55.983a61.176,61.176,0,0,1-18.257,13.906c-15.7,8.164-36.874,13.054-60.245,13.054a155.816,155.816,0,0,1-27.229-2.333A152.678,152.678,0,0,1,95.113,226.4c.538.314,1.077.583,1.66.9,14.175,7.4,34.272,12.157,56.477,12.157s42.3-4.755,56.477-12.157c14.22-7.4,22.025-17.091,22.025-26.87Z" transform="translate(-20.199 -95.01)"/>
@@ -128,6 +129,17 @@
               <div>
                 <div class="tm-row-value" id="balance-amount-wrap"><b id="balance-amount">...</b></div>
                 <div class="tm-row-description" data-i18n="balance_tap">Tap to top up</div>
+              </div>
+            </a>
+            <a class="tm-row tm-row-link tm-row-earn" id="btn-earn-credits">
+              <span class="tm-icon tm-icon--earn" style="background: none;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22">
+                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+                </svg>
+              </span>
+              <div>
+                <div class="tm-row-value" data-i18n="tasks_earn_btn">Earn Credits</div>
+                <div class="tm-row-description" data-i18n="tasks_earn_desc">Complete tasks &amp; get rewards</div>
               </div>
             </a>
           </div>
@@ -175,11 +187,7 @@
               <span data-i18n="language">Language</span>
             </a>
             <a class="tm-row tm-row-link" id="btn-support">
-              <span class="tm-icon tm-icon--support">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="22" height="22">
-                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-                </svg>
-              </span>
+              <span class="tm-icon af-icon-support"></span>
               <span data-i18n="support">Contact Support</span>
             </a>
           </div>
@@ -203,7 +211,7 @@
         <section class="tm-main-intro" style="padding-bottom:0;">
           <div class="topup-animation" id="topup-anim"></div>
           <h1 class="tm-main-intro-header" data-i18n="topup_title">Top Up Balance</h1>
-          <p class="tm-main-intro-text" id="topup-balance-text" style="max-width:312px;padding: 8px 24px;background-color: #8794a130;border-radius: 32px;border: 1px solid #8794a159;"></p>
+          <p class="tm-main-intro-text" id="topup-balance-text" style="max-width:312px;"></p>
         </section>
 
         <!-- First-purchase ×2 banner — shown only when isFirstPurchase -->
@@ -211,8 +219,8 @@
           <div class="topup-bonus-banner" id="topup-bonus-banner">
             <div class="topup-bonus-icon">🎉</div>
             <div class="topup-bonus-content">
-              <div class="topup-bonus-title">First purchase bonus: ×2 all credits!</div>
-              <div class="topup-bonus-sub">Every credit doubled — automatically applied at checkout</div>
+              <div class="topup-bonus-title" data-i18n="topup_first_bonus_title">First purchase bonus: ×2 all credits!</div>
+              <div class="topup-bonus-sub" data-i18n="topup_first_bonus_sub">Every credit doubled — automatically applied at checkout</div>
             </div>
           </div>
         </section>
@@ -247,7 +255,7 @@
         </div>
       </div>
 
-      <div class="pm-section-label">Choose payment method</div>
+      <div class="pm-section-label" data-i18n="pm_choose_method">Choose payment method</div>
       <div class="pm-methods" id="pm-methods">
         <button class="pm-method" data-method="ton">
           <img src="assets/icons/toncoin.png" class="pm-method-icon">
@@ -271,20 +279,35 @@
       <div class="ton-wallet-panel hidden" id="ton-wallet-panel">
         <div class="ton-wallet-connected" id="ton-wallet-connected" style="display:none;">
           <div class="ton-wallet-info">
-            <div class="ton-wallet-label">Connected wallet</div>
+            <div class="ton-wallet-label" data-i18n="pm_wallet_connected">Connected wallet</div>
             <div class="ton-wallet-address" id="ton-wallet-address"></div>
           </div>
-          <button class="ton-wallet-disconnect" id="ton-wallet-disconnect">Disconnect</button>
+          <button class="ton-wallet-disconnect" id="ton-wallet-disconnect" data-i18n="pm_wallet_disconnect">Disconnect</button>
         </div>
         <div class="ton-wallet-not-connected" id="ton-wallet-not-connected" style="display:none;">
           <div class="ton-wallet-info">
-            <div class="ton-wallet-label">No wallet connected</div>
+            <div class="ton-wallet-label" data-i18n="pm_wallet_none">No wallet connected</div>
           </div>
-          <button class="ton-wallet-connect-btn" id="ton-wallet-connect-btn">Connect</button>
+          <button class="ton-wallet-connect-btn" id="ton-wallet-connect-btn" data-i18n="pm_wallet_connect">Connect</button>
         </div>
       </div>
 
-      <button class="pm-purchase-btn" id="pm-purchase-btn">Purchase</button>
+      <button class="pm-purchase-btn" id="pm-purchase-btn" data-i18n="pm_purchase_btn">Purchase</button>
+    </div>
+  </div>
+
+  <!-- ═══ TASKS VIEW ═══ -->
+  <div id="view-tasks" class="view-container hidden">
+    <div>
+      <main class="tm-main">
+        <section class="tm-main-intro">
+          <h1 class="tm-main-intro-header" data-i18n="tasks_title">Earn Credits</h1>
+          <p class="tm-main-intro-text" id="tasks-balance" style="max-width:312px;"></p>
+        </section>
+        <section class="tm-section">
+          <div id="tasks-list" style="width: 100%;"></div>
+        </section>
+      </main>
     </div>
   </div>
 
@@ -377,7 +400,7 @@
             <h2 class="tm-section-header-text" data-i18n="referral_your_link">Your Link</h2>
           </div>
           <div class="tm-api-token-wrap">
-            <div class="tm-api-token" style="overflow:hidden;">
+            <div class="tm-api-token" style="overflow:hidden; margin-bottom: 8px;">
               <div id="referral-link-text"></div>
             </div>
             <div class="tm-api-token-actions" style="gap:8px">
@@ -885,7 +908,7 @@
             </span>
             <span class="ai-avatar-btn-text">
               <span data-i18n="edit_generate_avatar">Generate Avatar with AI</span>
-              <span class="ai-avatar-btn-price">$0.10</span>
+              <span class="ai-avatar-btn-price">10 cr</span>
             </span>
           </button>
           <input type="file" id="edit-photo-input" accept="image/*" style="display:none">
@@ -973,6 +996,13 @@
         <button class="tier-chip" id="tier-chip" title="Performance Tier">
           <svg class="tier-chip-speedo" id="tier-chip-speedo" viewBox="0 0 488.6 488.6" xmlns="http://www.w3.org/2000/svg">
             <path d="M188.5,270.3c-24.4,28.1-23.2,71.7,2.6,98.6c14.4,15.1,33.7,22.6,52.9,22.6c18.8,0,37.5-7.2,51.8-21.5c6.5-6.5,11.6-14,15.1-21.9l0,0l94.5-183.2c2.5-5.2-2.9-10.6-8.1-8.1l-183.2,94.5l0,0C204.6,255.5,195.9,261.9,188.5,270.3z M221.9,296.1c6.1-6.1,14.1-9.2,22.1-9.2s16,3.1,22.2,9.2c12.2,12.2,12.2,32.1,0,44.3c-6.1,6.1-14.1,9.2-22.2,9.2c-8,0-16-3.1-22.1-9.2C209.6,328.1,209.6,308.3,221.9,296.1z M440.2,341.4c0-34.6-9.1-68.6-26.4-98.3c-6.7-11.6-2.8-26.4,8.8-33.1c11.6-6.7,26.4-2.8,33.1,8.8c21.5,37.1,32.9,79.5,32.9,122.6c0,13.4-10.8,24.2-24.2,24.2C451.1,365.6,440.2,354.8,440.2,341.4z M0,341.4C0,206.7,109.6,97.1,244.3,97.1c31.3,0,61.8,5.8,90.6,17.4c12.4,5,18.4,19,13.5,31.4c-5,12.4-19,18.4-31.4,13.5c-23.1-9.2-47.6-13.9-72.7-13.9c-108,0-195.9,87.9-195.9,195.9c0,13.4-10.8,24.2-24.2,24.2C10.8,365.6,0,354.8,0,341.4z"/>
+          </svg>
+        </button>
+        <button class="chat-header-settings" id="btn-chat-features" title="Features" style="">
+          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 195.045 195.046" style="
+              fill: #9fafc1;
+          ">
+            <path id="Path_25" data-name="Path 25" d="M97.523,0s.975,47.786,25.356,72.167,72.167,25.356,72.167,25.356-47.786.975-72.167,25.356-25.356,72.167-25.356,72.167-.975-47.786-25.356-72.167S0,97.523,0,97.523s47.786-.975,72.167-25.356S97.523,0,97.523,0Z" fill="#9fafc1"></path>
           </svg>
         </button>
         <button class="chat-header-settings" id="btn-chat-settings" title="App Settings">
@@ -1068,8 +1098,8 @@
     </div>
   </div>
 
-  <script src="i18n.js?r=217" defer></script>
-  <script src="app.js?r=238" defer></script>
+  <script src="i18n.js?r=300" defer></script>
+  <script src="app.js?r=300" defer></script>
   <script>
       function initAnalytics() {
         window.telegramAnalytics.init({
@@ -1088,8 +1118,8 @@
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
         </button>
         <div class="tier-modal-header-text">
-          <h3 class="tier-modal-title" id="tier-modal-title">Performance Tier</h3>
-          <p class="tier-modal-subtitle">Smarter models give better results, but cost more credits.</p>
+          <h3 class="tier-modal-title" id="tier-modal-title" data-i18n="tier_modal_title">Performance Tier</h3>
+          <p class="tier-modal-subtitle" data-i18n="tier_modal_subtitle">Smarter models give better results, but cost more credits.</p>
         </div>
       </header>
       <div class="tier-modal-cards" id="tier-modal-cards">
@@ -1103,20 +1133,20 @@
     <div>
       <main class="tm-main">
         <section class="tm-main-intro">
-          <h1 class="tm-main-intro-header">Environment Variables</h1>
-          <p class="tm-main-intro-text" style="max-width:340px;">Stored in <code style="background:rgba(255,255,255,0.1);border-radius:4px;padding:1px 5px;">backend/.env</code>. Access via <code style="background:rgba(255,255,255,0.1);border-radius:4px;padding:1px 5px;">env.KEY</code> in <code style="background:rgba(255,255,255,0.1);border-radius:4px;padding:1px 5px;">routes.js</code>.</p>
+          <h1 class="tm-main-intro-header" data-i18n="env_title">Environment Variables</h1>
+          <p class="tm-main-intro-text" style="max-width:340px;" data-i18n="env_desc">Stored in <code style="background:rgba(255,255,255,0.1);border-radius:4px;padding:1px 5px;">backend/.env</code>. Access via <code style="background:rgba(255,255,255,0.1);border-radius:4px;padding:1px 5px;">env.KEY</code> in <code style="background:rgba(255,255,255,0.1);border-radius:4px;padding:1px 5px;">routes.js</code>.</p>
         </section>
         <section class="tm-section" style="padding-top:0;">
           <div class="env-env-toggle">
-            <button class="env-toggle-btn active" id="btn-env-dev" data-env="dev">Development</button>
-            <button class="env-toggle-btn" id="btn-env-release" data-env="release">Release</button>
+            <button class="env-toggle-btn active" id="btn-env-dev" data-env="dev" data-i18n="env_dev">Development</button>
+            <button class="env-toggle-btn" id="btn-env-release" data-env="release" data-i18n="env_release">Release</button>
           </div>
-          <div class="env-rows" id="env-rows" style="margin-top:12px;">
+          <div class="env-rows" id="env-rows" style="margin-top:12px;width:100%;">
             <!-- rows rendered by JS -->
           </div>
-          <button class="env-add-btn" id="btn-env-add-row" style="margin-top:8px;">+ Add Variable</button>
+          <button class="env-add-btn" id="btn-env-add-row" style="margin-top:8px;" data-i18n="env_add_var">+ Add Variable</button>
           <div class="env-actions" style="margin-top:12px;">
-            <button class="env-save-btn" id="btn-env-save">Save Variables</button>
+            <button class="env-save-btn" id="btn-env-save" data-i18n="env_save">Save Variables</button>
           </div>
         </section>
       </main>

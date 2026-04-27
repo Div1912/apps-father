@@ -58,7 +58,8 @@ export interface RuntimeConfig {
 
   // Bonuses & referrals
   firstTopupBonusPercent: number;
-  referralBonusUsd: number;
+  referralBonusPercent: number; // % of credits granted given to regular referrer
+  referralBonusUsd: number;     // legacy USD bonus (no longer used)
   partnerDefaultPercent: number;
 
   // Feature pricing (USD, admin-side)
@@ -143,12 +144,13 @@ const DEFAULT_PERFORMANCE_TIERS: PerformanceTier[] = [
 
 const DEFAULTS: RuntimeConfig = {
   creditsPerDollar: 50,
-  slotPriceCredits: 250,
+  slotPriceCredits: 30,
 
   minTopup: 2,
   maxAgentIterations: 60,
 
   firstTopupBonusPercent: 100,
+  referralBonusPercent: 15,
   referralBonusUsd: 0,
   partnerDefaultPercent: 10,
 

@@ -16,7 +16,7 @@
         <div class="card" style="margin-bottom:18px">
           <div class="dash-recent-title" style="margin-top:0">Create voucher</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-            <div><div class="input-label">Amount (USD)</div><input class="input" type="number" id="v-amount" step="0.01" placeholder="10.00" style="width:140px"/></div>
+            <div><div class="input-label">Credits</div><input class="input" type="number" id="v-credits" step="1" placeholder="100" style="width:140px"/></div>
             <div><div class="input-label">Max uses</div><input class="input" type="number" id="v-max" step="1" value="1" style="width:120px"/></div>
             <button class="btn btn-primary" id="v-create">Create</button>
           </div>
@@ -37,12 +37,12 @@
           listEl.innerHTML = `
             <div class="tbl-wrap">
               <table class="tbl">
-                <thead><tr><th>Code</th><th>Amount</th><th>Used / Max</th><th>Status</th><th>Created</th><th></th></tr></thead>
+                <thead><tr><th>Code</th><th>Credits</th><th>Used / Max</th><th>Status</th><th>Created</th><th></th></tr></thead>
                 <tbody>
                   ${vouchers.map(v => `
                     <tr>
                       <td><code>${Fmt.escapeHtml(v.code)}</code></td>
-                      <td>${Fmt.money(v.amountUsd)}</td>
+                      <td>${v.credits != null ? v.credits.toLocaleString() + ' cr' : (Fmt.money(v.amountUsd) + ' USD')}</td>
                       <td>${v.usedCount} / ${v.maxUses}</td>
                       <td>${v.active ? '<span class="badge success"><span class="dot"></span>active</span>' : '<span class="badge danger"><span class="dot"></span>inactive</span>'}</td>
                       <td style="color:var(--admin-muted)">${Fmt.escapeHtml(Fmt.relativeTime(v.createdAt))}</td>
@@ -81,13 +81,13 @@
       }
 
       host.querySelector("#v-create").addEventListener("click", async () => {
-        const amount = host.querySelector("#v-amount").value;
+        const credits = host.querySelector("#v-credits").value;
         const maxUses = host.querySelector("#v-max").value || "1";
-        if (!amount || parseFloat(amount) <= 0) { Fmt.toast("Enter a valid amount", "err"); return; }
+        if (!credits || parseInt(credits, 10) <= 0) { Fmt.toast("Enter a valid credits amount", "err"); return; }
         try {
-          const v = await Api.request("/vouchers", { method: "POST", body: { amount, maxUses } });
+          const v = await Api.request("/vouchers", { method: "POST", body: { credits, maxUses } });
           Fmt.toast("Voucher created: " + v.code, "ok");
-          host.querySelector("#v-amount").value = "";
+          host.querySelector("#v-credits").value = "";
           host.querySelector("#v-max").value = "1";
           refresh();
         } catch (err) { Fmt.toast(err.message || "Failed", "err"); }

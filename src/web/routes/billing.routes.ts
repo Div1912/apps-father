@@ -124,10 +124,11 @@ router.post("/cryptobot", async (req: Request, res: Response) => {
           }),
         });
 
-        notifyDeposit(Number(user.telegramId), user.username ?? undefined, amountUsd, creditsToGrant, bonus, isFirstPurchase, "cryptobot", bundleName);
+        const newCredits = await billingService.getUserCredits(user.id);
+        notifyDeposit(Number(user.telegramId), user.username ?? undefined, amountUsd, creditsToGrant, bonus, isFirstPurchase, "cryptobot", bundleName, newCredits);
         void trackEvent(Number(user.telegramId), "payment", { amount: amountUsd, method: "cryptobot" });
 
-        await billingService.creditReferralBonus(user, amountUsd);
+        await billingService.creditReferralBonus(user, amountUsd, creditsToGrant);
       }
     } catch (notifyErr) {
       console.error("[CryptoBot] Notify error:", notifyErr);

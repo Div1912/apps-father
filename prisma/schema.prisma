@@ -13,8 +13,8 @@ model User {
   username   String?
   firstName  String?   @map("first_name")
   balance    Decimal   @default(0) @db.Decimal(12, 4)
-  credits    Int       @default(0)
-  performanceTier String @default("tier_1") @map("performance_tier")
+  credits    Int       @default(100)
+  performanceTier String @default("tier_0") @map("performance_tier")
   appSlots   Int       @default(5) @map("app_slots")
   referredBy BigInt?   @map("referred_by")
   utmSource  String?   @map("utm_source")
@@ -45,6 +45,7 @@ model User {
   withdrawals     Withdrawal[]
   retentionPushes RetentionPush[]
   adminNotes      AdminUserNote[]
+  taskCompletions TaskCompletion[]
 
   @@map("users")
 }
@@ -280,4 +281,37 @@ model AppLog {
   @@index([category, ts(sort: Desc)])
   @@index([projectId, category, ts(sort: Desc)])
   @@map("app_logs")
+}
+
+model Task {
+  id           Int      @id @default(autoincrement())
+  title        Json                           // { en, ru, uk }
+  description  Json                           // { en, ru, uk }
+  imageUrl     String?  @map("image_url")
+  reward       Int                            // credits
+  link         String
+  type         String                         // "open_link" | "channel_subscribe"
+  payload      String?                        // channel ID / username for subscribe check
+  targeting    String   @default("all")       // "all" | "en" | "ru" | "uk"
+  delaySeconds Int      @default(5)  @map("delay_seconds")
+  isActive     Boolean  @default(true)  @map("is_active")
+  sortOrder    Int      @default(0)    @map("sort_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  completions TaskCompletion[]
+
+  @@map("tasks")
+}
+
+model TaskCompletion {
+  id        Int      @id @default(autoincrement())
+  taskId    Int      @map("task_id")
+  userId    Int      @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, userId])
+  @@map("task_completions")
 }

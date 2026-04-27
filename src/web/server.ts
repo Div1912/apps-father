@@ -902,6 +902,7 @@ export function createWebServer() {
       const tierId = fullUser?.performanceTier || "tier_1";
       const tier = runtimeConfig.getPerformanceTier(tierId);
       const allTiers = runtimeConfig.getAllTiers();
+      const slotPriceCredits = runtimeConfig.get().slotPriceCredits || 30;
       res.json({
         balance: credits,         // credits is the main UI balance
         credits,
@@ -912,6 +913,7 @@ export function createWebServer() {
         firstDepositBonusEligible,
         firstDepositBonusPercent,
         creditsPerDollar,
+        slotPriceCredits,
         minTopupUsd: 2,
       });
     } catch (err) {
@@ -1222,10 +1224,16 @@ export function createWebServer() {
         const userTier = runtimeConfig.getPerformanceTier(userTierId);
         const userCredits = userForBuild?.credits ?? 0;
         if (userCredits < userTier.pricing.update) {
-          const errMsg = chatService.addMessage(projectId, { role: "system", type: "balance_error", content: t(lang, "insufficient_balance_amount", { balance: `${userCredits} cr`, min: `${userTier.pricing.update} cr` }), metadata: { balance: userCredits } });
+          const errMsg = chatService.addMessage(projectId, { role: "system", type: "balance_error", content: t(lang, "insufficient_balance_amount", { balance: `${userCredits} cr`, min: `${userTier.pricing.update} cr` }), metadata: { balance: userCredits, minCost: userTier.pricing.update } });
           broadcastToProject(projectId, { type: "message", message: errMsg });
           res.json({ messageId: userMsg.id, status: "error", error: "insufficient_balance" });
           return;
+        }
+
+        // Pre-charge credits immediately so balance updates before agent finishes
+        const preCharge = await billingService.preChargeAction(user.id, projectId, "update", userTierId).catch(() => ({ creditsCharged: 0, newCredits: userCredits }));
+        if (preCharge.creditsCharged > 0) {
+          broadcastToProject(projectId, { type: "balance_update", newCredits: preCharge.newCredits });
         }
 
         res.json({ messageId: userMsg.id, status: "processing" });
@@ -1313,7 +1321,7 @@ export function createWebServer() {
             const usage = await billingService.recordUsage(
               user.id, projectId, result.model,
               { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: result.cacheWriteTokens, cache_read_input_tokens: result.cacheReadTokens },
-              "update", userTierId,
+              "update", userTierId, preCharge.creditsCharged > 0,
             );
 
             await projectService.updateProjectStatus(projectId, "deployed");
@@ -1353,6 +1361,13 @@ export function createWebServer() {
             });
 
             notifyProcessDone(auth.telegramId!, appName, result.shortSummary, "update", lang);
+
+            // Skip passport if the user aborted just as the agent finished
+            if (abortedProjects.has(projectId)) {
+              abortedProjects.delete(projectId);
+              processingProjects.delete(projectId);
+              return;
+            }
 
             // Run passport in background — keep processingProjects lock
             broadcastToProject(projectId, { type: "message", message: { role: "system", content: "preparing_next_update", metadata: { preparing: true } } });
@@ -1637,9 +1652,25 @@ export function createWebServer() {
       const project = await projectService.getProject(req.params.projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
-      const suggUserData = await prisma.user.findUnique({ where: { id: user.id }, select: { performanceTier: true } });
+      const suggUserData = await prisma.user.findUnique({ where: { id: user.id }, select: { performanceTier: true, credits: true } });
       const suggTierId = req.body.tierId || suggUserData?.performanceTier || "tier_1";
+      const suggCredits = suggUserData?.credits ?? 0;
+
+      // Pre-charge suggestions credits immediately
+      const suggPreCharge = await billingService.preChargeAction(user.id, req.params.projectId, "suggestions", suggTierId).catch(() => ({ creditsCharged: 0, newCredits: suggCredits }));
+      if (suggPreCharge.creditsCharged > 0) {
+        broadcastToProject(req.params.projectId, { type: "balance_update", newCredits: suggPreCharge.newCredits });
+      }
+
       const suggestions = await agentService.getSuggestions(req.params.projectId, suggestLang, suggTierId);
+
+      const suggModelId = runtimeConfig.getModelConfig("suggestions", suggTierId).modelId;
+      await billingService.recordUsage(
+        user.id, req.params.projectId, suggModelId,
+        { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        "suggestions", suggTierId, suggPreCharge.creditsCharged > 0,
+      ).catch(() => {});
+
       res.json({ suggestions });
     } catch (err) {
       console.error("[Chat API] Suggestions error:", err);
@@ -1778,6 +1809,12 @@ export function createWebServer() {
         return;
       }
 
+      // Pre-charge credits immediately
+      const buildPreCharge = await billingService.preChargeAction(user.id, projectId, "build", buildTierId).catch(() => ({ creditsCharged: 0, newCredits: buildCredits }));
+      if (buildPreCharge.creditsCharged > 0) {
+        broadcastToProject(projectId, { type: "balance_update", newCredits: buildPreCharge.newCredits });
+      }
+
       res.json({ status: "building" });
 
       void trackEvent(auth.telegramId!, "agent_started", {
@@ -1839,7 +1876,7 @@ export function createWebServer() {
           const usage = await billingService.recordUsage(
             user.id, projectId, result.model,
             { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: result.cacheWriteTokens, cache_read_input_tokens: result.cacheReadTokens },
-            "build", buildTierId,
+            "build", buildTierId, buildPreCharge.creditsCharged > 0,
           );
 
           await projectService.updateProjectStatus(projectId, "deployed");
@@ -1871,6 +1908,13 @@ export function createWebServer() {
           broadcastToProject(projectId, { type: "status_change", projectId, status: "deployed" });
 
           notifyProcessDone(auth.telegramId!, appName, result.shortSummary, "build", buildLang);
+
+          // Skip passport if the user aborted just as the agent finished
+          if (abortedProjects.has(projectId)) {
+            abortedProjects.delete(projectId);
+            processingProjects.delete(projectId);
+            return;
+          }
 
           // Run passport in background
           broadcastToProject(projectId, { type: "message", message: { role: "system", content: "preparing_next_update", metadata: { preparing: true } } });
@@ -2000,6 +2044,8 @@ export function createWebServer() {
 
       if (isInFlight) {
         abortedProjects.add(projectId);
+        // Remove from processing immediately so history API no longer returns finalizing:true
+        processingProjects.delete(projectId);
         console.log(`[Chat API] Abort requested for project ${projectId} by user ${auth.telegramId}`);
       } else {
         console.log(`[Chat API] Recovering stuck UI for project ${projectId} (${danglingIds.length} dangling msg(s))`);
@@ -2017,6 +2063,107 @@ export function createWebServer() {
       res.json({ ok: true, recovered: !isInFlight && danglingIds.length > 0 });
     } catch (err) {
       console.error("[Chat API] Abort error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // ── Tasks / Earn Credits API ──
+
+  app.get("/telegram-mini-app/api/tasks", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+
+      const tasks = await prisma.task.findMany({
+        where: {
+          isActive: true,
+          OR: [{ targeting: "all" }, { targeting: user.language }],
+        },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      });
+
+      const completionSet = new Set(
+        (await prisma.taskCompletion.findMany({
+          where: { userId: user.id, taskId: { in: tasks.map(t => t.id) } },
+          select: { taskId: true },
+        })).map(c => c.taskId)
+      );
+
+      const lang = (user.language || "en") as string;
+      const pick = (obj: any, fallback = "") => {
+        if (!obj) return fallback;
+        return obj[lang] || obj["en"] || obj["ru"] || fallback;
+      };
+
+      res.json(tasks.map(task => ({
+        id: task.id,
+        title: pick(task.title),
+        description: pick(task.description),
+        imageUrl: task.imageUrl,
+        reward: task.reward,
+        link: task.link,
+        type: task.type,
+        delaySeconds: task.delaySeconds,
+        completed: completionSet.has(task.id),
+      })));
+    } catch (err) {
+      console.error("[Tasks] list error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.post("/telegram-mini-app/api/tasks/:taskId/complete", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const taskId = parseInt(req.params.taskId, 10);
+
+      const task = await prisma.task.findUnique({ where: { id: taskId } });
+      if (!task || !task.isActive) { res.status(404).json({ error: "Task not found" }); return; }
+
+      // Check already completed
+      const existing = await prisma.taskCompletion.findUnique({
+        where: { taskId_userId: { taskId, userId: user.id } },
+      });
+      if (existing) { res.status(409).json({ error: "already_completed" }); return; }
+
+      // Verify completion for channel_subscribe tasks
+      if (task.type === "channel_subscribe" && task.payload) {
+        // Use the main bot token to check membership
+        const botToken = config.botToken;
+        const chatId = task.payload.trim();
+        let isMember = false;
+        try {
+          const tgRes = await fetch(
+            `https://api.telegram.org/bot${botToken}/getChatMember?chat_id=${encodeURIComponent(chatId)}&user_id=${auth.telegramId}`,
+          );
+          const tgData = await tgRes.json() as any;
+          const status: string = tgData?.result?.status || "";
+          isMember = ["member", "administrator", "creator"].includes(status);
+        } catch (err) {
+          console.error("[Tasks] getChatMember error:", err);
+        }
+        if (!isMember) {
+          res.status(200).json({ ok: false, error: "not_subscribed" });
+          return;
+        }
+      }
+
+      // Grant credits in a transaction
+      const result = await prisma.$transaction(async (tx) => {
+        await tx.taskCompletion.create({ data: { taskId, userId: user.id } });
+        const updated = await tx.user.update({
+          where: { id: user.id },
+          data: { credits: { increment: task.reward } },
+        });
+        return updated.credits;
+      });
+
+      res.json({ ok: true, reward: task.reward, newCredits: result });
+    } catch (err) {
+      console.error("[Tasks] complete error:", err);
       res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -2348,7 +2495,7 @@ export function createWebServer() {
   //   1. POST /generate-avatar → returns { imageUrl } (charges $0.10).
   //   2. POST /apply-avatar    → uploads the chosen URL to Telegram as the
   //      bot's profile photo. Split so the user can confirm before replacing.
-  const AVATAR_GEN_PRICE = 0.10;
+  const AVATAR_GEN_PRICE_CREDITS = 10;
 
   app.post("/telegram-mini-app/api/projects/:projectId/generate-avatar", async (req, res) => {
     try {
@@ -2362,9 +2509,9 @@ export function createWebServer() {
         return;
       }
 
-      const balance = await billingService.getUserBalance(user.id);
-      if (balance < AVATAR_GEN_PRICE) {
-        res.status(402).json({ error: "insufficient_balance", required: AVATAR_GEN_PRICE, balance });
+      const userCredits = await billingService.getUserCredits(user.id);
+      if (userCredits < AVATAR_GEN_PRICE_CREDITS) {
+        res.status(402).json({ error: "insufficient_balance", required: AVATAR_GEN_PRICE_CREDITS, balance: userCredits });
         return;
       }
 
@@ -2375,8 +2522,6 @@ export function createWebServer() {
       );
 
       // Charge only on success — failures (timeout/upstream error) stay free
-      // for the user. Use a transaction + UsageLog so admin views show the
-      // spend alongside other project costs.
       const result = await prisma.$transaction(async (tx) => {
         await tx.usageLog.create({
           data: {
@@ -2384,31 +2529,27 @@ export function createWebServer() {
             projectId,
             inputTokens: 0,
             outputTokens: 0,
-            costUsd: new Decimal(AVATAR_GEN_PRICE.toFixed(4)),
+            costUsd: new Decimal("0"),
             operation: "avatar_generation",
           },
         });
         const updated = await tx.user.update({
           where: { id: user.id },
-          data: { balance: { decrement: new Decimal(AVATAR_GEN_PRICE.toFixed(4)) } },
+          data: { credits: { decrement: AVATAR_GEN_PRICE_CREDITS } },
         });
-        await tx.project.update({
-          where: { id: projectId },
-          data: { totalCostUsd: { increment: new Decimal(AVATAR_GEN_PRICE.toFixed(4)) } },
-        });
-        return { newBalance: Number(updated.balance) };
+        return { newCredits: updated.credits };
       });
 
       void trackEvent(auth.telegramId!, "avatar_generated", {
         project_id: projectId,
-        cost: AVATAR_GEN_PRICE,
+        cost_credits: AVATAR_GEN_PRICE_CREDITS,
       });
 
       res.json({
         imageUrl,
         prompt,
-        cost: AVATAR_GEN_PRICE,
-        newBalance: result.newBalance,
+        cost: AVATAR_GEN_PRICE_CREDITS,
+        newBalance: result.newCredits,
       });
     } catch (err: any) {
       console.error("[MiniApp API] Avatar generation error:", err);

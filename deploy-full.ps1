@@ -175,9 +175,14 @@ ssh $SERVER "$psql 'ALTER TABLE projects ADD COLUMN IF NOT EXISTS app_menu_butto
 # UsageLog.creditsCharged, UsageLog.tierId). Must match prisma/schema.prisma.
 Write-Host "=== [$ENV_NAME] Credits / tier columns (Prisma) ===" -ForegroundColor $COLOR
 ssh $SERVER "$psql 'ALTER TABLE users ADD COLUMN IF NOT EXISTS credits INTEGER NOT NULL DEFAULT 0;'"
-ssh $SERVER "$psql 'ALTER TABLE users ADD COLUMN IF NOT EXISTS performance_tier TEXT NOT NULL DEFAULT ''tier_1'';'"
 ssh $SERVER "$psql 'ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS credits_charged INTEGER;'"
 ssh $SERVER "$psql 'ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS tier_id TEXT;'"
+# performance_tier uses a string literal default — done via SQL file to avoid PowerShell quote issues
+$perfTierSql = "ALTER TABLE users ADD COLUMN IF NOT EXISTS performance_tier TEXT NOT NULL DEFAULT 'tier_1';"
+$perfTierSql | Out-File -Encoding utf8 -FilePath tmp_perf_tier.sql
+scp tmp_perf_tier.sql "${SERVER}:/tmp/tmp_perf_tier.sql"
+ssh $SERVER "docker cp /tmp/tmp_perf_tier.sql ${DB_CTR}:/tmp/tmp_perf_tier.sql; docker exec ${DB_CTR} psql -U ${DB_USER} -d ${DB_NAME} -f /tmp/tmp_perf_tier.sql"
+Remove-Item tmp_perf_tier.sql -ErrorAction SilentlyContinue
 # One-time: map legacy USD balance -> credits (50 credits per $1). Skipped on subsequent deploys.
 $creditsBackfillSql = @"
 DO `$`$
@@ -229,6 +234,20 @@ $voucherSql | Out-File -Encoding utf8 -FilePath tmp_vouchers.sql
 scp tmp_vouchers.sql "${SERVER}:/tmp/tmp_vouchers.sql"
 ssh $SERVER "docker cp /tmp/tmp_vouchers.sql ${DB_CTR}:/tmp/tmp_vouchers.sql; docker exec ${DB_CTR} psql -U ${DB_USER} -d ${DB_NAME} -f /tmp/tmp_vouchers.sql"
 Remove-Item tmp_vouchers.sql -ErrorAction SilentlyContinue
+
+# Tasks system
+$tasksSql = Get-Content "deploy/sql/tasks_system.sql" -Raw
+$tasksSql | Out-File -Encoding utf8 -FilePath tmp_tasks.sql
+scp tmp_tasks.sql "${SERVER}:/tmp/tmp_tasks.sql"
+ssh $SERVER "docker cp /tmp/tmp_tasks.sql ${DB_CTR}:/tmp/tmp_tasks.sql; docker exec ${DB_CTR} psql -U ${DB_USER} -d ${DB_NAME} -f /tmp/tmp_tasks.sql"
+Remove-Item tmp_tasks.sql -ErrorAction SilentlyContinue
+
+# Welcome credits + tier_0 migration
+$welcomeSql = Get-Content "deploy/sql/welcome_credits_tier0.sql" -Raw
+$welcomeSql | Out-File -Encoding utf8 -FilePath tmp_welcome.sql
+scp tmp_welcome.sql "${SERVER}:/tmp/tmp_welcome.sql"
+ssh $SERVER "docker cp /tmp/tmp_welcome.sql ${DB_CTR}:/tmp/tmp_welcome.sql; docker exec ${DB_CTR} psql -U ${DB_USER} -d ${DB_NAME} -f /tmp/tmp_welcome.sql"
+Remove-Item tmp_welcome.sql -ErrorAction SilentlyContinue
 
 Write-Host "Migration OK" -ForegroundColor Green
 

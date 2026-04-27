@@ -1249,6 +1249,109 @@ router.post("/api/bundles/:id/reset-count", async (req: Request<{ id: string }>,
   }
 });
 
+// ── Tasks CRUD ──────────────────────────────────────────────────────────────
+
+const TASK_UPLOADS_DIR = path.join(ADMIN_DIR, "uploads", "tasks");
+if (!fs.existsSync(TASK_UPLOADS_DIR)) fs.mkdirSync(TASK_UPLOADS_DIR, { recursive: true });
+
+const taskImageStorage = (require("multer") as any).diskStorage({
+  destination: (_req: any, _file: any, cb: any) => cb(null, TASK_UPLOADS_DIR),
+  filename: (_req: any, file: any, cb: any) => {
+    const ext = path.extname(file.originalname) || ".jpg";
+    cb(null, `${Date.now()}-${crypto.randomBytes(4).toString("hex")}${ext}`);
+  },
+});
+const taskImageUpload = (require("multer") as any)({ storage: taskImageStorage, limits: { fileSize: 5 * 1024 * 1024 } });
+
+router.post("/api/tasks/upload-image", taskImageUpload.single("image"), async (req: Request, res: Response) => {
+  try {
+    if (!req.file) { res.status(400).json({ error: "No file" }); return; }
+    const url = `/admin/uploads/tasks/${req.file.filename}`;
+    res.json({ url });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/api/tasks", async (_req: Request, res: Response) => {
+  try {
+    const tasks = await prisma.task.findMany({
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    });
+    const counts = await prisma.taskCompletion.groupBy({
+      by: ["taskId"],
+      _count: { taskId: true },
+    });
+    const countMap = new Map(counts.map(c => [c.taskId, c._count.taskId]));
+    res.json(tasks.map(t => ({ ...t, _completionCount: countMap.get(t.id) ?? 0 })));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/api/tasks", async (req: Request, res: Response) => {
+  try {
+    const { title, description, imageUrl, reward, link, type, payload, targeting, delaySeconds, isActive, sortOrder } = req.body;
+    const task = await prisma.task.create({
+      data: {
+        title: title || { en: "", ru: "", uk: "" },
+        description: description || { en: "", ru: "", uk: "" },
+        imageUrl: imageUrl || null,
+        reward: Number(reward) || 0,
+        link: link || "",
+        type: type || "open_link",
+        payload: payload || null,
+        targeting: targeting || "all",
+        delaySeconds: Number(delaySeconds) || 5,
+        isActive: isActive !== false,
+        sortOrder: Number(sortOrder) || 0,
+      },
+    });
+    res.json(task);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put("/api/tasks/:id", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const { title, description, imageUrl, reward, link, type, payload, targeting, delaySeconds, isActive, sortOrder } = req.body;
+    const task = await prisma.task.update({
+      where: { id },
+      data: {
+        ...(title !== undefined && { title }),
+        ...(description !== undefined && { description }),
+        ...(imageUrl !== undefined && { imageUrl: imageUrl || null }),
+        ...(reward !== undefined && { reward: Number(reward) }),
+        ...(link !== undefined && { link }),
+        ...(type !== undefined && { type }),
+        ...(payload !== undefined && { payload: payload || null }),
+        ...(targeting !== undefined && { targeting }),
+        ...(delaySeconds !== undefined && { delaySeconds: Number(delaySeconds) }),
+        ...(isActive !== undefined && { isActive }),
+        ...(sortOrder !== undefined && { sortOrder: Number(sortOrder) }),
+      },
+    });
+    res.json(task);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete("/api/tasks/:id", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    await prisma.task.delete({ where: { id } });
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Serve uploaded task images
+router.use("/uploads/tasks", express.static(TASK_UPLOADS_DIR));
+
 router.get(/^\/(?!api(\/|$)).*/, (_req: Request, res: Response) => {
   const indexPath = path.join(ADMIN_DIR, "index.html");
   if (!fs.existsSync(indexPath)) {

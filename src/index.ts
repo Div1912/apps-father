@@ -103,6 +103,13 @@ process.on("unhandledRejection", (err) => {
   console.error("Unhandled rejection:", err);
 });
 
+// User-generated apps run inside this process and may create pg/ws clients
+// without 'error' listeners. An unhandled EventEmitter 'error' event would
+// otherwise crash the entire server. Log it and keep running.
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception (isolated — server continues):", err?.message || err);
+});
+
 let shuttingDown = false;
 async function gracefulShutdown(signal: string) {
   if (shuttingDown) return;

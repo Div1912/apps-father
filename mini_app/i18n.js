@@ -39,6 +39,7 @@ const I18N = {
     link_bot_title: "Your app is ready! Give it a Telegram bot.",
     link_bot_sub: "Create a bot in BotFather — Apps Father will connect it automatically.",
     link_bot_btn: "Create Bot",
+    link_bot_waiting: "Waiting for bot creation…",
 
     // Slots full
     slots_full_title: "App Slots Full",
@@ -155,6 +156,29 @@ const I18N = {
     detail_transfer: "Transfer Ownership",
     detail_delete: "Delete App",
     detail_copy: "Copy",
+    detail_env_vars: "Environment Variables",
+
+    // Environment Variables page
+    env_title: "Environment Variables",
+    env_desc: "Stored in backend/.env. Access via env.KEY in routes.js.",
+    env_dev: "Development",
+    env_release: "Release",
+    env_add_var: "+ Add Variable",
+    env_save: "Save Variables",
+
+    // Balance
+    balance_label: "Balance",
+
+    // Slots
+    slots_full_per_slot: "per additional slot",
+    slots_full_current: "Current slots",
+    credits_unit: "cr",
+
+    // Topup page
+    topup_first_bonus_badge: "×2 FIRST PURCHASE",
+    topup_bundle_tag_limited: "🔥 Limited",
+    topup_bundle_tag_sold_out: "Sold Out",
+    topup_bundle_bonus: "+{amount} bonus",
 
     // Versions
     versions_title: "Versions",
@@ -242,6 +266,7 @@ const I18N = {
     chat_suggestions: "Suggestions",
     chat_get_suggestions: "Get Suggestions For Next Update",
     chat_placeholder: "Describe your update...",
+    chat_placeholder_new: "Describe your idea...",
     chat_lets_build: "Let's Build",
     chat_edit: "Edit",
     chat_release_update: "Release Update",
@@ -314,6 +339,33 @@ const I18N = {
     chat_cost: "Cost",
     chat_balance: "Balance",
     chat_stop_update: "Stop Update",
+
+    // Performance Tier modal
+    tier_modal_title: "Performance Tier",
+    tier_modal_subtitle: "Smarter models give better results, but cost more credits.",
+    tier_stat_quality: "Quality",
+    tier_stat_speed: "Speed",
+    tier_stat_cost: "Cost",
+    tier_active_badge: "✓ Active",
+    tier_price_create: "Create app",
+    tier_price_create_hint: "Full project generation",
+    tier_price_update: "Update app",
+    tier_price_update_hint: "Apply changes to existing app",
+    tier_price_plan: "Plan",
+    tier_price_plan_hint: "Planning & architecture step",
+    tier_price_ask: "Ask",
+    tier_price_ask_hint: "Quick question or advice",
+
+    // Confirm Purchase modal
+    pm_choose_method: "Choose payment method",
+    pm_purchase_btn: "Purchase",
+    pm_wallet_connected: "Connected wallet",
+    pm_wallet_none: "No wallet connected",
+    pm_wallet_disconnect: "Disconnect",
+    pm_wallet_connect: "Connect",
+    pm_crypto_min: "Requires ≥ $15 bundle",
+    pm_x2_first: "×2 First Purchase",
+    pm_bonus: "+{n} bonus",
 
     // Preferences modal — chrome
     pref_modal_back: "Back",
@@ -488,6 +540,19 @@ const I18N = {
 
     // Result card action for Text Bot projects
     chat_open_bot: "Open Bot",
+
+    // Tasks / Earn Credits
+    tasks_earn_btn: "Earn Credits",
+    tasks_earn_desc: "Complete tasks & get rewards",
+    tasks_title: "Earn Credits",
+    tasks_start_btn: "Start",
+    tasks_done_badge: "Done",
+    tasks_reward: "+{n} cr",
+    tasks_success: "You earned +{n} credits!",
+    tasks_not_done: "Task not completed yet. Please try again.",
+    tasks_verifying: "Verifying…",
+    tasks_already: "Already completed",
+    tasks_empty: "No tasks available right now. Check back later!",
   },
 
   ru: {
@@ -525,6 +590,7 @@ const I18N = {
     link_bot_title: "Приложение готово! Привяжите Telegram бота.",
     link_bot_sub: "Создайте бота в BotFather — Apps Father подключит его автоматически.",
     link_bot_btn: "Создать бота",
+    link_bot_waiting: "Ожидаем создания бота…",
 
     slots_full_title: "Слоты заполнены",
 
@@ -635,6 +701,29 @@ const I18N = {
     detail_transfer: "Передать владение",
     detail_delete: "Удалить приложение",
     detail_copy: "Копировать",
+    detail_env_vars: "Переменные окружения",
+
+    // Environment Variables page
+    env_title: "Переменные окружения",
+    env_desc: "Хранятся в backend/.env. Доступ через env.KEY в routes.js.",
+    env_dev: "Разработка",
+    env_release: "Релиз",
+    env_add_var: "+ Добавить переменную",
+    env_save: "Сохранить",
+
+    // Balance
+    balance_label: "Баланс",
+
+    // Slots
+    slots_full_per_slot: "за дополнительный слот",
+    slots_full_current: "Слоты",
+    credits_unit: "кр",
+
+    // Topup page
+    topup_first_bonus_badge: "×2 ПЕРВАЯ ПОКУПКА",
+    topup_bundle_tag_limited: "🔥 Лимит",
+    topup_bundle_tag_sold_out: "Нет в наличии",
+    topup_bundle_bonus: "+{amount} бонус",
 
     versions_title: "Версии",
     version_changelog: "Изменения",
@@ -715,6 +804,7 @@ const I18N = {
     chat_suggestions: "Предложения",
     chat_get_suggestions: "Получить предложения по обновлению",
     chat_placeholder: "Опишите обновление...",
+    chat_placeholder_new: "Опишите идею...",
     chat_lets_build: "Собрать",
     chat_edit: "Изменить",
     chat_release_update: "Опубликовать",
@@ -784,6 +874,33 @@ const I18N = {
     chat_cost: "Стоимость",
     chat_balance: "Баланс",
     chat_stop_update: "Остановить",
+
+    // Performance Tier modal
+    tier_modal_title: "Уровень производительности",
+    tier_modal_subtitle: "Умные модели дают лучший результат, но стоят больше кредитов.",
+    tier_stat_quality: "Качество",
+    tier_stat_speed: "Скорость",
+    tier_stat_cost: "Стоимость",
+    tier_active_badge: "✓ Активен",
+    tier_price_create: "Создать приложение",
+    tier_price_create_hint: "Полная генерация проекта",
+    tier_price_update: "Обновить приложение",
+    tier_price_update_hint: "Изменения в существующем приложении",
+    tier_price_plan: "Планирование",
+    tier_price_plan_hint: "Планирование и архитектура",
+    tier_price_ask: "Спросить",
+    tier_price_ask_hint: "Быстрый вопрос или совет",
+
+    // Confirm Purchase modal
+    pm_choose_method: "Выберите способ оплаты",
+    pm_purchase_btn: "Купить",
+    pm_wallet_connected: "Подключённый кошелёк",
+    pm_wallet_none: "Кошелёк не подключён",
+    pm_wallet_disconnect: "Отключить",
+    pm_wallet_connect: "Подключить",
+    pm_crypto_min: "Требуется пакет от $15",
+    pm_x2_first: "×2 Первая покупка",
+    pm_bonus: "+{n} бонус",
 
     // Preferences modal — chrome
     pref_modal_back: "Назад",
@@ -954,6 +1071,19 @@ const I18N = {
     pref_modal_waiting_for_bot: "Ожидаю создание бота...",
 
     chat_open_bot: "Открыть бота",
+
+    // Tasks / Earn Credits
+    tasks_earn_btn: "Зарабатывать кредиты",
+    tasks_earn_desc: "Выполняйте задания и получайте награды",
+    tasks_title: "Зарабатывать кредиты",
+    tasks_start_btn: "Начать",
+    tasks_done_badge: "Готово",
+    tasks_reward: "+{n} кр",
+    tasks_success: "Вы заработали +{n} кредитов!",
+    tasks_not_done: "Задание ещё не выполнено. Попробуйте ещё раз.",
+    tasks_verifying: "Проверяем…",
+    tasks_already: "Уже выполнено",
+    tasks_empty: "Заданий пока нет. Загляните позже!",
   },
 
   ua: {
@@ -991,6 +1121,7 @@ const I18N = {
     link_bot_title: "Застосунок готовий! Прив'яжіть Telegram бота.",
     link_bot_sub: "Створіть бота в BotFather — Apps Father підключить його автоматично.",
     link_bot_btn: "Створити бота",
+    link_bot_waiting: "Очікуємо створення бота…",
 
     slots_full_title: "Слоти заповнені",
 
@@ -1101,6 +1232,29 @@ const I18N = {
     detail_transfer: "Передати власність",
     detail_delete: "Видалити додаток",
     detail_copy: "Копіювати",
+    detail_env_vars: "Змінні середовища",
+
+    // Environment Variables page
+    env_title: "Змінні середовища",
+    env_desc: "Зберігаються в backend/.env. Доступ через env.KEY в routes.js.",
+    env_dev: "Розробка",
+    env_release: "Реліз",
+    env_add_var: "+ Додати змінну",
+    env_save: "Зберегти",
+
+    // Balance
+    balance_label: "Баланс",
+
+    // Slots
+    slots_full_per_slot: "за додатковий слот",
+    slots_full_current: "Слоти",
+    credits_unit: "кр",
+
+    // Topup page
+    topup_first_bonus_badge: "×2 ПЕРША ПОКУПКА",
+    topup_bundle_tag_limited: "🔥 Ліміт",
+    topup_bundle_tag_sold_out: "Немає в наявності",
+    topup_bundle_bonus: "+{amount} бонус",
 
     versions_title: "Версії",
     version_changelog: "Зміни",
@@ -1181,6 +1335,7 @@ const I18N = {
     chat_suggestions: "Пропозиції",
     chat_get_suggestions: "Отримати пропозиції щодо оновлення",
     chat_placeholder: "Опишіть оновлення...",
+    chat_placeholder_new: "Опишіть ідею...",
     chat_lets_build: "Зібрати",
     chat_edit: "Змінити",
     chat_release_update: "Опублікувати",
@@ -1250,6 +1405,33 @@ const I18N = {
     chat_cost: "Вартість",
     chat_balance: "Баланс",
     chat_stop_update: "Зупинити",
+
+    // Performance Tier modal
+    tier_modal_title: "Рівень продуктивності",
+    tier_modal_subtitle: "Розумніші моделі дають кращий результат, але коштують більше кредитів.",
+    tier_stat_quality: "Якість",
+    tier_stat_speed: "Швидкість",
+    tier_stat_cost: "Вартість",
+    tier_active_badge: "✓ Активний",
+    tier_price_create: "Створити застосунок",
+    tier_price_create_hint: "Повна генерація проекту",
+    tier_price_update: "Оновити застосунок",
+    tier_price_update_hint: "Зміни у існуючому застосунку",
+    tier_price_plan: "Планування",
+    tier_price_plan_hint: "Планування та архітектура",
+    tier_price_ask: "Запитати",
+    tier_price_ask_hint: "Швидке питання або порада",
+
+    // Confirm Purchase modal
+    pm_choose_method: "Оберіть спосіб оплати",
+    pm_purchase_btn: "Придбати",
+    pm_wallet_connected: "Підключений гаманець",
+    pm_wallet_none: "Гаманець не підключено",
+    pm_wallet_disconnect: "Відключити",
+    pm_wallet_connect: "Підключити",
+    pm_crypto_min: "Потрібен пакет від $15",
+    pm_x2_first: "×2 Перша покупка",
+    pm_bonus: "+{n} бонус",
 
     // Preferences modal — chrome
     pref_modal_back: "Назад",
@@ -1420,6 +1602,19 @@ const I18N = {
     pref_modal_waiting_for_bot: "Очікую створення бота...",
 
     chat_open_bot: "Відкрити бота",
+
+    // Tasks / Earn Credits
+    tasks_earn_btn: "Заробляти кредити",
+    tasks_earn_desc: "Виконуйте завдання та отримуйте нагороди",
+    tasks_title: "Заробляти кредити",
+    tasks_start_btn: "Почати",
+    tasks_done_badge: "Готово",
+    tasks_reward: "+{n} кр",
+    tasks_success: "Ви заробили +{n} кредитів!",
+    tasks_not_done: "Завдання ще не виконано. Спробуйте ще раз.",
+    tasks_verifying: "Перевіряємо…",
+    tasks_already: "Вже виконано",
+    tasks_empty: "Завдань поки немає. Зайдіть пізніше!",
   }
 };
 

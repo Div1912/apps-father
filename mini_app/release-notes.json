@@ -1,5 +1,58 @@
 [
   {
+    "version": "3.0.0",
+    "date": "2026-04-27",
+    "title": "Agent v3 — Credits, Tasks & New App Kinds",
+    "image": "assets/updates/3.png",
+    "sections": [
+      {
+        "label": "Agent v3",
+        "items": [
+          "New live streaming view of each build or update step — watch the agent work in real time",
+          "Fixed prices for all actions — no more estimation surprises",
+          "Improved tools and abilities for smarter, more reliable builds",
+          "Prices decreased up to 3–4× across the board",
+          "Performance modes — choose between speed, quality, and cost",
+          "New app kinds: Game and Text Bot",
+          "Infrastructure prepared for AI Agents in future releases",
+          "Reasoning and thinking token budget increased ×4",
+          "Output limit expanded — larger apps and more files per build"
+        ]
+      },
+      {
+        "label": "Credits",
+        "items": [
+          "Introduced the Credits system — all payments and actions now use credits",
+          "+100% bonus credits on your first deposit",
+          "All new users receive 100 welcome credits",
+          "Minimum deposit (bundle) starts at just $1"
+        ]
+      },
+      {
+        "label": "Other Features",
+        "items": [
+          "Prompt Samples on the new-app screen to spark ideas",
+          "Special offer: buy all paid features in one bundle",
+          "Direct support button added",
+          "All users now get 5 free app slots",
+          "Additional slot price reduced to 30 credits",
+          "\"Earn Credits\" — complete tasks to earn credits without depositing",
+          "Apps Father exits beta — the platform is production-ready",
+          "Low-cost Ask dialog for quick AI questions"
+        ]
+      },
+      {
+        "label": "Fixed",
+        "items": [
+          "Chat progress correctly restores when re-entering an active build",
+          "Stop process now reliably halts the agent and clears finalizing state",
+          "Create bot mechanic and connection flow improved",
+          "Payment processing bugs resolved"
+        ]
+      }
+    ]
+  },
+  {
     "version": "2.3.5",
     "date": "2026-04-21",
     "title": "Agent 2.0 — Faster, Higher Quality, Lower Price",

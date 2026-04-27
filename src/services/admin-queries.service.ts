@@ -99,7 +99,7 @@ export async function listUsers(params: UsersListParams = {}) {
   let needsPostSort: null | "apps" | "spent" = null;
   if (sort === "newest")             orderBy = { createdAt: "desc" };
   else if (sort === "oldest")        orderBy = { createdAt: "asc" };
-  else if (sort === "balance_desc")  orderBy = { balance: "desc" };
+  else if (sort === "balance_desc")  orderBy = { credits: "desc" };
   else if (sort === "apps_desc")     needsPostSort = "apps";
   else if (sort === "spent_desc")    needsPostSort = "spent";
 
@@ -130,9 +130,9 @@ export async function listUsers(params: UsersListParams = {}) {
     const spends = await prisma.usageLog.groupBy({
       by: ["userId"],
       where: { userId: { in: ids } },
-      _sum: { costUsd: true },
+      _sum: { creditsCharged: true },
     });
-    spentByUser = new Map(spends.map((s) => [s.userId, Number(s._sum.costUsd || 0)]));
+    spentByUser = new Map(spends.map((s) => [s.userId, Number(s._sum.creditsCharged || 0)]));
   }
 
   let mapped = rows.map((u) => ({

@@ -183,12 +183,32 @@ let pendingFiles = [];
 let isProcessing = false;
 const processingProjectIds = new Set();
 
+function showStopButton() {
+  if (tg?.MainButton) {
+    tg.MainButton.setText(t('chat_stop_update') || 'Stop Process');
+    tg.MainButton.color = '#e53935';
+    tg.MainButton.textColor = '#000000';
+    tg.MainButton.show();
+  }
+  const chatView = document.getElementById('view-chat');
+  if (chatView) chatView.classList.add('is-processing');
+}
+
+function hideStopButton() {
+  if (tg?.MainButton && currentView === 'chat') {
+    tg.MainButton.hide();
+  }
+  const chatView = document.getElementById('view-chat');
+  if (chatView) chatView.classList.remove('is-processing');
+}
+
 function setProcessing(active) {
   isProcessing = active;
   if (chatProjectId) {
     if (active) processingProjectIds.add(chatProjectId);
     else processingProjectIds.delete(chatProjectId);
   }
+  if (active) showStopButton(); else hideStopButton();
 }
 
 function haptic(style = 'light') {
@@ -240,6 +260,8 @@ function setInputDisabled(disabled) {
     area.style.display = disabled ? 'none' : '';
     area.classList.toggle('chat-input-disabled', disabled);
   }
+  if (disabled && isProcessing) showStopButton();
+  else if (!disabled) hideStopButton();
 }
 
 function setInputFinalizing(active) {
@@ -603,12 +625,21 @@ function startLinkBotPolling(projectId, onLinked) {
   }, 3000);
 }
 
+function showLinkBotWaiting() {
+  const elements = document.querySelectorAll('.link-bot-waiting');
+
+  elements.forEach((el) => {
+    el.style.display = 'block';
+    el.classList.remove('hidden');
+  });
+}
+
 let slotsAnimInstance = null;
 
 function openSlotsFull() {
   document.getElementById('slots-full-info').textContent = t('slots_full_title');
   document.getElementById('slots-full-detail').innerHTML =
-    `<b>$5</b> per additional slot<br>Current slots: <b>${slots.used}/${slots.total}</b>`;
+    `${coinSvg(14, 10, '#fbbf24')}&nbsp;<b>${slotPriceCredits.toLocaleString()}</b> ${t('slots_full_per_slot') || 'per additional slot'}<br>${t('slots_full_current') || 'Current slots'}: <b>${slots.used}/${slots.total}</b>`;
   loadSlotsTgs();
   showView('slots-full');
 }
@@ -656,13 +687,16 @@ async function buySlot() {
 let topupMethod = 'ton';
 let topupAnimInstance = null;
 let topupReturnView = null;
+let featuresReturnView = null;
 let userBalance = 0;
 let userCredits = 0;
-let userTierId = 'tier_1';   // account-level default (from DB)
+let userTierId = 'tier_1';        // current effective tier (may be per-project)
+let accountTierId = 'tier_1';    // account-level default (from DB, never changed by chat selection)
 let userTierData = null;
 let allTiers = [];
-const projectTierMap = {};   // { [projectId]: tierId } — per-chat override
+const projectTierMap = {};        // { [projectId]: tierId } — per-chat overrides
 let creditsPerDollar = 50;
+let slotPriceCredits = 30;
 let userPaymentCount = 0;
 let topupSubmitting = false;
 let firstDepositBonusEligible = false;
@@ -696,6 +730,168 @@ function openTopup(returnTo) {
   showView('topup');
 }
 
+// ── Tasks / Earn Credits ─────────────────────────────────────────────────────
+
+async function openTasks() {
+  showView('tasks');
+
+  // Show balance
+  const tasksBalance = document.getElementById('tasks-balance');
+  if (tasksBalance) tasksBalance.innerHTML = fmtBalance(userCredits);
+
+  // Render tasks list
+  const listEl = document.getElementById('tasks-list');
+  if (!listEl) return;
+  listEl.innerHTML = `<div style="text-align:center;padding:24px;color:rgba(255,255,255,0.4)">${t('tasks_verifying')}</div>`;
+
+  try {
+    const res = await fetch(`${API_BASE}/tasks`, { headers: apiHeaders() });
+    if (!res.ok) throw new Error('Failed to load tasks');
+    const tasks = await res.json();
+
+    if (!tasks.length) {
+      listEl.innerHTML = `<div class="tasks-empty">${t('tasks_empty')}</div>`;
+      return;
+    }
+
+    listEl.innerHTML = '';
+    tasks.forEach(task => {
+      listEl.appendChild(buildTaskRow(task));
+    });
+  } catch (err) {
+    listEl.innerHTML = `<div class="tasks-empty">${t('tasks_empty')}</div>`;
+  }
+}
+
+function escHtml(str) {
+  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function buildTaskRow(task) {
+  const row = document.createElement('div');
+  row.className = 'task-row' + (task.completed ? ' task-completed' : '');
+  row.dataset.taskId = task.id;
+
+  const rewardLabel = `+${task.reward}&nbsp;${coinSvg(14, 10, '#c084fc')}`;
+
+  const thumbHtml = task.imageUrl
+    ? `<img src="${task.imageUrl}" alt="" />`
+    : `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
+
+  const doneOverlay = task.completed
+    ? `<div class="task-done-overlay"></div>`
+    : '';
+
+  const btnLabel = task.completed ? t('tasks_done_badge') : t('tasks_start_btn');
+  const btnClass = task.completed ? 'task-start-btn done' : 'task-start-btn';
+
+  row.innerHTML = `
+    <div class="task-thumb">
+      ${thumbHtml}
+      ${doneOverlay}
+    </div>
+    <div class="task-info">
+      <div class="task-title">${escHtml(task.title)}</div>
+      <div class="task-desc">${escHtml(task.description)}</div>
+    </div>
+    <div class="task-right">
+      <div class="task-reward-pill">${rewardLabel}</div>
+      <button class="${btnClass}" data-task-id="${task.id}">${btnLabel}</button>
+    </div>
+  `;
+
+  if (!task.completed) {
+    const btn = row.querySelector('button');
+    btn.addEventListener('click', () => startTask(task, row, btn));
+  }
+
+  return row;
+}
+
+async function startTask(task, rowEl, btn) {
+  // Open the link immediately
+  try {
+    if (tg?.openTelegramLink) tg.openTelegramLink(task.link);
+    else if (tg?.openLink) tg.openLink(task.link, { try_instant_view: true });
+    else window.open(task.link, '_blank');
+  } catch (_) {
+    try { tg?.openLink(task.link, { try_instant_view: true }); } catch (_2) {}
+  }
+
+  // Show verifying state on button
+  btn.disabled = true;
+  btn.className = 'task-start-btn verifying';
+  btn.innerHTML = `<span class="task-btn-spinner"></span>${t('tasks_verifying')}`;
+
+  // Wait for the configured delay
+  const delay = Math.max((task.delaySeconds || 5), 1) * 1000;
+  await new Promise(r => setTimeout(r, delay));
+
+  // Submit completion to backend
+  try {
+    const res = await fetch(`${API_BASE}/tasks/${task.id}/complete`, {
+      method: 'POST',
+      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+    });
+    const data = await res.json();
+
+    if (data.ok) {
+      // Success
+      tg?.HapticFeedback?.notificationOccurred('success');
+      const msg = t('tasks_success').replace('{n}', task.reward);
+      showToast(msg);
+
+      // Update balance
+      if (typeof data.newCredits === 'number') {
+        userCredits = data.newCredits;
+        // Refresh balance displays
+        const homeEl = document.getElementById('home-balance-badge');
+        if (homeEl) homeEl.innerHTML = fmtBalance(userCredits);
+        const balanceEl = document.getElementById('balance-amount');
+        if (balanceEl) balanceEl.textContent = `${userCredits} cr`;
+        const tasksBalance = document.getElementById('tasks-balance');
+        if (tasksBalance) tasksBalance.innerHTML = fmtBalance(userCredits);
+      }
+
+      // Dim the row
+      btn.className = 'task-start-btn done';
+      btn.textContent = t('tasks_done_badge');
+      btn.disabled = true;
+      rowEl.classList.add('task-completed');
+      const thumb = rowEl.querySelector('.task-thumb');
+      if (thumb && !thumb.querySelector('.task-done-overlay')) {
+        const ov = document.createElement('div');
+        ov.className = 'task-done-overlay';
+        ov.textContent = '';
+        thumb.appendChild(ov);
+      }
+    } else if (data.error === 'not_subscribed') {
+      tg?.HapticFeedback?.notificationOccurred('error');
+      showToast(t('tasks_not_done'));
+      btn.className = 'task-start-btn';
+      btn.textContent = t('tasks_start_btn');
+      btn.disabled = false;
+    } else if (data.error === 'already_completed') {
+      btn.className = 'task-start-btn done';
+      btn.textContent = t('tasks_done_badge');
+      btn.disabled = true;
+      rowEl.classList.add('task-completed');
+    } else {
+      showToast(t('tasks_not_done'));
+      btn.className = 'task-start-btn';
+      btn.textContent = t('tasks_start_btn');
+      btn.disabled = false;
+    }
+  } catch (_) {
+    showToast(t('tasks_not_done'));
+    btn.className = 'task-start-btn';
+    btn.textContent = t('tasks_start_btn');
+    btn.disabled = false;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function loadBundles() {
   const grid = document.getElementById('bundle-grid');
   if (!grid) return;
@@ -708,7 +904,14 @@ async function loadBundles() {
 
     // Update bonus banner
     const bonusSection = document.getElementById('topup-bonus-section');
-    if (bonusSection) bonusSection.style.display = firstDepositBonusEligible ? '' : 'none';
+    if (bonusSection) {
+      bonusSection.style.display = firstDepositBonusEligible ? '' : 'none';
+      // Substitute {pct} placeholder (always 100% for the ×2 bonus)
+      bonusSection.querySelectorAll('[data-i18n]').forEach(el => {
+        const raw = t(el.dataset.i18n);
+        if (raw) el.textContent = raw.replace(/\{pct\}/g, '100');
+      });
+    }
 
     renderBundleGrid(bundleCache, firstDepositBonusEligible);
   } catch (err) {
@@ -732,9 +935,9 @@ function renderBundleGrid(bundles, isFirstPurchase) {
     const basePrice = b.discount > 0 ? +(b.priceUsd / (1 - b.discount / 100)).toFixed(2) : null;
 
     const tags = [];
-    if (isFirstPurchase) tags.push(`<div class="bundle-tag-first">×2 FIRST PURCHASE</div>`);
-    if (isLimited && !isSoldOut) tags.push(`<div class="bundle-tag-limited">🔥 Limited</div>`);
-    if (isSoldOut) tags.push(`<div class="bundle-tag-limited" style="background:linear-gradient(90deg,rgba(100,100,100,0.6),rgba(70,70,70,0.6))">Sold Out</div>`);
+    if (isFirstPurchase) tags.push(`<div class="bundle-tag-first">${esc(t('topup_first_bonus_badge') || '×2 FIRST PURCHASE')}</div>`);
+    if (isLimited && !isSoldOut) tags.push(`<div class="bundle-tag-limited">${esc(t('topup_bundle_tag_limited') || '🔥 Limited')}</div>`);
+    if (isSoldOut) tags.push(`<div class="bundle-tag-limited" style="background:linear-gradient(90deg,rgba(100,100,100,0.6),rgba(70,70,70,0.6))">${esc(t('topup_bundle_tag_sold_out') || 'Sold Out')}</div>`);
 
     const discountBadge = b.discount > 0
       ? `<span class="bundle-discount-badge">-${b.discount}%</span>`
@@ -750,7 +953,7 @@ function renderBundleGrid(bundles, isFirstPurchase) {
           `${coinSvg(16, 11, '#fbbf24')}&nbsp;` +
           `<s class="bundle-credits-original">${b.credits.toLocaleString()}</s> ` +
           `<b>${(b.credits * 2).toLocaleString()}</b>` +
-          `<span class="bundle-bonus"> +<s class="bundle-credits-original">${b.bonusCredits.toLocaleString()}</s> ${(b.bonusCredits * 2).toLocaleString()} bonus</span>`;
+          `<span class="bundle-bonus"> +<s class="bundle-credits-original">${b.bonusCredits.toLocaleString()}</s> ${(b.bonusCredits * 2).toLocaleString()} ${t('topup_bundle_bonus') ? t('topup_bundle_bonus').replace('{amount}', '') : 'bonus'}</span>`;
       } else {
         creditsLine =
           `${coinSvg(16, 11, '#fbbf24')}&nbsp;` +
@@ -759,7 +962,7 @@ function renderBundleGrid(bundles, isFirstPurchase) {
       }
     } else {
       creditsLine = b.bonusCredits > 0
-        ? `${coinSvg(16, 11, '#fbbf24')}&nbsp;<b>${b.credits.toLocaleString()}</b><span class="bundle-bonus"> +${b.bonusCredits.toLocaleString()} bonus</span>`
+        ? `${coinSvg(16, 11, '#fbbf24')}&nbsp;<b>${b.credits.toLocaleString()}</b><span class="bundle-bonus"> +${b.bonusCredits.toLocaleString()} ${t('topup_bundle_bonus') ? t('topup_bundle_bonus').replace('{amount}', '') : 'bonus'}</span>`
         : `${coinSvg(16, 11, '#fbbf24')}&nbsp;<b>${totalCredits.toLocaleString()}</b>`;
     }
 
@@ -806,6 +1009,10 @@ function getMinBuildCredits() {
   if (userTierData?.pricing?.create) return userTierData.pricing.create;
   return 300; // tier_1 default
 }
+function getMinUpdateCredits() {
+  if (userTierData?.pricing?.update) return userTierData.pricing.update;
+  return 150; // tier_1 default
+}
 function getMinAskCredits() {
   if (userTierData?.pricing?.ask) return userTierData.pricing.ask;
   return 20;
@@ -818,9 +1025,9 @@ const ESTIMATED_PRICE_RANGE = '100–500';
 // see the same fancy amber/orange warning card; the +bonus mini-panel is
 // shown inline only when the user is still eligible for the first-deposit
 // bonus AND the bonus percent is enabled.
-function renderInsufficientFundsCard(balance) {
+function renderInsufficientFundsCard(balance, minCostOverride) {
   const bal      = Math.floor(Number(balance) || 0);
-  const cost     = getMinBuildCredits();
+  const cost     = (minCostOverride != null) ? minCostOverride : getMinBuildCredits();
   const shortfall = Math.max(0, cost - bal);
   const eligible  = firstDepositBonusEligible;
 
@@ -871,10 +1078,10 @@ function renderInsufficientFundsCard(balance) {
 // Re-renders the unified balance-warning card into a chat-bubble wrapper.
 // All previous card-class flags (`chat-bubble--balance-error`,
 // `chat-bubble--insufficient`) are stripped so re-rendering is idempotent.
-function renderBalancePromptCard(el, balance) {
+function renderBalancePromptCard(el, balance, minCostOverride) {
   el.classList.remove('chat-bubble--balance-error', 'chat-bubble--insufficient');
   el.classList.add('chat-bubble--insufficient-funds');
-  el.innerHTML = renderInsufficientFundsCard(balance);
+  el.innerHTML = renderInsufficientFundsCard(balance, minCostOverride);
   el.querySelector('.ifc-cta')?.addEventListener('click', () => openTopup('chat'));
 }
 
@@ -885,17 +1092,20 @@ async function loadTopupBalance() {
       const data = await res.json();
       userBalance = data.balance; // now credits
       userCredits = data.credits ?? data.balance ?? 0;
-      userTierId = data.tierId || 'tier_1';
+      accountTierId = data.tierId || 'tier_1';
+      userTierId = accountTierId;
       userTierData = data.tier || null;
       if (data.allTiers?.length) allTiers = data.allTiers;
       if (data.creditsPerDollar) creditsPerDollar = data.creditsPerDollar;
+      if (data.slotPriceCredits) slotPriceCredits = data.slotPriceCredits;
       userPaymentCount = data.paymentCount ?? 0;
       firstDepositBonusEligible = !!data.firstDepositBonusEligible;
       const creditsDisplay = Math.max(0, userCredits);
       const balEl = document.getElementById('balance-amount');
-      if (balEl) balEl.innerHTML = `${coinSvg(18, 12, 'currentColor')}&nbsp;${creditsDisplay.toLocaleString()}`;
+      if (balEl) balEl.textContent = `${t('balance_label') || 'Balance'}: ${creditsDisplay.toLocaleString()}`;
+      const badgeHtml = fmtBalance(creditsDisplay);
       const balText = document.getElementById('topup-balance-text');
-      if (balText) balText.innerHTML = `${coinSvg(18, 12, 'currentColor')}&nbsp;${creditsDisplay.toLocaleString()}`;
+      if (balText) balText.innerHTML = badgeHtml;
       renderTierChip();
       updatePillPrices();
     }
@@ -932,7 +1142,7 @@ function openPurchaseModal(bundle) {
 
   // Always reset button to clean state on open (guard against stale loading state)
   const purchaseBtn = document.getElementById('pm-purchase-btn');
-  if (purchaseBtn) { purchaseBtn.disabled = false; purchaseBtn.textContent = 'Purchase'; }
+  if (purchaseBtn) { purchaseBtn.disabled = false; purchaseBtn.textContent = t('pm_purchase_btn') || 'Purchase'; }
 
   // Populate bundle summary
   const isFirst = firstDepositBonusEligible;
@@ -955,10 +1165,11 @@ function openPurchaseModal(bundle) {
   // Breakdown line
   const breakdownEl = document.getElementById('pm-bundle-breakdown');
   const parts = [];
-  if (isFirst) parts.push(`<span class="pm-bd-tag pm-bd-tag--x2">×2 First Purchase</span>`);
+  if (isFirst) parts.push(`<span class="pm-bd-tag pm-bd-tag--x2">${t('pm_x2_first') || '×2 First Purchase'}</span>`);
   if (bundle.bonusCredits > 0) {
     const bonusAmt = isFirst ? bundle.bonusCredits * 2 : bundle.bonusCredits;
-    parts.push(`<span class="pm-bd-tag pm-bd-tag--bonus">+${bonusAmt.toLocaleString()} bonus</span>`);
+    const bonusLabel = (t('pm_bonus') || '+{n} bonus').replace('{n}', bonusAmt.toLocaleString());
+    parts.push(`<span class="pm-bd-tag pm-bd-tag--bonus">${bonusLabel}</span>`);
   }
   breakdownEl.innerHTML = parts.join('');
 
@@ -989,7 +1200,7 @@ function openPurchaseModal(bundle) {
   if (cryptoBtn) {
     const disabled = bundle.priceUsd < 15;
     cryptoBtn.classList.toggle('pm-method--disabled', disabled);
-    cryptoBtn.title = disabled ? `Requires ≥ $15 bundle` : '';
+    cryptoBtn.title = disabled ? (t('pm_crypto_min') || 'Requires ≥ $15 bundle') : '';
   }
 
   // Reset method selection
@@ -1374,11 +1585,12 @@ function openChat(projectId) {
   setInputDisabled(projProcessing);
   setHeaderWorking(projProcessing);
 
-  // Restore per-project tier (falls back to account-level default)
-  if (projectTierMap[projectId]) {
-    userTierId = projectTierMap[projectId];
+  // Restore per-project tier — always reset so switching chats uses correct tier
+  {
+    const tierId = projectTierMap[projectId] || accountTierId;
+    userTierId = tierId;
     const tiers = allTiers.length ? allTiers : getDefaultTiers();
-    userTierData = tiers.find(t => t.id === userTierId) || null;
+    userTierData = tiers.find(t => t.id === tierId) || null;
     renderTierChip();
     updatePillPrices();
   }
@@ -1409,7 +1621,7 @@ function enterPlanningMode(active) {
     suggestBtn.classList.add('hidden');
     inputBar.style.display = '';
     attachBtn.style.display = 'none';
-    input.placeholder = t('chat_placeholder');
+    input.placeholder = t('chat_placeholder_new');
     loadTgsAnimation();
     renderPromptSamples();
   } else {
@@ -1590,6 +1802,16 @@ const AGENT_DONE_SVG = '<svg class="step-svg-icon" viewBox="0 0 16 16" xmlns="ht
 function handleWSMessage(data) {
   if (data.type === 'auth_ok') {
     chatWs.send(JSON.stringify({ type: 'subscribe', projectId: chatProjectId }));
+    return;
+  }
+
+  if (data.type === 'balance_update') {
+    const newCr = typeof data.newCredits === 'number' ? data.newCredits : null;
+    if (newCr !== null) {
+      userCredits = newCr;
+      const balEl = document.getElementById('balance-amount');
+      if (balEl) balEl.textContent = `${t('balance_label') || 'Balance'}: ${Math.max(0, Math.floor(newCr)).toLocaleString()}`;
+    }
     return;
   }
 
@@ -1937,6 +2159,7 @@ function handleWSMessage(data) {
       const swap = () => {
         setTyping(false);
         setHeaderWorking(false);
+        setProcessing(false);
         if (isPlanningMode) enterPlanningMode(false);
         progressBubbleState.delete(data.messageId);
         clearAgentProcState(data.messageId);
@@ -2009,9 +2232,10 @@ function linkBotCardHtml(projectId) {
   return `<div class="link-bot-card" id="link-bot-card">
     <div class="link-bot-title">${t('link_bot_title')}</div>
     <div class="link-bot-sub">${t('link_bot_sub')}</div>
-    <button class="link-bot-btn" onclick="tg?.openTelegramLink('${newbotUrl}'); startLinkBotPolling('${safeId}')">
+    <button class="link-bot-btn" onclick="tg?.openTelegramLink('${newbotUrl}'); startLinkBotPolling('${safeId}'); showLinkBotWaiting()">
       ${t('link_bot_btn')}
     </button>
+    <div class="link-bot-waiting" id="link-bot-waiting" style="display:none">${t('link_bot_waiting') || 'Waiting for bot creation…'}</div>
   </div>`;
 }
 
@@ -2060,7 +2284,9 @@ async function loadChatHistory(projectId) {
     inner.innerHTML = '';
     let hasPlanOrResult = false;
     for (const msg of data.messages) {
-      if (msg.type === 'question' || msg.type === 'answer') continue;
+      // Skip answer messages (server removes question when answered, so any
+      // remaining 'question' type in history is still awaiting a reply).
+      if (msg.type === 'answer') continue;
       if (msg.content === 'preparing_next_update') continue;
       if (msg.type === 'balance_error') continue;   // client-only, never re-render on re-entry
       if (msg.type === 'progress' && msg.percent === 100) {
@@ -2080,11 +2306,13 @@ async function loadChatHistory(projectId) {
     }
 
     const hasActiveProgress = data.messages.some(m => m.type === 'progress' && (m.percent || 0) < 100);
-    if (hasActiveProgress) {
+    const hasOpenQuestion  = data.messages.some(m => m.type === 'question');
+    if (hasActiveProgress || hasOpenQuestion) {
       processingProjectIds.add(projectId);
       isProcessing = true;
-      setInputDisabled(true);
+      if (!hasOpenQuestion) setInputDisabled(true);
       setHeaderWorking(true);
+      showStopButton();
       hidePlanActions();
     }
 
@@ -2125,7 +2353,8 @@ function appendMessage(msg, animate = true) {
   } else if (msg.type === 'balance_error') {
     el.className = 'chat-bubble';
     const bal = Number(msg.metadata?.credits ?? msg.metadata?.balance ?? userCredits ?? 0);
-    renderBalancePromptCard(el, bal);
+    const minCost = msg.metadata?.minCost != null ? Number(msg.metadata.minCost) : undefined;
+    renderBalancePromptCard(el, bal, minCost);
     if (isProcessing) {
       setProcessing(false);
       setInputDisabled(false);
@@ -2151,7 +2380,7 @@ function appendMessage(msg, animate = true) {
           firstDepositBonusPercent = d.firstDepositBonusPercent;
         }
         const fresh = el.parentElement?.querySelector(`#${el.id}`);
-        if (fresh) renderBalancePromptCard(fresh, userCredits);
+        if (fresh) renderBalancePromptCard(fresh, userCredits, minCost);
       })
       .catch(() => {});
   } else if (msg.content === 'preparing_next_update' || msg.metadata?.preparing) {
@@ -2405,9 +2634,6 @@ function restoreAgentProcessCard(el, state, isRunning) {
     if (typeof f.costUsd === 'number' && f.costUsd > 0) {
       fHtml += `<div class="chat-progress-cost">${t('chat_cost')}: $${f.costUsd.toFixed(4)}${typeof f.balance === 'number' ? ` \u00b7 ${t('chat_balance')}: ${Math.floor(f.balance)}` : ''}</div>`;
     }
-    if (isRunning) {
-      fHtml += `<button class="chat-abort-btn" onclick="abortProcess()">${t('chat_stop_update')}</button>`;
-    }
     footer.innerHTML = fHtml;
     el.appendChild(footer);
   }
@@ -2474,7 +2700,7 @@ function paintProgressBubble(el, st) {
   }
   const pct = (typeof st.overridePct === 'number') ? st.overridePct : computeProgressPct(st.createdAtMs, st.firstSeenMs);
   const pctRounded = Math.floor(pct);
-  let html = `<div class="chat-progress-text"><span class="loader"></span> ${t('chat_working')} <b>${pctRounded}%</b></div>`;
+  let html = `<div class="chat-progress-text"><span class="loader"></span> ${t('chat_working')}</div>`;
   html += `<div class="chat-progress-bar"><div class="chat-progress-fill" style="width:${pct}%"></div></div>`;
 
   if (st.checklist && st.checklist.length > 0) {
@@ -2489,12 +2715,8 @@ function paintProgressBubble(el, st) {
     html += `<div class="chat-progress-cost">${t('chat_cost')}: $${st.costUsd.toFixed(4)}${typeof st.balance === 'number' ? ` · ${t('chat_balance')}: ${Math.floor(st.balance)}` : ''}</div>`;
   }
 
-  if (!st.completing) {
-    html += `<button class="chat-abort-btn" onclick="abortProcess()">${t('chat_stop_update')}</button>`;
-  }
-
   el.innerHTML = html;
-  setHeaderWorking(true, pctRounded);
+  setHeaderWorking(true);
 }
 
 function parseUtc(s) {
@@ -2514,6 +2736,10 @@ function renderProgressBubble(msg, fromHistory = false) {
     inner.appendChild(el);
   }
   el.className = 'chat-bubble chat-bubble--progress';
+  // Track whether this bubble was opened from history (rejoin) so the stop
+  // button is shown only in that case — not during the live first session.
+  if (fromHistory) el.dataset.fromHistory = '1';
+  else if (!el.dataset.fromHistory) el.dataset.fromHistory = '0';
 
   // If we have a saved agent process timeline, restore it instead of the
   // plain progress bar — the user will see the same step/narration view
@@ -2612,9 +2838,6 @@ function updateProgressBubble(data) {
     if (typeof st.costUsd === 'number' && st.costUsd > 0) {
       html += `<div class="chat-progress-cost">${t('chat_cost')}: $${st.costUsd.toFixed(4)}${typeof st.balance === 'number' ? ` · ${t('chat_balance')}: ${Math.floor(st.balance)}` : ''}</div>`;
     }
-    if (!st.completing) {
-      html += `<button class="chat-abort-btn" onclick="abortProcess()">${t('chat_stop_update')}</button>`;
-    }
     footer.innerHTML = html;
     // Show/hide the "agent is still working" ghost step
     let ghost = el.querySelector('.agent-step--ghost');
@@ -2668,7 +2891,9 @@ async function abortProcess() {
         setProcessing(false);
         setInputDisabled(false);
         setHeaderWorking(false);
-        showToast('Process stopped', 'success');
+        setInputFinalizing(false);
+        hideStopButton();
+        showToast(t('chat_stop_update') || 'Process stopped', 'success');
       } else {
         showToast(data.error || 'Failed to stop', 'error');
       }
@@ -4770,7 +4995,7 @@ async function approvePlan() {
 
 function startEditPlan() {
   const input = document.getElementById('chat-input');
-  input.placeholder = t('chat_placeholder');
+  input.placeholder = getChatPlaceholder();
   input.focus();
 }
 
@@ -4903,7 +5128,7 @@ function setHeaderWorking(working, pct) {
   const statusEl = document.getElementById('chat-app-status');
   if (!statusEl) return;
   if (working) {
-    statusEl.innerHTML = `<span class="loader loader--small"></span> ${t('chat_working')} ${pct || 0}%`;
+    statusEl.innerHTML = `<span class="loader loader--small"></span> ${t('chat_working')}`;
     statusEl.classList.add('header-working');
   } else {
     statusEl.textContent = currentProject?.botUsername
@@ -5156,7 +5381,7 @@ async function loadBalance() {
     if (data.allTiers) allTiers = data.allTiers;
     if (data.creditsPerDollar) creditsPerDollar = data.creditsPerDollar;
     const balEl = document.getElementById('balance-amount');
-    if (balEl) balEl.innerHTML = `${coinSvg(18, 12, 'currentColor')}&nbsp;${Math.max(0, userCredits).toLocaleString()}`;
+    if (balEl) balEl.textContent = `${t('balance_label') || 'Balance'}: ${Math.max(0, userCredits).toLocaleString()}`;
     renderTierChip();
   } catch (err) {
     console.error('Failed to load balance:', err);
@@ -5712,7 +5937,7 @@ function initEditPhoto() {
 
 // ── Generate Avatar with AI ──
 // Two-step UX matching the backend split:
-//   1. POST /generate-avatar — runs ~30 s and charges $0.10 on success.
+//   1. POST /generate-avatar — runs ~30 s and charges 10 credits on success.
 //   2. After the user confirms, POST /apply-avatar — uploads to Telegram.
 async function generateAiAvatar() {
   if (!currentProject) return;
@@ -5737,7 +5962,7 @@ async function generateAiAvatar() {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       if (data.error === 'insufficient_balance') {
-        showToast(t('ai_avatar_low_balance') || 'Insufficient balance for AI avatar ($0.10)', 'error');
+        showToast(t('ai_avatar_low_balance') || 'Not enough credits for AI avatar (10 cr)', 'error');
       } else {
         showToast(data.error || t('ai_avatar_failed') || 'Avatar generation failed', 'error');
       }
@@ -5755,7 +5980,7 @@ async function generateAiAvatar() {
       const newCr = data.newCredits ?? data.newBalance;
       userCredits = newCr;
       const balEl = document.getElementById('balance-amount');
-      if (balEl) balEl.innerHTML = `${coinSvg(18, 12, 'currentColor')}&nbsp;${Math.max(0, Math.floor(newCr)).toLocaleString()}`;
+      if (balEl) balEl.textContent = `${t('balance_label') || 'Balance'}: ${Math.max(0, Math.floor(newCr)).toLocaleString()}`;
     }
 
     showAiAvatarPreview(imageUrl);
@@ -5970,7 +6195,16 @@ function openVersionDetail(versionNum) {
 
   document.getElementById('btn-revert-version')?.addEventListener('click', async () => {
     if (!currentProject) return;
-    tg?.showConfirm(`Revert to Version #${v.version}? All newer versions will be deleted.`, async (ok) => {
+    const toRemove = (versionsData || [])
+      .filter(ver => ver.version > v.version)
+      .sort((a, b) => a.version - b.version);
+    const removedList = toRemove.length > 0
+      ? toRemove.map(ver => `#${ver.version}`).join(', ')
+      : null;
+    const confirmMsg = removedList
+      ? `Revert to Version #${v.version}?\n\nThe following versions will be permanently deleted: ${removedList}.`
+      : `Revert to Version #${v.version}?`;
+    tg?.showConfirm(confirmMsg, async (ok) => {
       if (!ok) return;
       try {
         const res = await fetch(`${API_BASE}/versions/${currentProject.id}/revert`, {
@@ -6147,7 +6381,7 @@ function featureDescription(f) {
 
 function fmtBalance(amount) {
   const cr = Math.floor(Number(amount) || 0);
-  return `${coinSvg(15, 10, 'currentColor')}&nbsp;${cr.toLocaleString()}`;
+  return `<span class="balance-badge">${coinSvg(14, 10, '#fbbf24')}&nbsp;${t('balance_label') || 'Balance'}: <b>${cr.toLocaleString()}</b></span>`;
 }
 
 function fmtTemplate(key, vars) {
@@ -6267,9 +6501,9 @@ async function openFeatures(projectId) {
       bundleEl.addEventListener('click', () => {
         const price = bundleEl.dataset.price;
         const full = bundleEl.dataset.full;
-        const creditsP = bundleEl.dataset.creditsPrice;
+        const creditsP = Number(bundleEl.dataset.creditsPrice) || 0;
         const msg = creditsP > 0
-          ? `Unlock all premium features for ${creditsP} credits?`
+          ? `${t('feature_status_unlock') || 'Unlock'} ${t('features_title') || 'Premium Features'} · ${creditsP.toLocaleString()} ${t('credits_unit') || 'cr'}?`
           : (fmtTemplate('bundle_confirm', { price, full }) || `Unlock all premium features for ${price}?`);
         const doBuy = async () => {
           try {
@@ -6279,7 +6513,13 @@ async function openFeatures(projectId) {
               body: JSON.stringify({ payWith: 'credits' }),
             });
             const d = await r.json();
-            if (!r.ok) throw new Error(d.error || 'Purchase failed');
+            if (!r.ok) {
+              if (r.status === 402 || (d.error || '').toLowerCase().includes('insufficient')) {
+                openTopup(currentView);
+                return;
+              }
+              throw new Error(d.error || 'Purchase failed');
+            }
             showToast(t('bundle_unlocked_toast') || 'All premium features unlocked!', 'success');
             refreshOwnedCache(d.granted || []);
             openFeatures(projectId);
@@ -6300,10 +6540,11 @@ async function openFeatures(projectId) {
       if (row.dataset.owned === 'true') return;
       row.addEventListener('click', () => {
         const featureId = row.dataset.feature;
-        const price = row.dataset.price;
+        const creditsPrice = Number(row.dataset.creditsPrice) || 0;
         const label = row.dataset.label;
-        const msg = fmtTemplate('feature_unlock_confirm', { label, price })
-          || `Unlock "${label}" for $${price}?`;
+        const msg = creditsPrice > 0
+          ? `${t('feature_status_unlock') || 'Unlock'} "${label}" · ${coinSvg ? '' : ''}${creditsPrice.toLocaleString()} ${t('credits_unit') || 'cr'}?`
+          : (fmtTemplate('feature_unlock_confirm', { label, price: row.dataset.price }) || `Unlock "${label}" for $${row.dataset.price}?`);
         const doBuy = async () => {
           try {
             const r = await fetch(`${API_BASE}/features/${projectId}/buy`, {
@@ -6312,7 +6553,13 @@ async function openFeatures(projectId) {
               body: JSON.stringify({ featureId, payWith: 'credits' }),
             });
             const d = await r.json();
-            if (!r.ok) throw new Error(d.error || 'Purchase failed');
+            if (!r.ok) {
+              if (r.status === 402 || (d.error || '').toLowerCase().includes('insufficient')) {
+                openTopup(currentView);
+                return;
+              }
+              throw new Error(d.error || 'Purchase failed');
+            }
             const okMsg = fmtTemplate('feature_unlocked_toast', { label }) || `${label} unlocked!`;
             showToast(okMsg, 'success');
             refreshOwnedCache([featureId]);
@@ -6330,6 +6577,7 @@ async function openFeatures(projectId) {
       });
     });
 
+    featuresReturnView = currentView || 'detail';
     showView('features');
   } catch (err) {
     console.error('Failed to load features:', err);
@@ -6418,23 +6666,15 @@ function openAdmin() {
   showView('admin');
   const rows = document.getElementById('adm-menu-rows');
   rows.innerHTML =
-    menuRowAction('Dashboard', 'af-icon-dashboard', 'adm-open-dashboard') +
-    menuRowAction('Sources', 'af-icon-dashboard', 'adm-open-sources') +
-    menuRowAction('Activities', 'af-icon-activities', 'adm-open-activities') +
-    menuRowAction('Users', 'af-icon-users', 'adm-open-users') +
     menuRowAction('Apps', 'af-icon-apps', 'adm-open-apps') +
-    menuRowAction('Vouchers', 'af-icon-vouchers', 'adm-open-vouchers') +
-    menuRowAction('Configuration', 'af-icon-config', 'adm-open-config') +
     menuRowAction('Onboarding (preview)', 'af-icon-help', 'adm-open-onboarding') +
+    `<a class="tm-row tm-row-link" id="adm-open-service"><span class="tm-icon af-icon-open"></span><span>Service page (preview)</span></a>` +
     `<a class="tm-row tm-row-link" id="adm-open-desktop"><span class="tm-icon af-icon-open"></span><span>Desktop Version</span></a>`;
-  rows.querySelector('[data-action="adm-open-dashboard"]')?.addEventListener('click', openAdmDashboard);
-  rows.querySelector('[data-action="adm-open-sources"]')?.addEventListener('click', openAdmSources);
-  rows.querySelector('[data-action="adm-open-activities"]')?.addEventListener('click', openAdmActivities);
-  rows.querySelector('[data-action="adm-open-users"]')?.addEventListener('click', openAdmUsers);
   rows.querySelector('[data-action="adm-open-apps"]')?.addEventListener('click', openAdmApps);
-  rows.querySelector('[data-action="adm-open-vouchers"]')?.addEventListener('click', openAdmVouchers);
-  rows.querySelector('[data-action="adm-open-config"]')?.addEventListener('click', openAdmConfig);
   rows.querySelector('[data-action="adm-open-onboarding"]')?.addEventListener('click', openOnboarding);
+  rows.querySelector('#adm-open-service')?.addEventListener('click', () => {
+    tg?.openLink(`${location.origin}/telegram-mini-app/index.html`);
+  });
   rows.querySelector('#adm-open-desktop')?.addEventListener('click', () => {
     tg?.openLink(`${location.origin}/telegram-mini-app/desktop.html`);
   });
@@ -7438,6 +7678,7 @@ function showView(view) {
   document.getElementById('view-versions').classList.toggle('hidden', view !== 'versions');
   document.getElementById('view-version-detail').classList.toggle('hidden', view !== 'version-detail');
   document.getElementById('view-features').classList.toggle('hidden', view !== 'features');
+  document.getElementById('view-tasks').classList.toggle('hidden', view !== 'tasks');
   document.getElementById('view-slots-full').classList.toggle('hidden', view !== 'slots-full');
   document.getElementById('view-topup').classList.toggle('hidden', view !== 'topup');
   document.getElementById('view-language').classList.toggle('hidden', view !== 'language');
@@ -7449,6 +7690,9 @@ function showView(view) {
 
   const chatEl = document.getElementById('view-chat');
   if (chatEl) chatEl.classList.toggle('hidden', view !== 'chat');
+  if (view === 'chat' && isProcessing) {
+    showStopButton();
+  }
 
   if (tg) {
     try { tg.setHeaderColor('#000000'); } catch {}
@@ -7481,7 +7725,7 @@ function showView(view) {
       tg.MainButton.textColor = '#ffffff';
       tg.MainButton.show();
     } else if (view === 'slots-full') {
-      tg.MainButton.setText(t('slots_full_title') + ' — $5');
+      tg.MainButton.setText(t('slots_full_title') + ` — ${slotPriceCredits.toLocaleString()} ${t('credits_unit') || 'cr'}`);
       tg.MainButton.color = tg.themeParams?.button_color || '#3390ec';
       tg.MainButton.textColor = tg.themeParams?.button_text_color || '#ffffff';
       tg.MainButton.show();
@@ -7572,7 +7816,7 @@ function openSampleBot(botUsername, _name) {
 }
 
 function getChatPlaceholder(mode) {
-  return t('chat_placeholder');
+  return isPlanningMode ? t('chat_placeholder_new') : t('chat_placeholder');
 }
 
 function switchChatMode(mode) {
@@ -8169,9 +8413,7 @@ async function checkAndShowSubModal() {
 }
 
 function scheduleSubModalCheck() {
-  if (subModalScheduled) return;
-  subModalScheduled = true;
-  setTimeout(checkAndShowSubModal, SUB_MODAL_DELAY_MS);
+  // Channel subscribe modal disabled
 }
 
 function openOnboarding() {
@@ -8240,7 +8482,9 @@ async function init() {
       } else if (currentView === 'versions') {
         showView('detail');
       } else if (currentView === 'features') {
-        showView('detail');
+        const ret = featuresReturnView || 'detail';
+        featuresReturnView = null;
+        showView(ret);
       } else if (currentView === 'edit-info') {
         showView('detail');
       } else if (currentView === 'project-env') {
@@ -8249,6 +8493,8 @@ async function init() {
         showView('detail');
       } else if (currentView === 'delete') {
         showView('detail');
+      } else if (currentView === 'tasks') {
+        showView('list');
       } else if (currentView === 'slots-full') {
         showView('list');
       } else if (currentView === 'topup') {
@@ -8308,7 +8554,9 @@ async function init() {
 
   if (tg?.MainButton) {
     tg.MainButton.onClick(() => {
-      if (currentView === 'edit-info') {
+      if (currentView === 'chat' && isProcessing) {
+        abortProcess();
+      } else if (currentView === 'edit-info') {
         saveEditInfo();
       } else if (currentView === 'transfer') {
         submitTransfer();
@@ -8334,6 +8582,10 @@ async function init() {
 
   document.getElementById('btn-chat-settings')?.addEventListener('click', () => {
     if (currentProject) openDetail(currentProject.id);
+  });
+
+  document.getElementById('btn-chat-features')?.addEventListener('click', () => {
+    if (currentProject) openFeatures(currentProject.id); // openFeatures
   });
 
   const headerInfo = document.getElementById('chat-header-info');
@@ -8363,12 +8615,13 @@ async function init() {
   });
 
   document.getElementById('btn-topup')?.addEventListener('click', () => openTopup('list'));
+  document.getElementById('btn-earn-credits')?.addEventListener('click', () => openTasks());
   document.getElementById('btn-referral-page').addEventListener('click', () => openReferral());
   document.getElementById('btn-release-notes-page').addEventListener('click', () => openReleaseNotes());
   document.getElementById('btn-help-page').addEventListener('click', () => openHelp());
   document.getElementById('btn-language-page')?.addEventListener('click', () => openLanguage());
   document.getElementById('btn-support')?.addEventListener('click', () => {
-    if (tg?.openLink) tg.openLink('https://t.me/AppsFather_support');
+    if (tg?.openTelegramLink) tg.openTelegramLink('https://t.me/AppsFather_support');
     else window.open('https://t.me/AppsFather_support', '_blank');
   });
   document.getElementById('btn-admin')?.addEventListener('click', () => openAdmin());
@@ -8492,22 +8745,24 @@ function renderSegBar(value) {
 }
 
 const PRICE_META = {
-  create:  { label: 'Create app',   hint: 'Full project generation' },
-  update:  { label: 'Update app',   hint: 'Apply changes to existing app' },
-  plan:    { label: 'Plan',         hint: 'Planning & architecture step' },
-  ask:     { label: 'Ask',          hint: 'Quick question or advice' },
+  create:  { labelKey: 'tier_price_create', hintKey: 'tier_price_create_hint' },
+  update:  { labelKey: 'tier_price_update', hintKey: 'tier_price_update_hint' },
+  plan:    { labelKey: 'tier_price_plan',   hintKey: 'tier_price_plan_hint'   },
+  ask:     { labelKey: 'tier_price_ask',    hintKey: 'tier_price_ask_hint'    },
 };
 
 function priceRow(key, val) {
-  const meta = PRICE_META[key] || { label: key, hint: '' };
-  const n = (val === '—' || val == null) ? '—' : Number(val).toLocaleString();
-  const valHtml = n === '—'
-    ? `<span class="tier-price-val">—</span>`
-    : `<span class="tier-price-val">${coinSvg(13, 9, '#fbbf24')}${n}</span>`;
+  const meta = PRICE_META[key] || {};
+  const label = meta.labelKey ? (t(meta.labelKey) || key) : (meta.label || key);
+  const hint  = meta.hintKey  ? (t(meta.hintKey)  || '') : (meta.hint  || '');
+  // Hide rows where price is 0 or not set
+  if (val === '—' || val == null || Number(val) === 0) return '';
+  const n = Number(val).toLocaleString();
+  const valHtml = `<span class="tier-price-val">${coinSvg(13, 9, '#fbbf24')}${n}</span>`;
   return `<div class="tier-price-row">
     <div class="tier-price-info">
-      <span class="tier-price-label">${meta.label}</span>
-      ${meta.hint ? `<span class="tier-price-hint">${meta.hint}</span>` : ''}
+      <span class="tier-price-label">${label}</span>
+      ${hint ? `<span class="tier-price-hint">${hint}</span>` : ''}
     </div>
     ${valHtml}
   </div>`;
@@ -8542,21 +8797,21 @@ function renderTierCards() {
             <div class="tier-card-name">${esc(tierName)}</div>
             ${tierDesc ? `<div class="tier-card-desc">${esc(tierDesc)}</div>` : ''}
           </div>
-          ${isActive ? '<span class="tier-card-badge">✓ Active</span>' : ''}
+          ${isActive ? `<span class="tier-card-badge">${t('tier_active_badge') || '✓ Active'}</span>` : ''}
         </div>
         <div class="tier-stats">
           <div class="tier-stat-row">
-            <span class="tier-stat-label">Quality</span>
+            <span class="tier-stat-label">${t('tier_stat_quality') || 'Quality'}</span>
             ${renderSegBar(quality)}
             <span class="tier-stat-val">${quality}</span>
           </div>
           <div class="tier-stat-row">
-            <span class="tier-stat-label">Speed</span>
+            <span class="tier-stat-label">${t('tier_stat_speed') || 'Speed'}</span>
             ${renderSegBar(speed)}
             <span class="tier-stat-val">${speed}</span>
           </div>
           <div class="tier-stat-row">
-            <span class="tier-stat-label">Cost</span>
+            <span class="tier-stat-label">${t('tier_stat_cost') || 'Cost'}</span>
             ${renderSegBar(price)}
             <span class="tier-stat-val">${price}</span>
           </div>

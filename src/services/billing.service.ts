@@ -177,18 +177,51 @@ export class BillingService {
     return "update"; // default for any other op
   }
 
+  /**
+   * Immediately deduct the fixed credit cost for an action from the user's
+   * balance so the balance update is visible before the agent finishes.
+   * Returns the credits charged and the new balance.
+   * Call recordUsage afterwards with preCharged=true to log without double-deducting.
+   */
+  async preChargeAction(
+    userId: number,
+    projectId: string | null,
+    operation: string,
+    tierId?: string,
+  ): Promise<{ creditsCharged: number; newCredits: number }> {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { performanceTier: true } });
+    const resolvedTierId = tierId || user?.performanceTier || "tier_1";
+    const tier = runtimeConfig.getPerformanceTier(resolvedTierId);
+    const pricingKey = this.operationToPricingKey(operation);
+    const creditsCharged = tier.pricing[pricingKey] ?? 0;
+    if (creditsCharged <= 0) return { creditsCharged: 0, newCredits: 0 };
+
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: { credits: { decrement: creditsCharged } },
+    });
+    if (projectId) {
+      await prisma.project.update({
+        where: { id: projectId },
+        data: { totalCostUsd: { increment: new Decimal("0") } }, // placeholder; real cost logged later
+      }).catch(() => {});
+    }
+    return { creditsCharged, newCredits: updatedUser.credits };
+  }
+
   async recordUsage(
     userId: number,
     projectId: string | null,
     model: string,
     usage: TokenUsage,
     operation: string,
-    tierId?: string
+    tierId?: string,
+    preCharged = false,
   ): Promise<UsageResult> {
     const costUsd = await this.calculateCostAsync(model, usage);
 
     // Resolve tier and credits to charge
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { performanceTier: true } });
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { performanceTier: true, credits: true } });
     const resolvedTierId = tierId || user?.performanceTier || "tier_1";
     const tier = runtimeConfig.getPerformanceTier(resolvedTierId);
     const pricingKey = this.operationToPricingKey(operation);
@@ -208,10 +241,13 @@ export class BillingService {
         },
       });
 
-      const updatedUser = await tx.user.update({
-        where: { id: userId },
-        data: { credits: { decrement: creditsCharged } },
-      });
+      // Skip credit deduction if already pre-charged at process start
+      const updatedUser = preCharged
+        ? await tx.user.findUnique({ where: { id: userId }, select: { credits: true } })
+        : await tx.user.update({
+            where: { id: userId },
+            data: { credits: { decrement: creditsCharged } },
+          });
 
       if (projectId) {
         await tx.project.update({
@@ -220,7 +256,8 @@ export class BillingService {
         });
       }
 
-      return { costUsd, creditsCharged, newCredits: updatedUser.credits, newBalance: updatedUser.credits };
+      const newCredits = updatedUser?.credits ?? (user?.credits ?? 0);
+      return { costUsd, creditsCharged, newCredits, newBalance: newCredits };
     });
 
     return result;
@@ -299,8 +336,9 @@ export class BillingService {
     const data: any = await response.json();
 
     if (!response.ok || !data.invoice_url) {
+      const detail = data?.message || data?.error || JSON.stringify(data);
       console.error("[Billing] NOWPayments error:", data);
-      throw new Error("Failed to create payment invoice");
+      throw new Error(`Failed to create payment invoice: ${detail}`);
     }
 
     await prisma.payment.update({
@@ -343,7 +381,7 @@ export class BillingService {
         currency_type: "fiat",
         fiat: "USD",
         accepted_assets: "USDT,TON,BTC,ETH,LTC,BNB,TRX,USDC",
-        amount: amountUsd.toFixed(2),
+        amount: parseFloat(amountUsd.toFixed(2)),
         description: `Apps Father balance top-up $${amountUsd.toFixed(2)}`,
         payload: JSON.stringify({ paymentId: payment.id }),
         paid_btn_name: "openBot",
@@ -354,8 +392,9 @@ export class BillingService {
     const data: any = await response.json();
 
     if (!data.ok || !data.result) {
+      const detail = data?.error?.name || data?.error?.code || JSON.stringify(data?.error || data);
       console.error("[Billing] CryptoBot error:", data);
-      throw new Error("Failed to create CryptoBot invoice");
+      throw new Error(`Failed to create CryptoBot invoice: ${detail}`);
     }
 
     const invoiceUrl = data.result.mini_app_invoice_url || data.result.bot_invoice_url;
@@ -601,10 +640,10 @@ export class BillingService {
         body: JSON.stringify({ chat_id: user.telegramId.toString(), text, parse_mode: "HTML" }),
       }).catch(() => {});
 
-      notifyDeposit(Number(user.telegramId), user.username ?? undefined, amountUsd, creditsToGrant, bonus, isFirstPurchase, "ton", bundleName);
+      notifyDeposit(Number(user.telegramId), user.username ?? undefined, amountUsd, creditsToGrant, bonus, isFirstPurchase, "ton", bundleName, await this.getUserCredits(user.id));
       void trackEvent(Number(user.telegramId), "payment", { amount: amountUsd, method: "ton" });
 
-      await this.creditReferralBonus(user, amountUsd);
+      await this.creditReferralBonus(user, amountUsd, creditsToGrant);
     }
   }
 
@@ -664,10 +703,10 @@ export class BillingService {
         }),
       }).catch(() => {});
 
-      notifyDeposit(Number(user.telegramId), user.username ?? undefined, amountUsd, creditsToGrant, bonus, isFirstPurchase, "stars", bundleName);
+      notifyDeposit(Number(user.telegramId), user.username ?? undefined, amountUsd, creditsToGrant, bonus, isFirstPurchase, "stars", bundleName, await this.getUserCredits(user.id));
       void trackEvent(Number(user.telegramId), "payment", { amount: amountUsd, method: "stars" });
 
-      await this.creditReferralBonus(user, amountUsd);
+      await this.creditReferralBonus(user, amountUsd, creditsToGrant);
     }
   }
 
@@ -762,10 +801,10 @@ export class BillingService {
             }),
           });
 
-          notifyDeposit(Number(user.telegramId), user.username ?? undefined, amountUsd, creditsToGrant, bonus, isFirstPurchase, "crypto", bundleName);
+          notifyDeposit(Number(user.telegramId), user.username ?? undefined, amountUsd, creditsToGrant, bonus, isFirstPurchase, "crypto", bundleName, await this.getUserCredits(user.id));
           void trackEvent(Number(user.telegramId), "payment", { amount: amountUsd, method: "crypto" });
 
-          await this.creditReferralBonus(user, amountUsd);
+          await this.creditReferralBonus(user, amountUsd, creditsToGrant);
         }
       } catch (notifyErr) {
         console.error("[Billing] Failed to notify user:", notifyErr);
@@ -858,47 +897,60 @@ export class BillingService {
     }
   }
 
-  async creditReferralBonus(user: { referredBy: bigint | null; telegramId: bigint }, amountUsd: number): Promise<void> {
+  async creditReferralBonus(
+    user: { referredBy: bigint | null; telegramId: bigint },
+    amountUsd: number,
+    creditsGranted: number = 0,
+  ): Promise<void> {
     if (!user.referredBy) return;
 
     try {
       const referrer = await prisma.user.findUnique({ where: { telegramId: user.referredBy } });
       if (!referrer) return;
 
-      let bonus: number;
-      let balanceField: "partnerBalance" | "balance";
-      let label: string;
-
       if (referrer.isPartner && referrer.partnerPercent) {
-        bonus = amountUsd * Number(referrer.partnerPercent) / 100;
-        balanceField = "partnerBalance";
-        label = "Partner";
+        // Partner earns a % of the USD amount paid by their referred user
+        const bonusUsd = amountUsd * Number(referrer.partnerPercent) / 100;
+        const updated = await prisma.user.update({
+          where: { telegramId: user.referredBy },
+          data: { partnerBalance: { increment: new Decimal(bonusUsd.toFixed(4)) } },
+        });
+        const newBal = Number(updated.partnerBalance);
+        const bonusText =
+          `<b><tg-emoji emoji-id="5377544696656599429">✅</tg-emoji> Partner commission!</b>\n\n` +
+          `Your referred user made a deposit.\n` +
+          `<b>+$${bonusUsd.toFixed(2)}</b> added to your partner balance.\n\n` +
+          `<blockquote>Partner balance: <b>$${newBal.toFixed(2)}</b></blockquote>`;
+        await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: referrer.telegramId.toString(), text: bonusText, parse_mode: "HTML" }),
+        }).catch(() => {});
+        notifyReferralBonus(Number(referrer.telegramId), referrer.username ?? undefined, bonusUsd, Number(user.telegramId));
+        console.log(`[Billing] Partner commission $${bonusUsd.toFixed(2)} credited to ${referrer.telegramId}`);
       } else {
-        bonus = amountUsd * 0.15;
-        balanceField = "balance";
-        label = "Referral";
+        // Regular referral: referrer earns % of credits granted to the buyer
+        const pct = runtimeConfig.get().referralBonusPercent ?? 15;
+        const bonusCredits = Math.round(creditsGranted * pct / 100);
+        if (bonusCredits <= 0) return;
+        const updated = await prisma.user.update({
+          where: { telegramId: user.referredBy },
+          data: { credits: { increment: bonusCredits } },
+        });
+        const newCredits = updated.credits;
+        const bonusText =
+          `<b><tg-emoji emoji-id="5377544696656599429">✅</tg-emoji> Referral bonus!</b>\n\n` +
+          `Your invited friend made a deposit.\n` +
+          `<b>+${bonusCredits.toLocaleString()} credits</b> added to your balance.\n\n` +
+          `<blockquote>New balance: <b>${newCredits.toLocaleString()} credits</b></blockquote>`;
+        await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: referrer.telegramId.toString(), text: bonusText, parse_mode: "HTML" }),
+        }).catch(() => {});
+        notifyReferralBonus(Number(referrer.telegramId), referrer.username ?? undefined, bonusCredits, Number(user.telegramId));
+        console.log(`[Billing] Referral bonus ${bonusCredits} cr credited to ${referrer.telegramId}`);
       }
-
-      const updated = await prisma.user.update({
-        where: { telegramId: user.referredBy },
-        data: { [balanceField]: { increment: new Decimal(bonus.toFixed(4)) } },
-      });
-
-      const newBal = Number(updated[balanceField]);
-      const bonusText =
-        `<b><tg-emoji emoji-id="5377544696656599429">✅</tg-emoji> ${label} bonus!</b>\n\n` +
-        `Your referral just topped up their account.\n` +
-        `<b><tg-emoji emoji-id="5377851954321989517">💲</tg-emoji> +$${bonus.toFixed(2)}</b> has been added to your ${referrer.isPartner ? "partner " : ""}balance.\n\n` +
-        `<blockquote>New ${referrer.isPartner ? "partner " : ""}balance: <b>$${newBal.toFixed(2)}</b></blockquote>`;
-
-      await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: referrer.telegramId.toString(), text: bonusText, parse_mode: "HTML" }),
-      }).catch(() => {});
-
-      notifyReferralBonus(Number(referrer.telegramId), referrer.username ?? undefined, bonus, Number(user.telegramId));
-      console.log(`[Billing] ${label} bonus $${bonus.toFixed(2)} credited to ${referrer.telegramId} (${balanceField})`);
     } catch (err) {
       console.error("[Billing] Failed to credit referral/partner bonus:", err);
     }

@@ -160,8 +160,9 @@ export function notifyDeposit(
   isFirstPurchase: boolean,
   method?: string,
   bundleName?: string,
+  newCreditsBalance?: number,
 ): void {
-  const uname = username ? `@${username}` : `#ID${telegramId}`;
+  const uname = username ? `(@${username})` : "";
   const methodLabel = method ? (METHOD_LABELS[method] || method) : "—";
 
   void (async () => {
@@ -175,40 +176,38 @@ export function notifyDeposit(
         const referredBy = user.referredBy ? Number(user.referredBy) : null;
         const source = user.utmSource || null;
         if (referredBy && source) {
-          sourceLine = `\nSource: <b>#partnership</b> · Partner: <b>${source}</b> | <b>${referredBy}</b>`;
+          sourceLine = `\nSource: <b>#partnership</b> · <b>${source}</b>`;
         } else if (referredBy) {
-          sourceLine = `\nSource: <b>#referral</b> · Referred by: <b>${referredBy}</b>`;
+          sourceLine = `\nSource: <b>#referral</b>`;
         } else if (source) {
           sourceLine = `\nSource: <b>#${source}</b>`;
+        } else {
+          sourceLine = `\nSource: <b>#organic</b>`;
         }
       }
     } catch (err) {
       console.error("[Notify] notifyDeposit source lookup failed:", err);
     }
 
-    // Build credits breakdown line
-    const baseCredits = creditsGranted - (bonusCredits * (isFirstPurchase ? 2 : 1));
-    const bonusEffective = creditsGranted - (isFirstPurchase ? baseCredits : baseCredits);
-    // Simpler: just show total and note components
-    let creditsLine: string;
-    if (isFirstPurchase && bonusCredits > 0) {
-      creditsLine = `🪙 <b>${creditsGranted.toLocaleString()} cr</b> (×2 first purchase, incl. ${(bonusCredits * 2).toLocaleString()} bonus)`;
-    } else if (isFirstPurchase) {
-      creditsLine = `🪙 <b>${creditsGranted.toLocaleString()} cr</b> (×2 first purchase)`;
-    } else if (bonusCredits > 0) {
-      creditsLine = `🪙 <b>${creditsGranted.toLocaleString()} cr</b> (incl. ${bonusCredits.toLocaleString()} bonus)`;
-    } else {
-      creditsLine = `🪙 <b>${creditsGranted.toLocaleString()} cr</b>`;
-    }
+    // Bundle line: "Bundle: Minimal | 100 cr (×2 first purchase)"
+    let bundleDesc = creditsGranted.toLocaleString() + " cr";
+    if (isFirstPurchase) bundleDesc += " (×2 first purchase)";
+    else if (bonusCredits > 0) bundleDesc += ` (+${bonusCredits.toLocaleString()} bonus)`;
 
-    const bundleLine = bundleName ? `📦 <b>${bundleName}</b> via ${methodLabel}` : `Method: <b>${methodLabel}</b>`;
+    const bundleLine = bundleName
+      ? `Bundle: <b>${bundleName}</b> | ${bundleDesc}`
+      : `Bundle: <b>—</b> | ${bundleDesc}`;
+
+    const balanceLine = newCreditsBalance != null
+      ? `\nNew balance: <b>${newCreditsBalance.toLocaleString()} cr</b>`
+      : "";
 
     notifyAdmins(
-      `💰 Payment\n` +
-      `${bundleLine}\n` +
-      `👤 ${uname} · TG <b>${telegramId}</b>\n` +
-      `${creditsLine}\n` +
-      `💵 $${amountUsd.toFixed(2)}` +
+      `💵 <b>$${amountUsd.toFixed(2)}</b>\n` +
+      `Method: <b>${methodLabel}</b>\n` +
+      `${bundleLine}` +
+      balanceLine +
+      `\nUser:  <b>${uname}</b> | ID: <b>#ID${telegramId}</b>` +
       sourceLine
     );
   })();
