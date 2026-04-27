@@ -2,6 +2,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { IncomingMessage } from "http";
 import path from "path";
 import fs from "fs";
+import dotenv from "dotenv";
 import Database from "better-sqlite3";
 import { projectService } from "../services/project.service";
 import { decryptToken } from "../services/crypto.service";
@@ -99,6 +100,14 @@ async function initProjectWs(projectId: string, isDev: boolean): Promise<Project
 
   const envDir = isDev ? path.join(projectDir, "development") : path.join(projectDir, "release");
   const db = createProjectDb(envDir, botToken, botUsername, projectId);
+
+  const backendDir = isDev
+    ? path.join(projectDir, "development", "backend")
+    : path.join(projectDir, "release", "backend");
+  const envFilePath = path.join(backendDir, ".env");
+  const envVars = fs.existsSync(envFilePath)
+    ? dotenv.parse(fs.readFileSync(envFilePath))
+    : {};
   const state: ProjectWsState = {
     clients: new Set(),
     connectionHandler: null,
@@ -152,7 +161,7 @@ async function initProjectWs(projectId: string, isDev: boolean): Promise<Project
     // registered by routeModule.ws() inherit the AsyncLocalStorage and their
     // console output is tagged automatically.
     runWithProject(projectId, () => {
-      routeModule.ws(wss, db, projectId);
+      routeModule.ws(wss, db, projectId, envVars);
     });
   } finally {
     global.setInterval = origSetInterval;

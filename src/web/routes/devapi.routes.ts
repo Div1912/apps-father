@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import path from "path";
 import fs from "fs";
+import dotenv from "dotenv";
 import Database from "better-sqlite3";
 import { verifyInitData } from "../middleware/initdata";
 import { projectService } from "../../services/project.service";
@@ -88,9 +89,14 @@ router.all("/:projectId/{*routePath}", async (req: Request, res: Response) => {
     const devDir = path.join(projectDir, "development");
     db = createProjectDb(devDir, botToken, botUsername, projectId);
 
+    const envPath = path.join(backendDir, ".env");
+    const envVars = fs.existsSync(envPath)
+      ? dotenv.parse(fs.readFileSync(envPath))
+      : {};
+
     if (typeof routeModule === "function") {
       try {
-        routeModule(projectRouter, db, projectId);
+        routeModule(projectRouter, db, projectId, envVars);
       } catch (regErr) {
         console.error(`[DevAPI] Route registration error for ${projectId}:`, regErr);
       }

@@ -3,6 +3,16 @@
 const tg = window.Telegram?.WebApp;
 const API_BASE = '/telegram-mini-app/api';
 
+// ── Credits coin icon SVGs ──────────────────────────────────────────────────
+const COIN_PATH = 'M129.743,95.01c-15.97-.027-35.976,5.02-55.714,15.292-19.706,10.273-35.326,23.73-44.495,36.873-9.174,13.1-11.654,25.3-7.141,34,4.517,8.658,15.938,13.637,31.948,13.637,16.01.045,36.017-5.024,55.709-15.252,19.738-10.273,35.348-23.775,44.5-36.873,9.2-13.1,11.618-25.3,7.132-34-4.531-8.658-15.925-13.677-31.939-13.677Zm41.225,31.531a60.545,60.545,0,0,1-9.779,20.769C151.051,161.8,134.5,175.93,113.774,186.7c-20.725,10.811-41.763,16.239-59.437,16.239a60.477,60.477,0,0,1-22.6-3.9l4.75,9.151c4.522,8.7,15.911,13.682,31.93,13.682s36.021-5.024,55.714-15.3c19.738-10.228,35.348-23.73,44.5-36.873,9.151-13.1,11.663-25.3,7.132-33.958Zm12.919,7.536c5.024,11.977.987,26.556-8.613,40.238-8.478,12.157-21.442,23.954-37.5,33.823a144.6,144.6,0,0,0,15.476.807c22.2,0,42.3-4.755,56.477-12.157,14.22-7.4,22.025-17.091,22.025-26.87s-7.805-19.468-22.025-26.87a103.163,103.163,0,0,0-25.838-8.972Zm47.864,55.983a61.176,61.176,0,0,1-18.257,13.906c-15.7,8.164-36.874,13.054-60.245,13.054a155.816,155.816,0,0,1-27.229-2.333A152.678,152.678,0,0,1,95.113,226.4c.538.314,1.077.583,1.66.9,14.175,7.4,34.272,12.157,56.477,12.157s42.3-4.755,56.477-12.157c14.22-7.4,22.025-17.091,22.025-26.87Z';
+const COIN_VIEWBOX = '0 0 211.551 144.439';
+const COIN_TRANSFORM = 'translate(-20.199 -95.01)';
+
+/** Inline coin SVG — size in px, fill colour */
+function coinSvg(w, h, fill) {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="${COIN_VIEWBOX}" fill="${fill || 'currentColor'}" style="vertical-align:middle;flex-shrink:0" aria-hidden="true"><path d="${COIN_PATH}" transform="${COIN_TRANSFORM}"/></svg>`;
+}
+
 // ── Analytics (OpenPanel) ──────────────────────────────────────────────────
 
 // Reserved start_param values reserved for intra-app navigation. They must
@@ -168,6 +178,7 @@ let editOriginal = {};
 let chatWs = null;
 let chatMode = 'update'; // 'update' | 'question'
 let chatProjectId = null;
+let chatHasMessages = false;
 let pendingFiles = [];
 let isProcessing = false;
 const processingProjectIds = new Set();
@@ -642,22 +653,22 @@ async function buySlot() {
 
 // ── Top Up ──
 
-let topupAmount = 50;
 let topupMethod = 'ton';
 let topupAnimInstance = null;
 let topupReturnView = null;
 let userBalance = 0;
+let userCredits = 0;
+let userTierId = 'tier_1';   // account-level default (from DB)
+let userTierData = null;
+let allTiers = [];
+const projectTierMap = {};   // { [projectId]: tierId } — per-chat override
+let creditsPerDollar = 50;
 let userPaymentCount = 0;
 let topupSubmitting = false;
 let firstDepositBonusEligible = false;
-// Percent-based first-deposit bonus (server-driven). e.g. 100 → double the
-// first deposit. Falls back to 100 if the API hasn't returned yet.
-let firstDepositBonusPercent = 100;
-function firstDepositBonusUsdFor(amountUsd) {
-  const amt = Number(amountUsd) || 0;
-  const pct = Number(firstDepositBonusPercent) || 0;
-  return +(amt * pct / 100).toFixed(2);
-}
+let firstDepositBonusPercent = 0; // legacy field, kept for backwards compat
+let selectedBundle = null;        // currently selected bundle object
+let bundleCache = null;           // cached array of bundles from /api/bundles
 const ESTIMATED_APP_COST_USD = 3;
 let tonConnectUI = null;
 let tonVerifyTimeout = null;
@@ -676,72 +687,130 @@ const OTHER_CRYPTO_MIN_USD = 15;
 
 function openTopup(returnTo) {
   topupReturnView = returnTo || currentView || 'list';
-  topupAmount = 50;
   topupMethod = 'ton';
+  selectedBundle = null;
 
-  document.getElementById('topup-input').value = topupAmount;
-  document.querySelectorAll('.topup-amount-btn').forEach(b => {
-    b.classList.toggle('active', parseInt(b.dataset.amount) === topupAmount);
-  });
-  document.querySelectorAll('.topup-method').forEach(m => {
-    m.classList.toggle('active', m.dataset.method === topupMethod);
-  });
-
-  updateOtherCryptoLock();
-  updateTonWalletPanel();
   loadTopupBalance();
   loadTopupTgs();
+  loadBundles();
   showView('topup');
 }
 
-// Live "+$X bonus" preview shown under the first-deposit banner on the
-// Top-Up page. Updates as the user changes the deposit amount.
-function updateTopupBonusPreview() {
-  const sub = document.querySelector('#topup-bonus-banner .topup-bonus-sub');
-  if (!sub) return;
-  if (!firstDepositBonusEligible || firstDepositBonusPercent <= 0) return;
-  const bonus = firstDepositBonusUsdFor(topupAmount);
-  if (bonus > 0) {
-    const tmpl = t('topup_first_bonus_preview') || 'You will receive +${bonus} bonus on top of ${amount}';
-    sub.textContent = tmpl
-      .replace('{bonus}', bonus.toFixed(2))
-      .replace('{amount}', `$${Number(topupAmount).toFixed(2)}`);
-  } else {
-    sub.textContent = t('topup_first_bonus_sub') || 'Auto-credited the moment your first payment is confirmed';
+async function loadBundles() {
+  const grid = document.getElementById('bundle-grid');
+  if (!grid) return;
+  try {
+    const res = await fetch(`${API_BASE}/bundles`, { headers: apiHeaders() });
+    if (!res.ok) throw new Error('Failed to load bundles');
+    const data = await res.json();
+    bundleCache = data.bundles || [];
+    firstDepositBonusEligible = data.isFirstPurchase || false;
+
+    // Update bonus banner
+    const bonusSection = document.getElementById('topup-bonus-section');
+    if (bonusSection) bonusSection.style.display = firstDepositBonusEligible ? '' : 'none';
+
+    renderBundleGrid(bundleCache, firstDepositBonusEligible);
+  } catch (err) {
+    grid.innerHTML = `<div class="bundle-grid-error">Failed to load bundles. Please try again.</div>`;
   }
 }
 
-function updateOtherCryptoLock() {
-  const row = document.querySelector('.topup-method[data-method="crypto"]');
-  if (!row) return;
-  const locked = (Number(topupAmount) || 0) < OTHER_CRYPTO_MIN_USD;
-  row.classList.toggle('locked', locked);
-  let hint = row.querySelector('.topup-method-lock');
-  if (locked) {
-    if (!hint) {
-      hint = document.createElement('span');
-      hint.className = 'topup-method-lock';
-      row.appendChild(hint);
+function renderBundleGrid(bundles, isFirstPurchase) {
+  const grid = document.getElementById('bundle-grid');
+  if (!grid) return;
+
+  if (!bundles || bundles.length === 0) {
+    grid.innerHTML = '<div class="bundle-grid-empty">No bundles available right now.</div>';
+    return;
+  }
+
+  grid.innerHTML = bundles.map(b => {
+    const isSoldOut = b.isSoldOut;
+    const isLimited = b.isLimited && b.limitTotal;
+    const totalCredits = isFirstPurchase ? (b.credits + b.bonusCredits) * 2 : (b.credits + b.bonusCredits);
+    const basePrice = b.discount > 0 ? +(b.priceUsd / (1 - b.discount / 100)).toFixed(2) : null;
+
+    const tags = [];
+    if (isFirstPurchase) tags.push(`<div class="bundle-tag-first">×2 FIRST PURCHASE</div>`);
+    if (isLimited && !isSoldOut) tags.push(`<div class="bundle-tag-limited">🔥 Limited</div>`);
+    if (isSoldOut) tags.push(`<div class="bundle-tag-limited" style="background:linear-gradient(90deg,rgba(100,100,100,0.6),rgba(70,70,70,0.6))">Sold Out</div>`);
+
+    const discountBadge = b.discount > 0
+      ? `<span class="bundle-discount-badge">-${b.discount}%</span>`
+      : '';
+
+    const baseTotal = b.credits + b.bonusCredits;   // without x2
+    const doubledTotal = baseTotal * 2;              // with x2
+    let creditsLine;
+    if (isFirstPurchase) {
+      // Show original amount struck through, then doubled amount
+      if (b.bonusCredits > 0) {
+        creditsLine =
+          `${coinSvg(16, 11, '#fbbf24')}&nbsp;` +
+          `<s class="bundle-credits-original">${b.credits.toLocaleString()}</s> ` +
+          `<b>${(b.credits * 2).toLocaleString()}</b>` +
+          `<span class="bundle-bonus"> +<s class="bundle-credits-original">${b.bonusCredits.toLocaleString()}</s> ${(b.bonusCredits * 2).toLocaleString()} bonus</span>`;
+      } else {
+        creditsLine =
+          `${coinSvg(16, 11, '#fbbf24')}&nbsp;` +
+          `<s class="bundle-credits-original">${b.credits.toLocaleString()}</s> ` +
+          `<b>${doubledTotal.toLocaleString()}</b>`;
+      }
+    } else {
+      creditsLine = b.bonusCredits > 0
+        ? `${coinSvg(16, 11, '#fbbf24')}&nbsp;<b>${b.credits.toLocaleString()}</b><span class="bundle-bonus"> +${b.bonusCredits.toLocaleString()} bonus</span>`
+        : `${coinSvg(16, 11, '#fbbf24')}&nbsp;<b>${totalCredits.toLocaleString()}</b>`;
     }
-    hint.textContent = `🔒 ≥ $${OTHER_CRYPTO_MIN_USD}`;
-  } else if (hint) {
-    hint.remove();
-  }
-  // If user is currently on the "crypto" method but amount dropped below
-  // threshold, fall back to TON to avoid a confusing payment failure.
-  if (locked && topupMethod === 'crypto') {
-    topupMethod = 'ton';
-    document.querySelectorAll('.topup-method').forEach(m => {
-      m.classList.toggle('active', m.dataset.method === 'ton');
+
+    const priceLine = basePrice
+      ? `<span class="bundle-price-original">$${basePrice.toFixed(2)}</span> <span class="bundle-price-new">$${b.priceUsd.toFixed(2)}</span> ${discountBadge}`
+      : `<span class="bundle-price-new">$${b.priceUsd.toFixed(2)}</span>`;
+
+    const progressLine = isLimited
+      ? (() => {
+          const pct = Math.min(100, Math.round((b.purchaseCount / b.limitTotal) * 100));
+          return `<div class="bundle-progress">
+            <div class="bundle-progress-bar"><div class="bundle-progress-fill" style="width:${pct}%"></div></div>
+            <span class="bundle-progress-label">${b.purchaseCount}/${b.limitTotal}</span>
+          </div>`;
+        })()
+      : '';
+
+    const cardClass = [
+      'bundle-card',
+      isSoldOut ? 'bundle-card--sold-out' : '',
+      isLimited ? 'bundle-card--limited' : '',
+    ].filter(Boolean).join(' ');
+
+    return `<div class="${cardClass}" data-bundle-id="${b.id}">
+      ${tags.join('')}
+      <div class="bundle-name">${esc(b.name)}</div>
+      <div class="bundle-credits">${creditsLine}</div>
+      <div class="bundle-price">${priceLine}</div>
+      ${progressLine}
+    </div>`;
+  }).join('');
+
+  grid.querySelectorAll('.bundle-card:not(.bundle-card--sold-out)').forEach(card => {
+    card.addEventListener('click', () => {
+      const bundle = bundles.find(b => b.id === card.dataset.bundleId);
+      if (bundle) openPurchaseModal(bundle);
     });
-    updateTonWalletPanel();
-  }
+  });
 }
 
-// Minimum balance required to start a build/update (mirrors the server-side
-// guards in src/web/server.ts — keep in sync).
-const MIN_BUILD_BALANCE_USD = 5;
-const ESTIMATED_PRICE_RANGE = '$1–$5';
+// Minimum credits required to start a build/update (derived from user's tier).
+// Falls back to safe default; the real check is server-side.
+function getMinBuildCredits() {
+  if (userTierData?.pricing?.create) return userTierData.pricing.create;
+  return 300; // tier_1 default
+}
+function getMinAskCredits() {
+  if (userTierData?.pricing?.ask) return userTierData.pricing.ask;
+  return 20;
+}
+const ESTIMATED_PRICE_RANGE = '100–500';
 
 // Single unified "Insufficient Funds" warning panel.
 // Replaces the older split between the compact red bar (returning depositors)
@@ -750,57 +819,51 @@ const ESTIMATED_PRICE_RANGE = '$1–$5';
 // shown inline only when the user is still eligible for the first-deposit
 // bonus AND the bonus percent is enabled.
 function renderInsufficientFundsCard(balance) {
-  const bal = Number(balance) || 0;
-  const eligibleBonus = firstDepositBonusEligible && firstDepositBonusPercent > 0;
-  const pct = firstDepositBonusPercent;
+  const bal      = Math.floor(Number(balance) || 0);
+  const cost     = getMinBuildCredits();
+  const shortfall = Math.max(0, cost - bal);
+  const eligible  = firstDepositBonusEligible;
 
-  const title    = t('chat_insufficient_funds_title') || t('chat_insufficient') || 'Insufficient Funds';
-  const subtitle = t('chat_insufficient_funds_sub')   || 'Top up your balance to start building';
-  const lblPrice = t('chat_estimated_price')          || t('chat_estimated_cost') || 'Estimated price';
+  // substitute {pct} placeholder – bonus is always ×2 (100%)
+  const subPct = s => s.replace(/\{pct\}/g, '100');
+
+  const title    = t('chat_insufficient_funds_title') || t('chat_insufficient') || 'Not Enough Credits';
+  const subtitle = t('chat_insufficient_funds_sub')   || 'Top up to start building your app';
   const lblBal   = t('chat_your_balance')             || 'Your balance';
-  const note     = (t('chat_min_balance_note') || 'You can start when your balance is at least ${min}')
-                     .replace('${min}', `$${MIN_BUILD_BALANCE_USD}`);
-  const ctaText  = eligibleBonus
-    ? ((t('chat_topup_cta_bonus') || 'Top Up & Get +{pct}% Bonus').replace('{pct}', pct))
-    : (t('chat_topup_cta') || t('chat_topup_btn') || 'Top Up Balance');
+  const lblCost  = t('chat_build_cost')               || 'Build cost';
+  const lblNeed  = t('chat_credits_needed')           || 'You need';
 
-  const bonusPanel = eligibleBonus
-    ? `<div class="ifc-bonus">
-         <div class="ifc-bonus-icon">🎁</div>
-         <div class="ifc-bonus-text">
-           <div class="ifc-bonus-title">${esc((t('chat_bonus_mini_title') || '+{pct}% Bonus on first deposit').replace('{pct}', pct))}</div>
-           <div class="ifc-bonus-sub">${esc(t('chat_bonus_mini_sub') || 'Auto-credited the moment your payment is confirmed')}</div>
-         </div>
-         <div class="ifc-bonus-pct">+${pct}%</div>
-       </div>`
+  const rawCta = eligible
+    ? (t('chat_topup_cta_bonus') || 'Top Up & Get ×2 Bonus')
+    : (t('chat_topup_cta') || 'Top Up Credits');
+  const ctaText = subPct(rawCta);
+
+  const bonusBadge = eligible
+    ? `<span class="ifc-cta-badge">+100%</span>`
     : '';
 
   return `
     <div class="ifc-header">
-      <div class="ifc-icon">⚠️</div>
+      <div class="ifc-coin-icon">${coinSvg(36, 26, '#fbbf24')}</div>
       <div class="ifc-headtext">
         <div class="ifc-title">${esc(title)}</div>
         <div class="ifc-sub">${esc(subtitle)}</div>
       </div>
     </div>
     <div class="ifc-stats">
-      <div class="ifc-stat">
-        <div class="ifc-stat-label">${esc(lblPrice)}</div>
-        <div class="ifc-stat-value">~${ESTIMATED_PRICE_RANGE}</div>
-      </div>
-      <div class="ifc-stat">
+      <div class="ifc-stat ifc-stat--bal">
         <div class="ifc-stat-label">${esc(lblBal)}</div>
-        <div class="ifc-stat-value low">$${bal.toFixed(2)}</div>
+        <div class="ifc-stat-value low">${coinSvg(13, 9, '#fb923c')}&nbsp;${bal.toLocaleString()}</div>
+      </div>
+      <div class="ifc-stat ifc-stat--cost">
+        <div class="ifc-stat-label">${esc(lblCost)}</div>
+        <div class="ifc-stat-value">${coinSvg(13, 9, '#fbbf24')}&nbsp;${cost.toLocaleString()}</div>
       </div>
     </div>
-    <div class="ifc-note">
-      <span class="ifc-note-icon">ℹ️</span>
-      <span>${esc(note)}</span>
-    </div>
-    ${bonusPanel}
-    <button class="ifc-cta ${eligibleBonus ? 'with-bonus' : ''}">
-      <span>${esc(ctaText)}</span>
-      <span class="ifc-cta-arrow">→</span>
+    <button class="ifc-cta ${eligible ? 'with-bonus' : ''}">
+      ${coinSvg(16, 11, 'currentColor')}
+      <span>${esc(t('chat_topup_btn') || t('chat_topup_cta') || 'Top Up')}</span>
+      ${bonusBadge}
     </button>
   `;
 }
@@ -820,32 +883,21 @@ async function loadTopupBalance() {
     const res = await fetch(`${API_BASE}/balance`, { headers: apiHeaders() });
     if (res.ok) {
       const data = await res.json();
-      userBalance = data.balance;
+      userBalance = data.balance; // now credits
+      userCredits = data.credits ?? data.balance ?? 0;
+      userTierId = data.tierId || 'tier_1';
+      userTierData = data.tier || null;
+      if (data.allTiers?.length) allTiers = data.allTiers;
+      if (data.creditsPerDollar) creditsPerDollar = data.creditsPerDollar;
       userPaymentCount = data.paymentCount ?? 0;
       firstDepositBonusEligible = !!data.firstDepositBonusEligible;
-      if (typeof data.firstDepositBonusPercent === 'number') {
-        firstDepositBonusPercent = data.firstDepositBonusPercent;
-      }
-      document.getElementById('topup-balance-text').textContent = `Current balance: $${Number(data.balance).toFixed(2)}`;
+      const creditsDisplay = Math.max(0, userCredits);
       const balEl = document.getElementById('balance-amount');
-      if (balEl) balEl.textContent = `$${Number(data.balance).toFixed(2)}`;
-
-      // First-deposit bonus banner on the Top-Up page
-      const bonusSection = document.getElementById('topup-bonus-section');
-      const bonusBanner = document.getElementById('topup-bonus-banner');
-      if (bonusSection && bonusBanner) {
-        if (firstDepositBonusEligible && firstDepositBonusPercent > 0) {
-          const pct = firstDepositBonusPercent;
-          bonusBanner.querySelector('.topup-bonus-title').textContent =
-            (t('topup_first_bonus_title') || 'Get +{pct}% bonus on your first deposit').replace('{pct}', pct);
-          bonusBanner.querySelector('.topup-bonus-sub').textContent =
-            t('topup_first_bonus_sub') || 'Auto-credited the moment your first payment is confirmed';
-          bonusSection.style.display = '';
-          updateTopupBonusPreview();
-        } else {
-          bonusSection.style.display = 'none';
-        }
-      }
+      if (balEl) balEl.innerHTML = `${coinSvg(18, 12, 'currentColor')}&nbsp;${creditsDisplay.toLocaleString()}`;
+      const balText = document.getElementById('topup-balance-text');
+      if (balText) balText.innerHTML = `${coinSvg(18, 12, 'currentColor')}&nbsp;${creditsDisplay.toLocaleString()}`;
+      renderTierChip();
+      updatePillPrices();
     }
   } catch {}
 }
@@ -870,32 +922,115 @@ function loadTopupTgs() {
     .catch(err => console.error('Failed to load topup TGS:', err));
 }
 
-function updateTopupButton() {
-  if (!tg?.MainButton) return;
-  const methodName = topupMethod === 'cryptobot' ? t('topup_crypto_bot') : topupMethod === 'ton' ? 'TON' : topupMethod === 'stars' ? 'Stars' : 'Crypto';
-  tg.MainButton.setText(`Pay $${topupAmount} — ${methodName}`);
-  tg.MainButton.color = '#248BDA';
-  tg.MainButton.textColor = '#ffffff';
+function openPurchaseModal(bundle) {
+  selectedBundle = bundle;
+  topupMethod = 'ton';
+  topupSubmitting = false;
+
+  const modal = document.getElementById('purchase-modal');
+  if (!modal) return;
+
+  // Always reset button to clean state on open (guard against stale loading state)
+  const purchaseBtn = document.getElementById('pm-purchase-btn');
+  if (purchaseBtn) { purchaseBtn.disabled = false; purchaseBtn.textContent = 'Purchase'; }
+
+  // Populate bundle summary
+  const isFirst = firstDepositBonusEligible;
+  const pmBaseTotal = bundle.credits + bundle.bonusCredits;
+  const pmFinalTotal = isFirst ? pmBaseTotal * 2 : pmBaseTotal;
+
+  // Bundle name
+  document.getElementById('pm-bundle-name').textContent = bundle.name;
+
+  // Large credits number
+  const bigEl = document.getElementById('pm-bundle-credits-big');
+  if (isFirst) {
+    bigEl.innerHTML =
+      `<span class="pm-credits-orig">${pmBaseTotal.toLocaleString()}</span>` +
+      `${coinSvg(28, 19, '#fbbf24')}${pmFinalTotal.toLocaleString()}`;
+  } else {
+    bigEl.innerHTML = `${coinSvg(28, 19, '#fbbf24')}${pmFinalTotal.toLocaleString()}`;
+  }
+
+  // Breakdown line
+  const breakdownEl = document.getElementById('pm-bundle-breakdown');
+  const parts = [];
+  if (isFirst) parts.push(`<span class="pm-bd-tag pm-bd-tag--x2">×2 First Purchase</span>`);
+  if (bundle.bonusCredits > 0) {
+    const bonusAmt = isFirst ? bundle.bonusCredits * 2 : bundle.bonusCredits;
+    parts.push(`<span class="pm-bd-tag pm-bd-tag--bonus">+${bonusAmt.toLocaleString()} bonus</span>`);
+  }
+  breakdownEl.innerHTML = parts.join('');
+
+  // Price row
+  const priceEl = document.getElementById('pm-bundle-price');
+  const priceOrigEl = document.getElementById('pm-bundle-price-orig');
+  const discountEl = document.getElementById('pm-bundle-discount-badge');
+  priceEl.textContent = `$${bundle.priceUsd.toFixed(2)}`;
+  if (bundle.discount > 0) {
+    const origPrice = (bundle.priceUsd / (1 - bundle.discount / 100)).toFixed(2);
+    priceOrigEl.textContent = `$${origPrice}`;
+    discountEl.textContent = `-${bundle.discount}%`;
+    priceOrigEl.style.display = '';
+    discountEl.style.display = '';
+  } else {
+    priceOrigEl.style.display = 'none';
+    discountEl.style.display = 'none';
+  }
+
+  // Glow color based on first purchase
+  const glowEl = document.getElementById('pm-bundle-glow');
+  if (glowEl) glowEl.style.background = isFirst
+    ? 'radial-gradient(ellipse 80% 50% at 50% 0%, rgba(129,140,248,0.35) 0%, transparent 100%)'
+    : 'radial-gradient(ellipse 80% 50% at 50% 0%, rgba(251,191,36,0.25) 0%, transparent 100%)';
+
+  // Set "Other Crypto" disabled state based on bundle price
+  const cryptoBtn = document.getElementById('pm-method-crypto');
+  if (cryptoBtn) {
+    const disabled = bundle.priceUsd < 15;
+    cryptoBtn.classList.toggle('pm-method--disabled', disabled);
+    cryptoBtn.title = disabled ? `Requires ≥ $15 bundle` : '';
+  }
+
+  // Reset method selection
+  document.querySelectorAll('.pm-method').forEach(btn => {
+    btn.classList.toggle('pm-method--active', btn.dataset.method === topupMethod);
+  });
+
+  updateTonWalletPanel();
+  modal.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+
+  // Animate in
+  requestAnimationFrame(() => {
+    modal.querySelector('.purchase-modal-sheet')?.classList.add('open');
+  });
+}
+
+function closePurchaseModal() {
+  const modal = document.getElementById('purchase-modal');
+  if (!modal) return;
+  const sheet = modal.querySelector('.purchase-modal-sheet');
+  sheet?.classList.remove('open');
+  setTimeout(() => {
+    modal.classList.add('hidden');
+    document.body.style.overflow = '';
+    selectedBundle = null;
+  }, 280);
 }
 
 async function submitTopup() {
-  if (topupSubmitting) return;
-  const inputVal = parseInt(document.getElementById('topup-input').value);
-  const amount = isNaN(inputVal) ? topupAmount : inputVal;
-  if (amount < 2) {
-    showToast(t('toast_topup_min'), 'error');
-    return;
-  }
+  if (topupSubmitting || !selectedBundle) return;
   topupSubmitting = true;
-  tg?.MainButton?.showProgress();
+  const btn = document.getElementById('pm-purchase-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Processing…'; }
   try {
     const res = await fetch(`${API_BASE}/topup`, {
       method: 'POST',
       headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amount, method: topupMethod }),
+      body: JSON.stringify({ bundleId: selectedBundle.id, method: topupMethod }),
     });
     const data = await res.json();
-    tg?.MainButton?.hideProgress();
 
     if (!res.ok || !data.ok) {
       showToast(data.error || 'Payment creation failed', 'error');
@@ -903,30 +1038,26 @@ async function submitTopup() {
     }
 
     if (data.ton) {
+      closePurchaseModal();
       await handleTonPayment(data);
       return;
     }
 
     if (topupMethod === 'stars') {
-      // Always start the polling fallback BEFORE opening the invoice, so
-      // even if Telegram never fires the close callback (e.g. the user
-      // backgrounds the app) we still detect the confirmed payment.
       const paymentId = data.paymentId;
       if (paymentId) startStarsVerifying(paymentId);
-
+      closePurchaseModal();
       try {
         tg?.openInvoice(data.invoiceUrl, (status) => {
           console.log('[Stars] Invoice closed with status:', status);
           if (status === 'paid') {
             showToast('Payment received, confirming...', 'info');
-            // Trigger an immediate verification check
             if (paymentId) {
               setTimeout(() => {
                 stopStarsVerifying();
                 startStarsVerifying(paymentId);
               }, 500);
             }
-            // Optimistic balance refresh
             setTimeout(() => loadTopupBalance(), 1500);
           } else if (status === 'cancelled' || status === 'failed') {
             stopStarsVerifying();
@@ -934,10 +1065,10 @@ async function submitTopup() {
         });
       } catch (e) {
         console.error('openInvoice error:', e);
-        // openInvoice may throw without a callback param on older clients
         try { tg?.openInvoice(data.invoiceUrl); } catch {}
       }
     } else {
+      closePurchaseModal();
       if (data.invoiceUrl.includes('t.me/')) {
         tg?.openTelegramLink(data.invoiceUrl);
       } else {
@@ -945,10 +1076,10 @@ async function submitTopup() {
       }
     }
   } catch (err) {
-    tg?.MainButton?.hideProgress();
     showToast('Error: ' + err.message, 'error');
   } finally {
     topupSubmitting = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Purchase'; }
   }
 }
 
@@ -1085,7 +1216,7 @@ function startTonVerifying(paymentId) {
       if (result.confirmed) {
         stopTonVerifying();
         tg?.MainButton?.hideProgress();
-        updateTopupButton();
+        tg?.MainButton?.hide();
         showToast('Payment confirmed! Balance updated.', 'success');
         tg?.HapticFeedback?.notificationOccurred('success');
         loadTopupBalance();
@@ -1098,7 +1229,7 @@ function startTonVerifying(paymentId) {
     if (tonVerifyAttempts >= TON_MAX_VERIFY) {
       stopTonVerifying();
       tg?.MainButton?.hideProgress();
-      updateTopupButton();
+      tg?.MainButton?.hide();
       showToast('Still processing. Balance will update automatically.', 'info');
       return;
     }
@@ -1164,43 +1295,26 @@ function stopStarsVerifying() {
 }
 
 function initTopupEvents() {
-  const topupInput = document.getElementById('topup-input');
-
-  document.querySelectorAll('.topup-amount-btn').forEach(btn => {
+  // Purchase modal: method selection
+  document.querySelectorAll('.pm-method').forEach(btn => {
     btn.addEventListener('click', () => {
-      topupAmount = parseInt(btn.dataset.amount);
-      topupInput.value = topupAmount;
-      document.querySelectorAll('.topup-amount-btn').forEach(b => b.classList.toggle('active', b === btn));
-      updateOtherCryptoLock();
-      updateTopupButton();
-      updateTopupBonusPreview();
-    });
-  });
-
-  topupInput.addEventListener('input', () => {
-    const val = parseInt(topupInput.value);
-    topupAmount = isNaN(val) ? 0 : val;
-    document.querySelectorAll('.topup-amount-btn').forEach(b => {
-      b.classList.toggle('active', parseInt(b.dataset.amount) === topupAmount);
-    });
-    updateOtherCryptoLock();
-    updateTopupButton();
-    updateTopupBonusPreview();
-  });
-
-  document.querySelectorAll('.topup-method').forEach(row => {
-    row.addEventListener('click', () => {
-      if (row.classList.contains('locked')) {
-        showToast(t('topup_other_crypto_locked') || `Other Crypto requires at least $${OTHER_CRYPTO_MIN_USD}`, 'info');
+      if (btn.classList.contains('pm-method--disabled')) {
+        showToast(`This method requires a bundle of at least $15`, 'info');
         return;
       }
-      topupMethod = row.dataset.method;
-      document.querySelectorAll('.topup-method').forEach(m => m.classList.toggle('active', m === row));
-      updateTopupButton();
+      topupMethod = btn.dataset.method;
+      document.querySelectorAll('.pm-method').forEach(b => b.classList.toggle('pm-method--active', b === btn));
       updateTonWalletPanel();
     });
   });
 
+  // Purchase button
+  document.getElementById('pm-purchase-btn')?.addEventListener('click', () => submitTopup());
+
+  // Close modal on backdrop click
+  document.getElementById('purchase-modal-backdrop')?.addEventListener('click', () => closePurchaseModal());
+
+  // TON wallet panel events
   document.getElementById('ton-wallet-disconnect')?.addEventListener('click', async () => {
     if (tonConnectUI) {
       try {
@@ -1230,6 +1344,7 @@ function openChat(projectId) {
   }
   if (!currentProject) return;
   chatProjectId = projectId;
+  chatHasMessages = false;
 
   const avatarEl = document.getElementById('chat-avatar');
   if (currentProject.avatarUrl) {
@@ -1251,10 +1366,22 @@ function openChat(projectId) {
   pendingFiles = [];
   updateAttachPreview();
 
+  // Clear any stale finalizing overlay from a previous chat
+  setInputFinalizing(false);
+
   const projProcessing = processingProjectIds.has(projectId);
   isProcessing = projProcessing;
   setInputDisabled(projProcessing);
   setHeaderWorking(projProcessing);
+
+  // Restore per-project tier (falls back to account-level default)
+  if (projectTierMap[projectId]) {
+    userTierId = projectTierMap[projectId];
+    const tiers = allTiers.length ? allTiers : getDefaultTiers();
+    userTierData = tiers.find(t => t.id === userTierId) || null;
+    renderTierChip();
+    updatePillPrices();
+  }
 
   const skelEl = document.getElementById('chat-skeleton');
   skelEl.classList.remove('hidden');
@@ -1263,7 +1390,7 @@ function openChat(projectId) {
   enterPlanningMode(isNew);
 
   showView('chat');
-  connectChatWS(projectId);
+  connectChatWS(projectId);   // connect WS first so live updates overwrite stale history immediately
   loadChatHistory(projectId);
 }
 
@@ -1305,6 +1432,7 @@ let promptSamplesTimer = null;
 let promptSamplesIndex = 0;
 
 function renderPromptSamples() {
+  if (chatHasMessages) return; // hide once chat has content
   const inputArea = document.getElementById('chat-input-area');
   if (!inputArea) return;
   const samples = [
@@ -1494,7 +1622,7 @@ function handleWSMessage(data) {
       el.className = `chat-bubble ${cls}`;
       let html = `<div class="chat-bubble-content">${msg.type === 'error' ? esc(msg.content) : formatContent(msg.content)}</div>`;
       if (typeof msg.costUsd === 'number' && msg.costUsd > 0) {
-        html += `<div class="chat-progress-cost">Cost: $${msg.costUsd.toFixed(4)}${typeof msg.balance === 'number' ? ` · Balance: $${msg.balance.toFixed(2)}` : ''}</div>`;
+        html += `<div class="chat-progress-cost">Cost: $${msg.costUsd.toFixed(4)}${typeof msg.balance === 'number' ? ` · Balance: ${Math.floor(msg.balance)}` : ''}</div>`;
       }
       html += `<div class="chat-bubble-time">${timeStr(msg.timestamp)}</div>`;
       el.innerHTML = html;
@@ -1555,7 +1683,8 @@ function handleWSMessage(data) {
     el.appendChild(block);
     // Persist: add narration entry
     const _apst0 = ensureAgentProcState(data.messageId);
-    _apst0.narrations.push({ stepId: data.stepId, preview: 'Thinking\u2026', body: '', done: false });
+    if (typeof _apst0._seq !== 'number') _apst0._seq = 0;
+    _apst0.narrations.push({ stepId: data.stepId, preview: 'Thinking\u2026', body: '', done: false, order: _apst0._seq++ });
     persistAgentProcState(data.messageId);
     scrollToBottom();
     return;
@@ -1583,9 +1712,42 @@ function handleWSMessage(data) {
     return;
   }
 
+  if (data.type === 'agent_writing_chunk') {
+    // Show tool-call arguments streaming in the active narration block —
+    // purely visual, gives the user feedback while the model writes files.
+    const block = document.getElementById(`narr-${data.stepId}`);
+    if (!block) return;
+    let viewport = block.querySelector('.agent-completion-viewport');
+    if (!viewport) {
+      viewport = document.createElement('div');
+      viewport.className = 'agent-completion-viewport';
+      const label = document.createElement('div');
+      label.className = 'agent-completion-label';
+      const toolLabel = (data.toolName || '').replace(/_/g, ' ');
+      label.textContent = toolLabel ? `${toolLabel}` : 'Writing…';
+      viewport.appendChild(label);
+      const pre = document.createElement('pre');
+      pre.className = 'agent-completion-pre';
+      viewport.appendChild(pre);
+      block.appendChild(viewport);
+    }
+    const pre = viewport.querySelector('.agent-completion-pre');
+    if (pre) {
+      // Append only the new delta (not the full accumulated args JSON) and
+      // auto-scroll to the bottom so the user always sees the latest output.
+      pre.textContent += data.delta || '';
+      pre.scrollTop = pre.scrollHeight;
+    }
+    scrollToBottom();
+    return;
+  }
+
   if (data.type === 'agent_narration_end') {
     const block = document.getElementById(`narr-${data.stepId}`);
     if (!block) return;
+    // Remove completion viewport when narration ends — the step card that
+    // follows immediately shows the tool name and result.
+    block.querySelector('.agent-completion-viewport')?.remove();
     const body = block.querySelector('.agent-think-body');
     if (body) { const cur = body.querySelector('.stream-cursor'); if (cur) cur.remove(); }
     const iconEl = block.querySelector('.agent-think-icon');
@@ -1633,7 +1795,8 @@ function handleWSMessage(data) {
     el.appendChild(step);
     // Persist: add step entry
     const _apst3 = ensureAgentProcState(data.messageId);
-    _apst3.steps.push({ stepId: data.stepId, kind: data.kind, title: data.title || data.toolName || data.kind || '', target: data.target || null, status: 'running', meta: null });
+    if (typeof _apst3._seq !== 'number') _apst3._seq = 0;
+    _apst3.steps.push({ stepId: data.stepId, kind: data.kind, title: data.title || data.toolName || data.kind || '', target: data.target || null, status: 'running', meta: null, order: _apst3._seq++ });
     persistAgentProcState(data.messageId);
     scrollToBottom();
     return;
@@ -1792,7 +1955,7 @@ function handleWSMessage(data) {
         }
         html += resultActionsHtml(chatProjectId);
         if (typeof data.costUsd === 'number') {
-          html += `<div class="chat-progress-cost">${t('chat_cost')}: $${data.costUsd.toFixed(4)}${typeof data.balance === 'number' ? ` · ${t('chat_balance')}: $${data.balance.toFixed(2)}` : ''}</div>`;
+          html += `<div class="chat-progress-cost">${t('chat_cost')}: $${data.costUsd.toFixed(4)}${typeof data.balance === 'number' ? ` · ${t('chat_balance')}: ${Math.floor(data.balance)}` : ''}</div>`;
         }
         html += linkBotCardHtml(chatProjectId);
         el.innerHTML = html;
@@ -1899,6 +2062,7 @@ async function loadChatHistory(projectId) {
     for (const msg of data.messages) {
       if (msg.type === 'question' || msg.type === 'answer') continue;
       if (msg.content === 'preparing_next_update') continue;
+      if (msg.type === 'balance_error') continue;   // client-only, never re-render on re-entry
       if (msg.type === 'progress' && msg.percent === 100) {
         msg.type = 'result';
       }
@@ -1938,6 +2102,10 @@ async function loadChatHistory(projectId) {
 }
 
 function appendMessage(msg, animate = true) {
+  if (!chatHasMessages) {
+    chatHasMessages = true;
+    clearPromptSamples();
+  }
   const inner = document.getElementById('chat-messages-inner');
   const el = document.createElement('div');
   el.id = `msg-${msg.id}`;
@@ -1956,7 +2124,7 @@ function appendMessage(msg, animate = true) {
     el.innerHTML = html;
   } else if (msg.type === 'balance_error') {
     el.className = 'chat-bubble';
-    const bal = Number(msg.metadata?.balance ?? userBalance ?? 0);
+    const bal = Number(msg.metadata?.credits ?? msg.metadata?.balance ?? userCredits ?? 0);
     renderBalancePromptCard(el, bal);
     if (isProcessing) {
       setProcessing(false);
@@ -1972,13 +2140,18 @@ function appendMessage(msg, animate = true) {
       .then(d => {
         if (!d) return;
         userBalance = d.balance;
+        userCredits = d.credits ?? d.balance ?? 0;
+        if (d.tierId) userTierId = d.tierId;
+        if (d.tier) userTierData = d.tier;
+        if (d.allTiers?.length) allTiers = d.allTiers;
+        if (d.creditsPerDollar) creditsPerDollar = d.creditsPerDollar;
         userPaymentCount = d.paymentCount ?? 0;
         firstDepositBonusEligible = !!d.firstDepositBonusEligible;
         if (typeof d.firstDepositBonusPercent === 'number') {
           firstDepositBonusPercent = d.firstDepositBonusPercent;
         }
         const fresh = el.parentElement?.querySelector(`#${el.id}`);
-        if (fresh) renderBalancePromptCard(fresh, Number(d.balance));
+        if (fresh) renderBalancePromptCard(fresh, userCredits);
       })
       .catch(() => {});
   } else if (msg.content === 'preparing_next_update' || msg.metadata?.preparing) {
@@ -2067,7 +2240,7 @@ function appendMessage(msg, animate = true) {
     }
     html += resultActionsHtml(msg.metadata?.projectId || chatProjectId);
     if (typeof msg.costUsd === 'number') {
-      html += `<div class="chat-progress-cost">Cost: $${msg.costUsd.toFixed(4)}${typeof msg.balance === 'number' ? ` · Balance: $${msg.balance.toFixed(2)}` : ''}</div>`;
+      html += `<div class="chat-progress-cost">Cost: $${msg.costUsd.toFixed(4)}${typeof msg.balance === 'number' ? ` · Balance: ${Math.floor(msg.balance)}` : ''}</div>`;
     }
     html += linkBotCardHtml(msg.metadata?.projectId || chatProjectId);
     html += `<div class="chat-bubble-time">${timeStr(msg.timestamp)}</div>`;
@@ -2076,22 +2249,24 @@ function appendMessage(msg, animate = true) {
     el.className = 'chat-bubble chat-bubble--assistant chat-bubble--plan';
     let html = `<div class="chat-plan-content">${formatContent(msg.content)}</div>`;
     if (typeof msg.metadata?.costUsd === 'number') {
-      html += `<div class="chat-progress-cost">Cost: $${msg.metadata.costUsd.toFixed(4)}${typeof msg.metadata?.balance === 'number' ? ` · Balance: $${msg.metadata.balance.toFixed(2)}` : ''}</div>`;
+      html += `<div class="chat-progress-cost">Cost: $${msg.metadata.costUsd.toFixed(4)}${typeof msg.metadata?.balance === 'number' ? ` · Balance: ${Math.floor(msg.metadata.balance)}` : ''}</div>`;
     }
+    const planPrice = userTierData?.pricing?.create ?? userTierData?.pricing?.plan ?? null;
+    const planPriceTag = planPrice != null ? `<span class="plan-btn-price">${coinSvg(11, 8, '#fbbf24')}${Number(planPrice).toLocaleString()}</span>` : '';
     html += `<div class="chat-plan-actions">
-      <button class="chat-plan-btn chat-plan-btn--build" onclick="approvePlan()">${t('chat_lets_build')}</button>
+      <button class="chat-plan-btn chat-plan-btn--build" onclick="approvePlan()">${t('chat_lets_build')}${planPriceTag}</button>
       <button class="chat-plan-btn chat-plan-btn--edit" onclick="startEditPlan()">${t('chat_edit')}</button>
     </div>`;
     el.innerHTML = html;
   } else if (msg.type === 'progress') {
-    renderProgressBubble(msg);
+    renderProgressBubble(msg, true);
     return;
   } else {
     const cls = msg.role === 'system' ? 'chat-bubble--system' : 'chat-bubble--assistant';
     el.className = `chat-bubble ${cls}`;
     let html = `<div class="chat-bubble-content">${formatContent(msg.content)}</div>`;
     if (typeof msg.costUsd === 'number' && msg.costUsd > 0) {
-      html += `<div class="chat-progress-cost">Cost: $${msg.costUsd.toFixed(4)}${typeof msg.balance === 'number' ? ` · Balance: $${msg.balance.toFixed(2)}` : ''}</div>`;
+      html += `<div class="chat-progress-cost">Cost: $${msg.costUsd.toFixed(4)}${typeof msg.balance === 'number' ? ` · Balance: ${Math.floor(msg.balance)}` : ''}</div>`;
     }
     html += `<div class="chat-bubble-time">${timeStr(msg.timestamp)}</div>`;
     el.innerHTML = html;
@@ -2136,9 +2311,14 @@ function ensureAgentProcState(messageId) {
   if (!agentProcState.has(messageId)) {
     try {
       const raw = localStorage.getItem('af_proc_' + messageId);
-      if (raw) { agentProcState.set(messageId, JSON.parse(raw)); return agentProcState.get(messageId); }
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed._seq !== 'number') parsed._seq = Math.max((parsed.narrations?.length || 0), (parsed.steps?.length || 0));
+        agentProcState.set(messageId, parsed);
+        return agentProcState.get(messageId);
+      }
     } catch {}
-    agentProcState.set(messageId, { narrations: [], steps: [], footer: {} });
+    agentProcState.set(messageId, { narrations: [], steps: [], footer: {}, _seq: 0 });
   }
   return agentProcState.get(messageId);
 }
@@ -2157,51 +2337,65 @@ function clearAgentProcState(messageId) {
 function restoreAgentProcessCard(el, state, isRunning) {
   el.classList.add('agent-process');
   el.innerHTML = '';
-  for (const n of (state.narrations || [])) {
-    const block = document.createElement('div');
-    block.id = 'narr-' + n.stepId;
-    block.className = 'agent-think-block ' + (n.done ? 'done' : 'running');
-    block.innerHTML = `
-      <div class="agent-think-header">
-        <span class="agent-think-icon">${n.done ? AGENT_DONE_SVG : '<span class="step-spinner"></span>'}</span>
-        <span class="agent-think-preview">${esc(n.preview || 'Thinking\u2026')}</span>
-        <span class="agent-think-toggle">\u203a</span>
-      </div>
-      <div class="agent-think-body">${n.body ? formatContent(n.body) : ''}</div>`;
-    if (n.done) {
-      const hdr = block.querySelector('.agent-think-header');
-      hdr.addEventListener('click', () => block.classList.toggle('open'));
+
+  // Merge narrations and steps into a single chronological list using the
+  // `order` stamp written at push time. Items without an order (legacy saves)
+  // fall back to narrations-then-steps to preserve previous behaviour.
+  const narrations = (state.narrations || []).map(n => ({ ...n, _kind: 'narration' }));
+  const steps      = (state.steps      || []).map(s => ({ ...s, _kind: 'step' }));
+  const hasOrder   = [...narrations, ...steps].some(x => typeof x.order === 'number');
+  const items = hasOrder
+    ? [...narrations, ...steps].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    : [...narrations, ...steps];  // legacy: narrations first
+
+  for (const item of items) {
+    if (item._kind === 'narration') {
+      const n = item;
+      const block = document.createElement('div');
+      block.id = 'narr-' + n.stepId;
+      block.className = 'agent-think-block ' + (n.done ? 'done' : 'running');
+      block.innerHTML = `
+        <div class="agent-think-header">
+          <span class="agent-think-icon">${n.done ? AGENT_DONE_SVG : '<span class="step-spinner"></span>'}</span>
+          <span class="agent-think-preview">${esc(n.preview || 'Thinking\u2026')}</span>
+          <span class="agent-think-toggle">\u203a</span>
+        </div>
+        <div class="agent-think-body">${n.body ? formatContent(n.body) : ''}</div>`;
+      if (n.done) {
+        const hdr = block.querySelector('.agent-think-header');
+        hdr.addEventListener('click', () => block.classList.toggle('open'));
+      }
+      el.appendChild(block);
+    } else {
+      const s = item;
+      const targetHtml = (s.target?.file || s.target?.url || s.target?.key)
+        ? `<div class="agent-step-target">${esc(s.target.file || s.target.url || s.target.key || '')}</div>` : '';
+      const statusClass = s.status === 'error' ? 'agent-step--error'
+        : s.status === 'running' ? 'agent-step--running' : 'agent-step--done';
+      const iconHtml = s.status === 'error'
+        ? '<svg class="step-svg-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/></svg>'
+        : agentStepIcon(s.kind);
+      let metaHtml = '';
+      if (s.meta) {
+        const m = s.meta, bits = [];
+        if (typeof m.lines === 'number') bits.push(`<span class="meta-neutral">${m.lines} lines</span>`);
+        if (typeof m.added === 'number' && m.added > 0) bits.push(`<span class="meta-added">+${m.added}</span>`);
+        if (typeof m.removed === 'number' && m.removed > 0) bits.push(`<span class="meta-removed">-${m.removed}</span>`);
+        if (typeof m.bytes === 'number') bits.push(`<span class="meta-neutral">${(m.bytes/1024).toFixed(1)}KB</span>`);
+        if (m.error) bits.push(`<span class="meta-removed">${esc(m.error)}</span>`);
+        if (bits.length) metaHtml = `<div class="agent-step-meta">${bits.join('')}</div>`;
+      }
+      const step = document.createElement('div');
+      step.id = 'step-' + s.stepId;
+      step.className = `agent-step ${statusClass}`;
+      step.innerHTML = `
+        <div class="agent-step-icon agent-step-icon--kind">${iconHtml}</div>
+        <div class="agent-step-body">
+          <div class="agent-step-title">${esc(s.title || s.kind || '')}</div>
+          ${targetHtml}${metaHtml}
+        </div>`;
+      el.appendChild(step);
     }
-    el.appendChild(block);
-  }
-  for (const s of (state.steps || [])) {
-    const targetHtml = (s.target?.file || s.target?.url || s.target?.key)
-      ? `<div class="agent-step-target">${esc(s.target.file || s.target.url || s.target.key || '')}</div>` : '';
-    const statusClass = s.status === 'error' ? 'agent-step--error'
-      : s.status === 'running' ? 'agent-step--running' : 'agent-step--done';
-    const iconHtml = s.status === 'error'
-      ? '<svg class="step-svg-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/></svg>'
-      : agentStepIcon(s.kind);
-    let metaHtml = '';
-    if (s.meta) {
-      const m = s.meta, bits = [];
-      if (typeof m.lines === 'number') bits.push(`<span class="meta-neutral">${m.lines} lines</span>`);
-      if (typeof m.added === 'number' && m.added > 0) bits.push(`<span class="meta-added">+${m.added}</span>`);
-      if (typeof m.removed === 'number' && m.removed > 0) bits.push(`<span class="meta-removed">-${m.removed}</span>`);
-      if (typeof m.bytes === 'number') bits.push(`<span class="meta-neutral">${(m.bytes/1024).toFixed(1)}KB</span>`);
-      if (m.error) bits.push(`<span class="meta-removed">${esc(m.error)}</span>`);
-      if (bits.length) metaHtml = `<div class="agent-step-meta">${bits.join('')}</div>`;
-    }
-    const step = document.createElement('div');
-    step.id = 'step-' + s.stepId;
-    step.className = `agent-step ${statusClass}`;
-    step.innerHTML = `
-      <div class="agent-step-icon agent-step-icon--kind">${iconHtml}</div>
-      <div class="agent-step-body">
-        <div class="agent-step-title">${esc(s.title || s.kind || '')}</div>
-        ${targetHtml}${metaHtml}
-      </div>`;
-    el.appendChild(step);
   }
   const f = state.footer || {};
   if ((typeof f.costUsd === 'number' && f.costUsd > 0) || isRunning) {
@@ -2209,7 +2403,7 @@ function restoreAgentProcessCard(el, state, isRunning) {
     footer.className = 'agent-footer';
     let fHtml = '';
     if (typeof f.costUsd === 'number' && f.costUsd > 0) {
-      fHtml += `<div class="chat-progress-cost">${t('chat_cost')}: $${f.costUsd.toFixed(4)}${typeof f.balance === 'number' ? ` \u00b7 ${t('chat_balance')}: $${f.balance.toFixed(2)}` : ''}</div>`;
+      fHtml += `<div class="chat-progress-cost">${t('chat_cost')}: $${f.costUsd.toFixed(4)}${typeof f.balance === 'number' ? ` \u00b7 ${t('chat_balance')}: ${Math.floor(f.balance)}` : ''}</div>`;
     }
     if (isRunning) {
       fHtml += `<button class="chat-abort-btn" onclick="abortProcess()">${t('chat_stop_update')}</button>`;
@@ -2292,7 +2486,7 @@ function paintProgressBubble(el, st) {
   }
 
   if (typeof st.costUsd === 'number' && st.costUsd > 0) {
-    html += `<div class="chat-progress-cost">${t('chat_cost')}: $${st.costUsd.toFixed(4)}${typeof st.balance === 'number' ? ` · ${t('chat_balance')}: $${st.balance.toFixed(2)}` : ''}</div>`;
+    html += `<div class="chat-progress-cost">${t('chat_cost')}: $${st.costUsd.toFixed(4)}${typeof st.balance === 'number' ? ` · ${t('chat_balance')}: ${Math.floor(st.balance)}` : ''}</div>`;
   }
 
   if (!st.completing) {
@@ -2309,7 +2503,7 @@ function parseUtc(s) {
   return isNaN(t) ? 0 : t;
 }
 
-function renderProgressBubble(msg) {
+function renderProgressBubble(msg, fromHistory = false) {
   const inner = document.getElementById('chat-messages-inner');
   let el = document.getElementById(`msg-${msg.id}`);
   let isNew = false;
@@ -2368,6 +2562,17 @@ function renderProgressBubble(msg) {
   paintProgressBubble(el, st);
   ensureProgressTimer();
 
+  // If loaded from history and still in-progress, mark stale until WS updates
+  if (fromHistory && (msg.percent || 0) < 100) {
+    el.classList.add('progress-bubble--stale');
+    if (!el.querySelector('.progress-stale-sync')) {
+      const syncEl = document.createElement('div');
+      syncEl.className = 'progress-stale-sync';
+      syncEl.textContent = t('chat_syncing') || 'Syncing…';
+      el.appendChild(syncEl);
+    }
+  }
+
   setProcessing(true);
   setInputDisabled(true);
   setTyping(false);
@@ -2377,6 +2582,12 @@ function renderProgressBubble(msg) {
 function updateProgressBubble(data) {
   const el = document.getElementById(`msg-${data.messageId}`);
   if (!el) return;
+
+  // Clear stale indicator on first live WS update
+  if (el.classList.contains('progress-bubble--stale')) {
+    el.classList.remove('progress-bubble--stale');
+    el.querySelector('.progress-stale-sync')?.remove();
+  }
 
   let st = progressBubbleState.get(data.messageId);
   if (!st) {
@@ -2399,7 +2610,7 @@ function updateProgressBubble(data) {
     }
     let html = '';
     if (typeof st.costUsd === 'number' && st.costUsd > 0) {
-      html += `<div class="chat-progress-cost">${t('chat_cost')}: $${st.costUsd.toFixed(4)}${typeof st.balance === 'number' ? ` · ${t('chat_balance')}: $${st.balance.toFixed(2)}` : ''}</div>`;
+      html += `<div class="chat-progress-cost">${t('chat_cost')}: $${st.costUsd.toFixed(4)}${typeof st.balance === 'number' ? ` · ${t('chat_balance')}: ${Math.floor(st.balance)}` : ''}</div>`;
     }
     if (!st.completing) {
       html += `<button class="chat-abort-btn" onclick="abortProcess()">${t('chat_stop_update')}</button>`;
@@ -2574,7 +2785,7 @@ async function sendMessage() {
   }
 
   try {
-    const body = { text, type };
+    const body = { text, type, tierId: userTierId };
     if (pendingFiles.length > 0 && type === 'update') {
       body.attachmentIds = pendingFiles.map(f => ({ name: f.name, path: f.name, type: f.type }));
     }
@@ -2664,7 +2875,7 @@ async function sendPlanRequest(description, opts = {}) {
     const res = await fetch(`${API_BASE}/chat/${chatProjectId}/plan`, {
       method: 'POST',
       headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ description }),
+      body: JSON.stringify({ description, tierId: userTierId }),
     });
 
     setTyping(false);
@@ -2778,6 +2989,16 @@ async function openPreferencesModal({ initial, catalog, onSaved, userBubbleId, d
   // Drop any selections that don't belong under the current `kind` so the
   // first render shows a clean state.
   clearHiddenSelections();
+
+  // Always reset the submit button before rendering so stale busy/disabled
+  // state from a previous session (e.g. a failed or cancelled submit) never
+  // leaks into the freshly opened modal.
+  const _submitBtn = document.getElementById('pref-modal-submit');
+  if (_submitBtn) {
+    _submitBtn.disabled = false;
+    _submitBtn.classList.remove('busy', 'waiting-for-bot', 'ready');
+  }
+
   renderPreferencesModal();
   bindPrefModalChrome();
   goToPrefStep(0, { animate: false });
@@ -4516,7 +4737,8 @@ async function approvePlan() {
   try {
     const res = await fetch(`${API_BASE}/chat/${chatProjectId}/approve-plan`, {
       method: 'POST',
-      headers: apiHeaders(),
+      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tierId: userTierId }),
     });
 
     if (!res.ok) {
@@ -4561,7 +4783,7 @@ async function sendEditPlan(feedback) {
     const res = await fetch(`${API_BASE}/chat/${chatProjectId}/edit-plan`, {
       method: 'POST',
       headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ feedback }),
+      body: JSON.stringify({ feedback, tierId: userTierId }),
     });
 
     setTyping(false);
@@ -4821,6 +5043,7 @@ async function openDetail(id) {
   settingsRows += menuRowAction(t('detail_edit_info'), 'af-icon-edit-info', 'open-edit-info');
   if (isAdmin) settingsRows += menuRowAction(t('detail_regen_context'), 'af-icon-refresh', 'open-regen-context');
   if (hasFeature(p, 'get_code')) settingsRows += menuRow('Edit Code', 'af-icon-code', `${baseUrl}/editor/${p.id}/`);
+  settingsRows += menuRowAction(t('detail_env_vars') || 'Environment Variables', 'af-icon-code', 'open-env-vars');
   // if (hasFeature(p, 'admin_panel')) settingsRows += menuRow('Admin Panel', 'af-icon-admin', `${baseUrl}/admin/${p.id}/`);
   document.getElementById('detail-settings-rows').innerHTML = settingsRows;
 
@@ -4828,6 +5051,8 @@ async function openDetail(id) {
     ?.addEventListener('click', () => openEditInfo());
   document.getElementById('detail-settings-rows').querySelector('[data-action="open-regen-context"]')
     ?.addEventListener('click', () => regenerateContext(p.id));
+  document.getElementById('detail-settings-rows').querySelector('[data-action="open-env-vars"]')
+    ?.addEventListener('click', () => openProjectEnv(p.id));
 
   document.getElementById('detail-money-rows').querySelector('[data-action="open-features"]')
     ?.addEventListener('click', () => openFeatures(p.id));
@@ -4925,7 +5150,14 @@ async function loadBalance() {
     const res = await fetch(`${API_BASE}/balance`, { headers: apiHeaders() });
     if (!res.ok) return;
     const data = await res.json();
-    document.getElementById('balance-amount').textContent = `$${Number(data.balance).toFixed(2)}`;
+    userCredits = data.credits ?? data.balance ?? 0;
+    userTierId = data.tierId || userTierId;
+    userTierData = data.tier || userTierData;
+    if (data.allTiers) allTiers = data.allTiers;
+    if (data.creditsPerDollar) creditsPerDollar = data.creditsPerDollar;
+    const balEl = document.getElementById('balance-amount');
+    if (balEl) balEl.innerHTML = `${coinSvg(18, 12, 'currentColor')}&nbsp;${Math.max(0, userCredits).toLocaleString()}`;
+    renderTierChip();
   } catch (err) {
     console.error('Failed to load balance:', err);
   }
@@ -5518,10 +5750,12 @@ async function generateAiAvatar() {
       return;
     }
 
-    // Refresh balance immediately so the user sees the $0.10 deduction.
-    if (typeof data.newBalance === 'number') {
+    // Refresh balance immediately so the user sees the credit deduction.
+    if (typeof data.newCredits === 'number' || typeof data.newBalance === 'number') {
+      const newCr = data.newCredits ?? data.newBalance;
+      userCredits = newCr;
       const balEl = document.getElementById('balance-amount');
-      if (balEl) balEl.textContent = `$${Number(data.newBalance).toFixed(2)}`;
+      if (balEl) balEl.innerHTML = `${coinSvg(18, 12, 'currentColor')}&nbsp;${Math.max(0, Math.floor(newCr)).toLocaleString()}`;
     }
 
     showAiAvatarPreview(imageUrl);
@@ -5912,10 +6146,8 @@ function featureDescription(f) {
 }
 
 function fmtBalance(amount) {
-  const v = Number(amount).toFixed(2);
-  const tpl = t('features_balance');
-  if (tpl && tpl.includes('{amount}')) return tpl.replace('{amount}', v);
-  return `Balance: $${v}`;
+  const cr = Math.floor(Number(amount) || 0);
+  return `${coinSvg(15, 10, 'currentColor')}&nbsp;${cr.toLocaleString()}`;
 }
 
 function fmtTemplate(key, vars) {
@@ -5929,17 +6161,22 @@ function fmtTemplate(key, vars) {
 
 function renderBundleCard(bundle) {
   if (!bundle || !bundle.available) return '';
-  const price = Number(bundle.price);
-  const full = Number(bundle.fullPrice);
-  const save = Math.max(0, full - price);
+  const cp = Number(bundle.creditsPrice || 0);
+  const cfull = Number(bundle.fullCreditsPrice || 0);
+  const csave = Number(bundle.saveCredits || 0);
   const tag = esc(t('bundle_offer_tag'));
   const title = esc(t('bundle_title'));
   const subtitle = esc(t('bundle_subtitle'));
-  const cta = esc(fmtTemplate('bundle_cta', { price: price.toFixed(0) }) || `Unlock all for $${price}`);
-  const saveText = esc(fmtTemplate('bundle_save', { amount: save.toFixed(0) }) || `save $${save}`);
+  const cta = cp > 0
+    ? `Unlock all · ${coinSvg(12, 8, '#000')}${cp.toLocaleString()}`
+    : `Unlock all · $${Number(bundle.price)}`;
+  const saveText = csave > 0
+    ? `SAVE ${coinSvg(10, 7, '#1a3a1f')}${csave.toLocaleString()}`
+    : `SAVE $${Math.max(0, Number(bundle.fullPrice) - Number(bundle.price))}`;
   return `
     <button type="button" class="feature-bundle" data-bundle="1"
-            data-price="${esc(String(price))}" data-full="${esc(String(full))}">
+            data-price="${esc(String(bundle.price))}" data-full="${esc(String(bundle.fullPrice))}"
+            data-credits-price="${cp}" data-full-credits="${cfull}">
       <span class="feature-bundle-tag">${tag}</span>
       <div class="feature-bundle-body">
         <div class="feature-bundle-icon" aria-hidden="true">
@@ -5964,8 +6201,8 @@ function renderBundleCard(bundle) {
           <div class="feature-bundle-title">${title}</div>
           <div class="feature-bundle-subtitle">${subtitle}</div>
           <div class="feature-bundle-pricing">
-            <span class="feature-bundle-price">$${price}</span>
-            <span class="feature-bundle-strike">$${full}</span>
+            <span class="feature-bundle-price">${coinSvg(12, 8, '#fbbf24')}${cp.toLocaleString()}</span>
+            ${cfull > 0 ? `<span class="feature-bundle-strike">${coinSvg(10, 7, 'rgba(255,255,255,0.4)')}&nbsp;${cfull.toLocaleString()}</span>` : ''}
             <span class="feature-bundle-save">${saveText}</span>
           </div>
         </div>
@@ -5980,7 +6217,7 @@ async function openFeatures(projectId) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
-    document.getElementById('features-balance').textContent = fmtBalance(data.balance);
+    document.getElementById('features-balance').innerHTML = fmtBalance(data.balance);
 
     const listEl = document.getElementById('features-list');
     const visible = data.features.filter(f => f.id !== 'admin_panel');
@@ -5996,10 +6233,11 @@ async function openFeatures(projectId) {
              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
              <span>${esc(t('feature_status_unlocked'))}</span>
            </div>`
-        : `<div class="feature-card-cta">${esc(t('feature_status_unlock'))} · $${esc(String(f.price))}</div>`;
+        : `<div class="feature-card-cta">${esc(t('feature_status_unlock'))} · ${f.creditsPrice > 0 ? (coinSvg(11, 8, '#fbbf24') + Number(f.creditsPrice).toLocaleString()) : ('$' + f.price)}</div>`;
       return `
         <button type="button" class="feature-card${f.owned ? ' feature-card--owned' : ''}"
                 data-feature="${esc(f.id)}" data-price="${esc(String(f.price))}"
+                data-credits-price="${f.creditsPrice || 0}"
                 data-label="${esc(label)}" data-owned="${f.owned ? 'true' : 'false'}">
           <div class="feature-card-icon">${icon}</div>
           <div class="feature-card-body">
@@ -6029,14 +6267,16 @@ async function openFeatures(projectId) {
       bundleEl.addEventListener('click', () => {
         const price = bundleEl.dataset.price;
         const full = bundleEl.dataset.full;
-        const msg = fmtTemplate('bundle_confirm', { price, full })
-          || `Unlock all premium features for $${price} (regular price $${full})?`;
+        const creditsP = bundleEl.dataset.creditsPrice;
+        const msg = creditsP > 0
+          ? `Unlock all premium features for ${creditsP} credits?`
+          : (fmtTemplate('bundle_confirm', { price, full }) || `Unlock all premium features for ${price}?`);
         const doBuy = async () => {
           try {
             const r = await fetch(`${API_BASE}/features/${projectId}/buy-bundle`, {
               method: 'POST',
               headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
-              body: '{}',
+              body: JSON.stringify({ payWith: 'credits' }),
             });
             const d = await r.json();
             if (!r.ok) throw new Error(d.error || 'Purchase failed');
@@ -6069,7 +6309,7 @@ async function openFeatures(projectId) {
             const r = await fetch(`${API_BASE}/features/${projectId}/buy`, {
               method: 'POST',
               headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
-              body: JSON.stringify({ featureId }),
+              body: JSON.stringify({ featureId, payWith: 'credits' }),
             });
             const d = await r.json();
             if (!r.ok) throw new Error(d.error || 'Purchase failed');
@@ -7062,7 +7302,7 @@ async function openAdmVouchers() {
     const vouchers = await admApi('/vouchers');
     let html = `<div class="adm-section-title">Create Voucher</div>
       <div class="adm-inline-form">
-        <input type="number" id="adm-v-amount" placeholder="Amount ($)" step="0.01" style="width:100px">
+        <input type="number" id="adm-v-credits" placeholder="Credits" step="1" min="1" style="width:110px">
         <input type="number" id="adm-v-max" placeholder="Max uses" value="1" step="1" style="width:80px">
         <button class="adm-btn adm-btn-primary" id="adm-v-create">Create</button>
       </div>
@@ -7075,7 +7315,7 @@ async function openAdmVouchers() {
       for (const v of vouchers) {
         html += `<div class="adm-row" style="cursor:default;">
           <div class="adm-row-main">
-            <div class="adm-row-title"><span class="adm-voucher-code">${esc(v.code)}</span> · ${admFmtMoney(v.amountUsd)}</div>
+            <div class="adm-row-title"><span class="adm-voucher-code">${esc(v.code)}</span> · 🪙 ${(v.credits || 0).toLocaleString()}</div>
             <div class="adm-row-sub">${v.usedCount}/${v.maxUses} used · ${admFmtDate(v.createdAt)}</div>
           </div>
           <div style="display:flex;gap:6px;align-items:center;">
@@ -7091,11 +7331,11 @@ async function openAdmVouchers() {
     el.innerHTML = html;
 
     document.getElementById('adm-v-create')?.addEventListener('click', async () => {
-      const amount = document.getElementById('adm-v-amount').value;
+      const credits = document.getElementById('adm-v-credits').value;
       const maxUses = document.getElementById('adm-v-max').value || '1';
-      if (!amount || parseFloat(amount) <= 0) { showToast('Enter a valid amount', 'error'); return; }
+      if (!credits || parseInt(credits) <= 0) { showToast('Enter valid credits amount', 'error'); return; }
       try {
-        const v = await admApi('/vouchers', { method: 'POST', body: { amount, maxUses } });
+        const v = await admApi('/vouchers', { method: 'POST', body: { credits, maxUses } });
         showToast('Voucher created: ' + v.code, 'success');
         openAdmVouchers();
       } catch { showToast('Failed to create', 'error'); }
@@ -7202,6 +7442,7 @@ function showView(view) {
   document.getElementById('view-topup').classList.toggle('hidden', view !== 'topup');
   document.getElementById('view-language').classList.toggle('hidden', view !== 'language');
   document.getElementById('view-onboarding').classList.toggle('hidden', view !== 'onboarding');
+  document.getElementById('view-project-env')?.classList.toggle('hidden', view !== 'project-env');
 
   const headerDropdown = document.getElementById('chat-header-dropdown');
   if (headerDropdown) headerDropdown.classList.add('hidden');
@@ -7245,8 +7486,7 @@ function showView(view) {
       tg.MainButton.textColor = tg.themeParams?.button_text_color || '#ffffff';
       tg.MainButton.show();
     } else if (view === 'topup') {
-      updateTopupButton();
-      tg.MainButton.show();
+      tg.MainButton.hide();
     } else {
       tg.MainButton.hide();
     }
@@ -7376,7 +7616,8 @@ async function fetchSuggestions() {
   try {
     const res = await fetch(`${API_BASE}/chat/${chatProjectId}/suggestions`, {
       method: 'POST',
-      headers: apiHeaders(),
+      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tierId: userTierId }),
     });
     const data = await res.json();
 
@@ -7675,17 +7916,16 @@ function initChatInput() {
 }
 
 function openLanguage() {
-  document.querySelectorAll('.lang-option .lang-check').forEach(el => {
-    const row = el.closest('.lang-option');
-    el.classList.toggle('hidden', row.dataset.lang !== currentLang);
-  });
   document.querySelectorAll('.lang-option').forEach(row => {
-    row.addEventListener('click', () => {
+    const check = row.querySelector('.lang-check');
+    if (check) check.classList.toggle('hidden', row.dataset.lang !== currentLang);
+    // Use onclick assignment to avoid accumulating listeners on repeated opens
+    row.onclick = () => {
       setLang(row.dataset.lang);
       document.querySelectorAll('.lang-option .lang-check').forEach(c => c.classList.add('hidden'));
-      row.querySelector('.lang-check').classList.remove('hidden');
+      row.querySelector('.lang-check')?.classList.remove('hidden');
       showToast(t('toast_saved'), 'success');
-    });
+    };
   });
   showView('language');
 }
@@ -7952,7 +8192,7 @@ function openOnboarding() {
 
 async function init() {
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('button, a, .tm-row, .chat-pill, .topup-amount-btn, .topup-method, .chat-plan-btn, .result-action-btn, .question-opt-btn, .feature-row, .quality-row');
+    const t = e.target.closest('button, a, .tm-row, .chat-pill, .chat-plan-btn, .result-action-btn, .question-opt-btn, .feature-row, .quality-row');
     if (t) haptic('light');
   }, true);
 
@@ -8002,6 +8242,8 @@ async function init() {
       } else if (currentView === 'features') {
         showView('detail');
       } else if (currentView === 'edit-info') {
+        showView('detail');
+      } else if (currentView === 'project-env') {
         showView('detail');
       } else if (currentView === 'transfer') {
         showView('detail');
@@ -8125,6 +8367,10 @@ async function init() {
   document.getElementById('btn-release-notes-page').addEventListener('click', () => openReleaseNotes());
   document.getElementById('btn-help-page').addEventListener('click', () => openHelp());
   document.getElementById('btn-language-page')?.addEventListener('click', () => openLanguage());
+  document.getElementById('btn-support')?.addEventListener('click', () => {
+    if (tg?.openLink) tg.openLink('https://t.me/AppsFather_support');
+    else window.open('https://t.me/AppsFather_support', '_blank');
+  });
   document.getElementById('btn-admin')?.addEventListener('click', () => openAdmin());
   document.getElementById('btn-partner')?.addEventListener('click', () => openPartner());
 
@@ -8209,4 +8455,355 @@ function maybeHandleReservedStartParam() {
   if (target?.id) openChat(target.id);
 }
 
+// ── Tier Selector Modal ──────────────────────────────────────────────────────
+
+function openTierModal() {
+  const modal = document.getElementById('tier-modal');
+  if (!modal) return;
+  renderTierCards();
+  modal.classList.remove('hidden');
+  modal.setAttribute('aria-hidden', 'false');
+  try { tg.setHeaderColor(PREF_MODAL_CHROME); } catch {}
+  try { tg.setBackgroundColor(PREF_MODAL_CHROME); } catch {}
+  try { if (typeof tg.setBottomBarColor === 'function') tg.setBottomBarColor(PREF_MODAL_CHROME); } catch {}
+}
+
+function closeTierModal() {
+  const modal = document.getElementById('tier-modal');
+  if (!modal) return;
+  modal.style.animation = 'tierFadeIn 0.18s ease reverse forwards';
+  setTimeout(() => {
+    modal.style.animation = '';
+    modal.classList.add('hidden');
+    modal.setAttribute('aria-hidden', 'true');
+  }, 170);
+  try { tg.setHeaderColor(DEFAULT_CHROME); } catch {}
+  try { tg.setBackgroundColor(DEFAULT_CHROME); } catch {}
+  try { if (typeof tg.setBottomBarColor === 'function') tg.setBottomBarColor(DEFAULT_CHROME); } catch {}
+}
+
+function renderSegBar(value) {
+  const filled = Math.round(Math.min(10, Math.max(0, value)));
+  let html = '';
+  for (let i = 0; i < 10; i++) {
+    html += `<span class="tier-seg${i < filled ? ' tier-seg--on' : ''}"></span>`;
+  }
+  return `<div class="tier-seg-bar">${html}</div>`;
+}
+
+const PRICE_META = {
+  create:  { label: 'Create app',   hint: 'Full project generation' },
+  update:  { label: 'Update app',   hint: 'Apply changes to existing app' },
+  plan:    { label: 'Plan',         hint: 'Planning & architecture step' },
+  ask:     { label: 'Ask',          hint: 'Quick question or advice' },
+};
+
+function priceRow(key, val) {
+  const meta = PRICE_META[key] || { label: key, hint: '' };
+  const n = (val === '—' || val == null) ? '—' : Number(val).toLocaleString();
+  const valHtml = n === '—'
+    ? `<span class="tier-price-val">—</span>`
+    : `<span class="tier-price-val">${coinSvg(13, 9, '#fbbf24')}${n}</span>`;
+  return `<div class="tier-price-row">
+    <div class="tier-price-info">
+      <span class="tier-price-label">${meta.label}</span>
+      ${meta.hint ? `<span class="tier-price-hint">${meta.hint}</span>` : ''}
+    </div>
+    ${valHtml}
+  </div>`;
+}
+
+function renderTierCards() {
+  const container = document.getElementById('tier-modal-cards');
+  if (!container) return;
+  const tiers = allTiers.length ? allTiers : getDefaultTiers();
+  container.innerHTML = tiers.map((tier, idx) => {
+    const isActive = tier.id === userTierId;
+    const speed   = tier.stats?.speed   ?? 5;
+    const quality = tier.stats?.quality ?? 5;
+    const price   = tier.stats?.price   ?? 5;
+    const createP = tier.pricing?.create ?? '—';
+    const updateP = tier.pricing?.update ?? '—';
+    const askP    = tier.pricing?.ask    ?? '—';
+    const planP   = tier.pricing?.plan   ?? '—';
+
+    // Localized name and description
+    const tierName = (tier.nameI18n?.[currentLang] || tier.nameI18n?.en || tier.name || tier.id);
+    const tierDesc = (tier.descriptionI18n?.[currentLang] || tier.descriptionI18n?.en || '');
+
+    // Accent color per tier
+    const accents = ['#38bdf8','#818cf8','#f472b6','#fb923c','#4ade80'];
+    const accent = accents[idx % accents.length];
+
+    return `
+      <div class="tier-card ${isActive ? 'tier-card--active' : ''}" data-tier-id="${esc(tier.id)}" style="--tier-accent:${accent};animation-delay:${idx * 55}ms">
+        <div class="tier-card-top">
+          <div>
+            <div class="tier-card-name">${esc(tierName)}</div>
+            ${tierDesc ? `<div class="tier-card-desc">${esc(tierDesc)}</div>` : ''}
+          </div>
+          ${isActive ? '<span class="tier-card-badge">✓ Active</span>' : ''}
+        </div>
+        <div class="tier-stats">
+          <div class="tier-stat-row">
+            <span class="tier-stat-label">Quality</span>
+            ${renderSegBar(quality)}
+            <span class="tier-stat-val">${quality}</span>
+          </div>
+          <div class="tier-stat-row">
+            <span class="tier-stat-label">Speed</span>
+            ${renderSegBar(speed)}
+            <span class="tier-stat-val">${speed}</span>
+          </div>
+          <div class="tier-stat-row">
+            <span class="tier-stat-label">Cost</span>
+            ${renderSegBar(price)}
+            <span class="tier-stat-val">${price}</span>
+          </div>
+        </div>
+        <div class="tier-pricing">
+          ${priceRow('create', createP)}
+          ${priceRow('update', updateP)}
+          ${priceRow('plan',   planP)}
+          ${priceRow('ask',    askP)}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  container.querySelectorAll('.tier-card').forEach(card => {
+    card.addEventListener('click', () => selectTier(card.dataset.tierId));
+  });
+
+  // Tint header to match the active tier's accent
+  applyTierHeaderAccent();
+}
+
+function applyTierHeaderAccent() {
+  const tiers = allTiers.length ? allTiers : getDefaultTiers();
+  const accents = ['#38bdf8','#818cf8','#f472b6','#fb923c','#4ade80'];
+  const activeIdx = tiers.findIndex(t => t.id === userTierId);
+  const accent = activeIdx >= 0 ? accents[activeIdx % accents.length] : '#818cf8';
+
+  const sheet = document.querySelector('.tier-modal-sheet');
+  if (sheet) sheet.style.setProperty('--tier-header-accent', accent);
+
+  const title = document.getElementById('tier-modal-title');
+  if (title) title.style.color = accent;
+}
+
+function renderStatDots(value) {
+  const filled = Math.round(Math.min(10, Math.max(0, value)));
+  let html = '';
+  for (let i = 0; i < 10; i++) {
+    html += `<span class="tier-dot ${i < filled ? 'tier-dot--on' : ''}"></span>`;
+  }
+  return html;
+}
+
+function getDefaultTiers() {
+  return [
+    { id: 'tier_0', name: 'Tier 0 · Fast', stats: { speed: 9, quality: 3, price: 1 }, pricing: { create: 200, update: 75, ask: 15 } },
+    { id: 'tier_1', name: 'Tier 1 · Balanced', stats: { speed: 6, quality: 6, price: 4 }, pricing: { create: 300, update: 100, ask: 20 } },
+    { id: 'tier_2', name: 'Tier 2 · Best', stats: { speed: 3, quality: 9, price: 8 }, pricing: { create: 500, update: 200, ask: 40 } },
+  ];
+}
+
+async function selectTier(tierId) {
+  if (!tierId) return;
+  try {
+    const res = await fetch(`${API_BASE}/user/performance-tier`, {
+      method: 'POST',
+      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tierId }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    userTierId = tierId;
+    const tiers = allTiers.length ? allTiers : getDefaultTiers();
+    userTierData = tiers.find(t => t.id === tierId) || null;
+    // Save per-project override so switching chats restores the right tier
+    if (chatProjectId) projectTierMap[chatProjectId] = tierId;
+    closeTierModal();
+    renderTierChip();
+    updatePillPrices();
+    showToast('Performance tier updated', 'success');
+  } catch (err) {
+    console.error('Failed to set tier:', err);
+    showToast('Failed to update tier', 'error');
+  }
+}
+
+function updatePillPrices() {
+  const pricing = userTierData?.pricing || {};
+  const map = { update: pricing.update, question: pricing.ask, suggestion: pricing.suggestions };
+  document.querySelectorAll('.chat-pill').forEach(pill => {
+    const mode = pill.dataset.mode;
+    const price = map[mode];
+    let tag = pill.querySelector('.pill-price-tag');
+    if (price == null) { tag?.remove(); return; }
+    if (!tag) {
+      tag = document.createElement('span');
+      tag.className = 'pill-price-tag';
+      pill.appendChild(tag);
+    }
+    tag.innerHTML = coinSvg(10, 7, '#fbbf24') + Number(price).toLocaleString();
+  });
+}
+
+const TIER_COLORS = [
+  [74,  222, 128],  // 0 — green
+  [233, 178,   0],  // 1 — yellow
+  [233,   0,  80],  // 2 — red
+];
+
+function getTierColor(safeIdx, total) {
+  const stops = TIER_COLORS;
+  if (stops.length === 1 || total <= 1) return stops[0];
+  const t = safeIdx / (total - 1);
+  const scaled = t * (stops.length - 1);
+  const lo = Math.floor(scaled);
+  const hi = Math.min(lo + 1, stops.length - 1);
+  const frac = scaled - lo;
+  return stops[lo].map((c, i) => Math.round(c + (stops[hi][i] - c) * frac));
+}
+
+function renderTierChip() {
+  const chip = document.getElementById('tier-chip');
+  if (!chip) return;
+  const tiers = allTiers.length ? allTiers : getDefaultTiers();
+  const idx = tiers.findIndex(t => t.id === userTierId);
+  const total = tiers.length || 1;
+  const safeIdx = idx < 0 ? 0 : idx;
+
+  const [r, g, b] = getTierColor(safeIdx, total);
+  const color = `rgb(${r},${g},${b})`;
+
+  chip.style.borderColor = `rgba(${r},${g},${b},0.55)`;
+  chip.style.backgroundColor = `color-mix(in srgb, #000000 30%, rgba(${r},${g},${b},0.4))`;
+
+  const speedo = document.getElementById('tier-chip-speedo');
+  if (speedo) speedo.style.fill = color;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const tierChip = document.getElementById('tier-chip');
+  if (tierChip) tierChip.addEventListener('click', openTierModal);
+  const closeBtn = document.getElementById('tier-modal-close');
+  if (closeBtn) closeBtn.addEventListener('click', closeTierModal);
+  const backdrop = document.getElementById('tier-modal-backdrop');
+  if (backdrop) backdrop.addEventListener('click', closeTierModal);
+});
+
+// ── Project Env Variables ─────────────────────────────────────────────────────
+
+let envProjectId = null;
+let envCurrentType = 'dev'; // 'dev' | 'release'
+let envVarsData = {}; // { KEY: VALUE }
+
+async function openProjectEnv(projectId) {
+  envProjectId = projectId;
+  envCurrentType = 'dev';
+  document.getElementById('btn-env-dev')?.classList.add('active');
+  document.getElementById('btn-env-release')?.classList.remove('active');
+  showView('project-env');
+  await loadEnvVars();
+}
+
+async function loadEnvVars() {
+  if (!envProjectId) return;
+  try {
+    const res = await fetch(`${API_BASE}/project-env/${envProjectId}?env=${envCurrentType}`, { headers: apiHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    envVarsData = data.vars || {};
+    renderEnvRows();
+  } catch (err) {
+    console.error('Failed to load env vars:', err);
+    showToast('Failed to load variables', 'error');
+  }
+}
+
+function renderEnvRows() {
+  const container = document.getElementById('env-rows');
+  if (!container) return;
+  const entries = Object.entries(envVarsData);
+  if (entries.length === 0) {
+    container.innerHTML = '<div class="env-empty">No variables yet. Add one below.</div>';
+    return;
+  }
+  container.innerHTML = entries.map(([key, val], idx) => `
+    <div class="env-row" data-idx="${idx}">
+      <input class="env-key-input" type="text" value="${esc(key)}" placeholder="KEY" data-idx="${idx}" />
+      <input class="env-val-input" type="text" value="${esc(val)}" placeholder="VALUE" data-idx="${idx}" />
+      <button class="env-del-btn" data-idx="${idx}" title="Remove">✕</button>
+    </div>
+  `).join('');
+
+  container.querySelectorAll('.env-del-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const keys = Object.keys(envVarsData);
+      const k = keys[parseInt(btn.dataset.idx, 10)];
+      if (k !== undefined) delete envVarsData[k];
+      renderEnvRows();
+    });
+  });
+}
+
+function collectEnvVars() {
+  const rows = document.querySelectorAll('#env-rows .env-row');
+  const vars = {};
+  rows.forEach(row => {
+    const key = row.querySelector('.env-key-input')?.value?.trim();
+    const val = row.querySelector('.env-val-input')?.value ?? '';
+    if (key) vars[key] = val;
+  });
+  return vars;
+}
+
+async function saveEnvVars() {
+  if (!envProjectId) return;
+  const vars = collectEnvVars();
+  try {
+    const res = await fetch(`${API_BASE}/project-env/${envProjectId}`, {
+      method: 'POST',
+      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vars, env: envCurrentType }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    envVarsData = vars;
+    renderEnvRows();
+    showToast('Variables saved', 'success');
+  } catch (err) {
+    console.error('Failed to save env vars:', err);
+    showToast('Failed to save variables', 'error');
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  // Back navigation for project-env is handled via Telegram BackButton (see BackButton.onClick handler)
+  document.getElementById('btn-env-dev')?.addEventListener('click', async () => {
+    envCurrentType = 'dev';
+    document.getElementById('btn-env-dev')?.classList.add('active');
+    document.getElementById('btn-env-release')?.classList.remove('active');
+    await loadEnvVars();
+  });
+  document.getElementById('btn-env-release')?.addEventListener('click', async () => {
+    envCurrentType = 'release';
+    document.getElementById('btn-env-release')?.classList.add('active');
+    document.getElementById('btn-env-dev')?.classList.remove('active');
+    await loadEnvVars();
+  });
+  document.getElementById('btn-env-add-row')?.addEventListener('click', () => {
+    const vars = collectEnvVars();
+    vars[''] = '';
+    envVarsData = vars;
+    renderEnvRows();
+    const rows = document.querySelectorAll('#env-rows .env-row');
+    const last = rows[rows.length - 1];
+    if (last) last.querySelector('.env-key-input')?.focus();
+  });
+  document.getElementById('btn-env-save')?.addEventListener('click', () => saveEnvVars());
+});
+
 init();
+

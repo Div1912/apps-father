@@ -278,12 +278,13 @@ export class ClaudeService {
     assets?: string[],
     lang?: string,
     prefs?: ProjectPreferences | null,
+    tierId?: string,
   ): Promise<{
     plan: string;
     inputTokens: number;
     outputTokens: number;
   }> {
-    const modelCfg = runtimeConfig.getModelConfig("plan");
+    const modelCfg = runtimeConfig.getModelConfig("plan", tierId);
     const prefsBlock = prefs ? `${buildPreferencesPrompt(prefs)}\n\n` : "";
     let prompt = `${prefsBlock}Create a plan for a Telegram Mini App based on this description:\n\n${description}`;
     if (assets && assets.length > 0) {

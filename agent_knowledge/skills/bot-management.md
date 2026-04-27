@@ -66,7 +66,7 @@ setUpdateHandler  ❌ — there is no such concept; you only react to forwarded 
 ```
 
 If you want updates → **define `POST /bot-webhook`** and process the body.
-If you want to display commands in the BotFather "/" menu → use the `set_bot_commands` tool. For bot name/description/menu button → use `configure_bot`. These are profile/configuration calls, not webhook calls.
+If you want to display commands in the BotFather "/" menu → use the `set_bot_commands` tool. For app/bot name/description/menu button → use `configure_app`. These are profile/configuration calls, not webhook calls.
 
 ---
 
@@ -88,7 +88,7 @@ You can combine all of them in a single project.
 
 ## 3. Pattern A — Profile / commands menu only
 
-These are one-shot configuration calls. Run them via `configure_bot` and `set_bot_commands` **on first build only**, not on updates.
+These are one-shot configuration calls. Run them via `configure_app` and `set_bot_commands` **on first build only**, not on updates.
 
 ```js
 // During first build, in agent:
@@ -105,17 +105,17 @@ set_bot_commands({
   // language_code: "en",
 })
 
-configure_bot({
+configure_app({
   name: "Tournament App",
-  description: "Compete with friends in real-time tournaments. Open the app to play!",
-  shortDescription: "Real-time tournaments inside Telegram.",
+  description: "Real-time tournaments inside Telegram.",
+  longDescription: "Compete with friends in real-time tournaments. Open the app to play!",
   menuButtonText: "Play"
 })
 ```
 
 Notes:
 - `setMyCommands` only **registers** the menu. Clicking `/help` still sends the literal text `/help` to the bot. If you actually want the bot to reply to `/help`, you also need Pattern B.
-- `configure_bot` sets the menu button atomically. Text Bot projects pass `menuButtonText: ""`.
+- `configure_app` saves app profile metadata first, then sets the menu button atomically if a bot is linked. Text Bot projects pass `menuButtonText: ""`.
 - Never put empty strings in `commands[].command` — Telegram returns `400 Bad Request`.
 
 ---
@@ -337,7 +337,7 @@ Whenever the project includes `/bot-webhook` or sets bot commands, **verify all 
 
 ### Build-time configuration
 - [ ] `set_bot_commands` — commands match what `/bot-webhook` actually handles. No phantom commands.
-- [ ] `configure_bot` — sets name, description, short description, and menu button atomically.
+- [ ] `configure_app` — saves name, description, long description, and menu button atomically.
 
 ### Code quality inside `/bot-webhook`
 - [ ] Route is registered at the EXACT path `"/bot-webhook"` (hyphen, lowercase, no prefix). See section 0. If the path is anything else, the route silently never fires.

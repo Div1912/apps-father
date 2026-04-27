@@ -102,7 +102,7 @@
                   <th>Owner</th>
                   <th>Status</th>
                   <th>Bot</th>
-                  <th style="text-align:right">Total Cost</th>
+                  <th style="text-align:right">Cost (USD)</th>
                   <th>Updated</th>
                 </tr>
               </thead>

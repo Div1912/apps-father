@@ -42,7 +42,7 @@ router.get("/:projectId/{*filePath}", async (req: Request, res: Response) => {
       // No frontend at all → check whether this is a Text Bot project
       // (which is allowed not to have one) and serve a friendly fallback
       // pointing the user at the bot in Telegram. The Mini App menu
-      // button is force-cleared by the configure_bot guard, so the only
+      // button is force-cleared by the configure_app guard, so the only
       // way to land here is via stale links / direct URLs.
       const fallback = await maybeRenderTextBotFallback(projectId);
       if (fallback) {

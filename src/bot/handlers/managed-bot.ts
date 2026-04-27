@@ -7,38 +7,6 @@ import { trackEvent } from "../../services/analytics.service";
 import { EMOJI, ce } from "../emoji";
 import { Lang, t } from "../i18n";
 
-/** Directly configure bot profile (description, short description, menu button)
- *  using the Telegram Bot API.  Called after linking a bot to an already-built
- *  project so the agent doesn't need to re-run configure_bot. */
-async function configureBotProfile(botToken: string, appUrl: string): Promise<void> {
-  const base = `https://api.telegram.org/bot${botToken}`;
-  const description = "Telegram Mini App powered by Apps Father";
-  const shortDescription = "Open the app below";
-  await Promise.all([
-    fetch(`${base}/setMyDescription`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ description }),
-    }),
-    fetch(`${base}/setMyShortDescription`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ short_description: shortDescription }),
-    }),
-    fetch(`${base}/setChatMenuButton`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        menu_button: {
-          type: "web_app",
-          text: "Open App",
-          web_app: { url: appUrl },
-        },
-      }),
-    }),
-  ]);
-}
-
 const processingBots = new Set<number>();
 
 export function registerManagedBotHandlers(bot: Bot<BotContext>) {
@@ -154,13 +122,15 @@ async function handleManagedBotAsync(bot: Bot<BotContext>, creator: any, newBot:
       bot_username: newBot.username || "",
     });
 
-    // If the app is already built, configure the bot profile now (no need to
-    // wait for the agent to call configure_bot during the next build).
+    // Apply the app profile metadata saved by configure_app immediately after
+    // the bot is linked. If the agent configured the app before a bot existed,
+    // this is where Telegram receives the stored name/descriptions/menu button.
     if (isExisting) {
-      const appUrl = `${config.domain.startsWith("dev.") ? "https://dev.apps-father.com" : "https://apps-father.com"}/app/${project.id}/`;
-      void configureBotProfile(botToken, appUrl).catch(err =>
-        console.error(`[ManagedBot] configure_bot failed for @${newBot.username}:`, err)
-      );
+      try {
+        await projectService.configureProjectBotFromAppConfig(project.id, botToken);
+      } catch (err: any) {
+        console.error(`[ManagedBot] configure_app failed for @${newBot.username}:`, err?.message || err);
+      }
     }
 
     // sendOwnerWelcome=true: the moment the webhook is live, push the

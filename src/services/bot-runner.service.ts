@@ -7,6 +7,7 @@ import { runWithProject } from "./console-tagger.service";
 import { prisma } from "../db";
 import { Lang, t } from "../bot/i18n";
 import Database from "better-sqlite3";
+import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
 import type { Request, Response, NextFunction } from "express";
@@ -424,6 +425,12 @@ export class BotRunnerService {
       if (typeof routeModule !== "function") return;
 
       const runtimeDir = path.join(projectDir, deployment);
+      const backendDir = path.join(projectDir, deployment, "backend");
+      const envFilePath = path.join(backendDir, ".env");
+      const envVars = fs.existsSync(envFilePath)
+        ? dotenv.parse(fs.readFileSync(envFilePath))
+        : {};
+
       const dataDir = path.join(runtimeDir, "data");
       fs.mkdirSync(dataDir, { recursive: true });
       const sqlite = new Database(path.join(dataDir, "app.db"));
@@ -443,7 +450,7 @@ export class BotRunnerService {
       };
 
       const projectRouter = Router();
-      routeModule(projectRouter, db, projectId);
+      routeModule(projectRouter, db, projectId, envVars);
 
       const fakeReq = {
         method: "POST",

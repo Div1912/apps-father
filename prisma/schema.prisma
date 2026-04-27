@@ -13,6 +13,8 @@ model User {
   username   String?
   firstName  String?   @map("first_name")
   balance    Decimal   @default(0) @db.Decimal(12, 4)
+  credits    Int       @default(0)
+  performanceTier String @default("tier_1") @map("performance_tier")
   appSlots   Int       @default(5) @map("app_slots")
   referredBy BigInt?   @map("referred_by")
   utmSource  String?   @map("utm_source")
@@ -79,6 +81,9 @@ model Project {
   userId           Int      @map("user_id")
   name             String
   description      String?
+  appDescription   String?  @map("app_description")
+  appLongDescription String? @map("app_long_description")
+  appMenuButtonText String? @map("app_menu_button_text")
   status           String   @default("created")
   botUserId        BigInt?  @map("bot_user_id")
   botUsername       String?  @map("bot_username")
@@ -149,6 +154,25 @@ model Conversation {
   @@map("conversations")
 }
 
+model Bundle {
+  id            String    @id @default(cuid())
+  name          String
+  credits       Int
+  bonusCredits  Int       @default(0) @map("bonus_credits")
+  priceUsd      Decimal   @map("price_usd") @db.Decimal(12, 4)
+  discount      Int       @default(0)     // percentage 0-100; if >0 shows strikethrough in UI
+  isLimited     Boolean   @default(false) @map("is_limited")
+  limitTotal    Int?      @map("limit_total")
+  purchaseCount Int       @default(0)     @map("purchase_count")
+  isActive      Boolean   @default(true)  @map("is_active")
+  sortOrder     Int       @default(0)     @map("sort_order")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  payments Payment[]
+
+  @@map("bundles")
+}
+
 model Payment {
   id                   Int       @id @default(autoincrement())
   userId               Int       @map("user_id")
@@ -158,8 +182,13 @@ model Payment {
   nowpaymentsInvoiceUrl String?  @map("nowpayments_invoice_url")
   createdAt            DateTime  @default(now()) @map("created_at")
   confirmedAt          DateTime? @map("confirmed_at")
+  bundleId             String?   @map("bundle_id")
+  creditsGranted       Int?      @map("credits_granted")
+  bonusCredits         Int?      @map("bonus_credits")
+  method               String?
 
-  user User @relation(fields: [userId], references: [id])
+  user   User    @relation(fields: [userId], references: [id])
+  bundle Bundle? @relation(fields: [bundleId], references: [id])
 
   @@map("payments")
 }
@@ -167,7 +196,8 @@ model Payment {
 model Voucher {
   id          Int       @id @default(autoincrement())
   code        String    @unique
-  amountUsd   Decimal   @map("amount_usd") @db.Decimal(12, 4)
+  amountUsd   Decimal   @default(0) @map("amount_usd") @db.Decimal(12, 4)
+  credits     Int       @default(0)
   maxUses     Int       @map("max_uses")
   usedCount   Int       @default(0) @map("used_count")
   active      Boolean   @default(true)
@@ -206,14 +236,16 @@ model Withdrawal {
 }
 
 model UsageLog {
-  id           Int      @id @default(autoincrement())
-  userId       Int      @map("user_id")
-  projectId    String?  @map("project_id")
-  inputTokens  Int      @map("input_tokens")
-  outputTokens Int      @map("output_tokens")
-  costUsd      Decimal  @map("cost_usd") @db.Decimal(12, 6)
-  operation    String
-  createdAt    DateTime @default(now()) @map("created_at")
+  id              Int      @id @default(autoincrement())
+  userId          Int      @map("user_id")
+  projectId       String?  @map("project_id")
+  inputTokens     Int      @map("input_tokens")
+  outputTokens    Int      @map("output_tokens")
+  costUsd         Decimal  @map("cost_usd") @db.Decimal(12, 6)
+  operation       String
+  creditsCharged  Int?     @map("credits_charged")
+  tierId          String?  @map("tier_id")
+  createdAt       DateTime @default(now()) @map("created_at")
 
   user    User     @relation(fields: [userId], references: [id])
   project Project? @relation(fields: [projectId], references: [id])

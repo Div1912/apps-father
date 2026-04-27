@@ -54,21 +54,21 @@
       <div class="kpi-grid">
         <div class="kpi-card">
           <div class="label" style="display:flex;align-items:center;justify-content:space-between">
-            <span>Balance</span>
-            <button class="kpi-edit-btn" id="bal-edit" title="Edit balance" aria-label="Edit balance">${ICON_PENCIL}</button>
+            <span>Credits</span>
+            <button class="kpi-edit-btn" id="bal-edit" title="Edit credits" aria-label="Edit credits">${ICON_PENCIL}</button>
           </div>
-          <div class="value green" id="bal-val">${Fmt.escapeHtml(Fmt.money(u.balance))}</div>
+          <div class="value green" id="bal-val">${Fmt.creditsHtml(u.credits, '#4ade80')}</div>
           <div id="bal-editor" class="bal-editor" hidden>
             <select class="select" id="bal-action" style="width:auto">
               <option value="set">Set to</option>
               <option value="add">Add</option>
             </select>
-            <input class="input" type="number" id="bal-amount" placeholder="USD" step="0.01" style="max-width:110px"/>
+            <input class="input" type="number" id="bal-amount" placeholder="credits" step="1" min="0" style="max-width:110px"/>
             <button class="btn btn-primary btn-xs" id="bal-btn">Apply</button>
             <button class="btn btn-ghost btn-xs" id="bal-cancel">Cancel</button>
           </div>
         </div>
-        <div class="kpi-card"><div class="label">Total Spent</div><div class="value warn">${Fmt.escapeHtml(Fmt.money(u.totalSpent))}</div></div>
+        <div class="kpi-card"><div class="label">Credits Spent</div><div class="value warn">${Fmt.creditsHtml(u.totalCreditsSpent, '#fbbf24')}</div></div>
         <div class="kpi-card"><div class="label">Apps</div><div class="value">${u.projects.length}</div></div>
         <div class="kpi-card"><div class="label">Slots</div><div class="value">${u.appSlots}</div></div>
       </div>
@@ -110,7 +110,7 @@
             </div>
             ${profileField("Commission %",      "prt-percent",       u.partnerPercent       != null ? String(u.partnerPercent)       : "", "number")}
             ${profileField("Partner tag",       "prt-tag",            u.partnerTag           || "", "text")}
-            ${profileField("Referral bonus $",  "prt-refBonus",       u.partnerReferralBonus != null ? String(u.partnerReferralBonus) : "", "number")}
+            ${profileField("Referral bonus (cr)",  "prt-refBonus",       u.partnerReferralBonus != null ? String(u.partnerReferralBonus) : "", "number")}
             <div>
               <div class="input-label">Partner balance</div>
               <div style="font-size:14px;color:var(--accent-color);font-weight:600">${Fmt.money(u.partnerBalance)}</div>
@@ -142,7 +142,7 @@
       <div class="card" style="border-color:rgba(var(--danger-color-rgb),0.3)">
         <div style="font-size:12px;color:var(--admin-muted);margin-bottom:8px">
           <b>Wipe data</b> deletes payments, conversations, usage logs, withdrawals and voucher redemptions.
-          Resets balance, partnership, name and language. <b>Apps and bots are kept.</b>
+          Resets credits balance, partnership, name and language. <b>Apps and bots are kept.</b>
         </div>
         <button class="btn btn-danger btn-sm" id="dz-wipe">Wipe user data</button>
 
@@ -211,7 +211,7 @@
       }
     });
 
-    // ── Balance (inline editor on the KPI card) ────────────────────────
+    // ── Credits (inline editor on the KPI card) ────────────────────────
     const editor   = host.querySelector("#bal-editor");
     const editBtn  = host.querySelector("#bal-edit");
     const cancel   = host.querySelector("#bal-cancel");
@@ -221,9 +221,7 @@
 
     function openEditor() {
       editor.hidden = false;
-      // Pre-fill with the current balance for "Set to" so admins can adjust by
-      // a few cents without retyping the full number.
-      amountEl.value = Number(u.balance || 0).toFixed(2);
+      amountEl.value = String(Math.round(u.credits || 0));
       amountEl.focus();
       amountEl.select();
     }
@@ -239,13 +237,13 @@
     });
     host.querySelector("#bal-btn").addEventListener("click", async () => {
       const action = actionEl.value;
-      const amount = amountEl.value;
-      if (amount === "") { Fmt.toast("Enter an amount", "err"); return; }
+      const credits = amountEl.value;
+      if (credits === "") { Fmt.toast("Enter an amount", "err"); return; }
       try {
-        const d = await Api.request("/users/" + userId + "/balance", { method: "POST", body: { action, amount } });
-        balValEl.textContent = Fmt.money(d.balance);
-        u.balance = d.balance;
-        Fmt.toast("Balance updated to " + Fmt.money(d.balance), "ok");
+        const d = await Api.request("/users/" + userId + "/credits", { method: "POST", body: { action, credits } });
+        balValEl.innerHTML = Fmt.creditsHtml(d.credits, '#4ade80');
+        u.credits = d.credits;
+        Fmt.toast("Credits updated to " + Fmt.credits(d.credits), "ok");
         closeEditor();
       } catch (err) { Fmt.toast(err.message || "Failed", "err"); }
     });
@@ -291,7 +289,7 @@
                 <th>Name</th>
                 <th>Status</th>
                 <th>Bot</th>
-                <th style="text-align:right">Total Cost</th>
+                <th style="text-align:right">Cost (USD)</th>
                 <th>Updated</th>
               </tr>
             </thead>
@@ -357,14 +355,16 @@
       usageEl.innerHTML = `
         <div class="tbl-wrap">
           <table class="tbl">
-            <thead><tr><th>App</th><th>Operation</th><th>Tokens</th><th style="text-align:right">Cost</th><th>When</th></tr></thead>
+            <thead><tr><th>App</th><th>Operation</th><th>Tier</th><th>Tokens</th><th style="text-align:right">Credits</th><th style="text-align:right;color:var(--admin-muted)">Cost (USD)</th><th>When</th></tr></thead>
             <tbody>
               ${u.usageLogs.map(l => `
                 <tr>
                   <td>${Fmt.escapeHtml(l.project)}</td>
                   <td><span class="badge">${Fmt.escapeHtml(l.operation)}</span></td>
+                  <td style="color:var(--admin-muted)">${Fmt.escapeHtml(l.tierId || "—")}</td>
                   <td style="color:var(--admin-muted)">${Fmt.intK(l.inputTokens)} / ${Fmt.intK(l.outputTokens)}</td>
-                  <td style="text-align:right">${Fmt.money(l.cost, 4)}</td>
+                  <td style="text-align:right;font-weight:600">${l.creditsCharged != null ? Fmt.creditsHtml(l.creditsCharged, '#fbbf24') : "—"}</td>
+                  <td style="text-align:right;color:var(--admin-muted);font-size:11px">${Fmt.money(l.cost, 4)}</td>
                   <td style="color:var(--admin-muted)" title="${Fmt.escapeHtml(Fmt.date(l.createdAt))}">${Fmt.escapeHtml(Fmt.relativeTime(l.createdAt))}</td>
                 </tr>`).join("")}
             </tbody>

@@ -4,16 +4,18 @@ import { Decimal } from "@prisma/client/runtime/library";
 export interface PaidFeature {
   id: string;
   label: string;
-  price: number;
+  price: number;        // USD price (legacy / fallback)
+  creditsPrice: number; // Credits price (primary)
   description: string;
 }
 
+// 1 USD ≈ 50 credits by default; creditsPrice = price * 50
 export const PAID_FEATURES: PaidFeature[] = [
-  { id: "stars_payment", label: "Stars Payment System", price: 15, description: "Enable Telegram Stars payment integration in your app" },
-  { id: "ton_payment", label: "TON Payment System", price: 25, description: "Enable TON blockchain payment integration in your app" },
-  { id: "admin_panel", label: "Admin Panel", price: 30, description: "Unlock the Admin Panel for your app" },
-  { id: "disable_splash", label: "Disable Splash", price: 10, description: "Remove the 'Made by Apps Father' splash screen" },
-  { id: "get_code", label: "Get Code", price: 50, description: "Access and edit the source code of your app" },
+  { id: "stars_payment", label: "Stars Payment System", price: 15, creditsPrice: 750,  description: "Enable Telegram Stars payment integration in your app" },
+  { id: "ton_payment",   label: "TON Payment System",   price: 25, creditsPrice: 1250, description: "Enable TON blockchain payment integration in your app" },
+  { id: "admin_panel",   label: "Admin Panel",           price: 30, creditsPrice: 1500, description: "Unlock the Admin Panel for your app" },
+  { id: "disable_splash",label: "Disable Splash",        price: 10, creditsPrice: 500,  description: "Remove the 'Made by Apps Father' splash screen" },
+  { id: "get_code",      label: "Get Code",              price: 50, creditsPrice: 2500, description: "Access and edit the source code of your app" },
 ];
 
 const FEATURE_MAP = new Map(PAID_FEATURES.map(f => [f.id, f]));
@@ -28,9 +30,14 @@ export const BUNDLE_FEATURES: string[] = [
   "get_code",
 ];
 export const BUNDLE_PRICE = 50;
+export const BUNDLE_CREDITS_PRICE = 2000; // discounted bundle in credits
 
 export function getBundleFullPrice(): number {
   return BUNDLE_FEATURES.reduce((sum, id) => sum + (FEATURE_MAP.get(id)?.price || 0), 0);
+}
+
+export function getBundleFullCreditsPrice(): number {
+  return BUNDLE_FEATURES.reduce((sum, id) => sum + (FEATURE_MAP.get(id)?.creditsPrice || 0), 0);
 }
 
 /**
@@ -51,21 +58,31 @@ export function getBundleQuote(owned: string[]): {
   fullPrice: number;
   bundlePrice: number;
   saveAmount: number;
+  fullCreditsPrice: number;
+  bundleCreditsPrice: number;
+  saveCredits: number;
   available: boolean;
 } {
   const missingIds = BUNDLE_FEATURES.filter(id => !owned.includes(id));
   const fullPrice = missingIds.reduce((s, id) => s + (FEATURE_MAP.get(id)?.price || 0), 0);
   const isFullSet = missingIds.length === BUNDLE_FEATURES.length;
-  // 50% off, rounded to the nearest whole dollar so prices stay clean.
   let bundlePrice = isFullSet ? BUNDLE_PRICE : Math.round(fullPrice / 2);
-  // Defensive: never charge more than retail if rounding ever exceeds it.
   if (bundlePrice >= fullPrice) bundlePrice = Math.max(1, fullPrice - 1);
   const saveAmount = Math.max(0, fullPrice - bundlePrice);
+
+  const fullCreditsPrice = missingIds.reduce((s, id) => s + (FEATURE_MAP.get(id)?.creditsPrice || 0), 0);
+  let bundleCreditsPrice = isFullSet ? BUNDLE_CREDITS_PRICE : Math.round(fullCreditsPrice / 2);
+  if (bundleCreditsPrice >= fullCreditsPrice) bundleCreditsPrice = Math.max(1, fullCreditsPrice - 1);
+  const saveCredits = Math.max(0, fullCreditsPrice - bundleCreditsPrice);
+
   return {
     missingIds,
     fullPrice,
     bundlePrice,
     saveAmount,
+    fullCreditsPrice,
+    bundleCreditsPrice,
+    saveCredits,
     available: missingIds.length > 0,
   };
 }
@@ -96,33 +113,42 @@ export async function purchaseFeature(
   userId: number,
   projectId: string,
   featureId: string,
-): Promise<{ newBalance: number }> {
+  payWith: "credits" | "balance" = "credits",
+): Promise<{ newBalance: number; newCredits?: number }> {
   const feature = FEATURE_MAP.get(featureId);
   if (!feature) throw new Error("Unknown feature");
 
   const existing = await getProjectFeatures(projectId);
   if (existing.includes(featureId)) throw new Error("Feature already purchased");
 
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { balance: true } });
-  if (!user || Number(user.balance) < feature.price) throw new Error("Insufficient balance");
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { balance: true, credits: true } });
+  if (!user) throw new Error("User not found");
 
   const updated = [...existing, featureId];
 
-  const result = await prisma.$transaction(async (tx) => {
-    const updatedUser = await tx.user.update({
-      where: { id: userId },
-      data: { balance: { decrement: new Decimal(feature.price.toFixed(4)) } },
+  if (payWith === "credits") {
+    if (user.credits < feature.creditsPrice) throw new Error("Insufficient credits");
+    const result = await prisma.$transaction(async (tx) => {
+      const updatedUser = await tx.user.update({
+        where: { id: userId },
+        data: { credits: { decrement: feature.creditsPrice } },
+      });
+      await tx.project.update({ where: { id: projectId }, data: { features: JSON.stringify(updated) } });
+      return { newBalance: Number(updatedUser.balance), newCredits: updatedUser.credits };
     });
-
-    await tx.project.update({
-      where: { id: projectId },
-      data: { features: JSON.stringify(updated) },
+    return result;
+  } else {
+    if (Number(user.balance) < feature.price) throw new Error("Insufficient balance");
+    const result = await prisma.$transaction(async (tx) => {
+      const updatedUser = await tx.user.update({
+        where: { id: userId },
+        data: { balance: { decrement: new Decimal(feature.price.toFixed(4)) } },
+      });
+      await tx.project.update({ where: { id: projectId }, data: { features: JSON.stringify(updated) } });
+      return { newBalance: Number(updatedUser.balance) };
     });
-
-    return { newBalance: Number(updatedUser.balance) };
-  });
-
-  return result;
+    return result;
+  }
 }
 
 /**
@@ -138,36 +164,40 @@ export async function purchaseFeature(
 export async function purchaseBundle(
   userId: number,
   projectId: string,
-): Promise<{ newBalance: number; granted: string[]; charged: number }> {
+  payWith: "credits" | "balance" = "credits",
+): Promise<{ newBalance: number; newCredits?: number; granted: string[]; charged: number }> {
   const existing = await getProjectFeatures(projectId);
   const quote = getBundleQuote(existing);
   if (!quote.available || quote.missingIds.length === 0) {
     throw new Error("All bundle features already owned");
   }
 
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { balance: true } });
-  if (!user || Number(user.balance) < quote.bundlePrice) throw new Error("Insufficient balance");
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { balance: true, credits: true } });
+  if (!user) throw new Error("User not found");
 
-  // Preserve any non-bundle features (e.g. admin_panel) that may already exist.
   const updated = Array.from(new Set([...existing, ...quote.missingIds]));
 
-  const result = await prisma.$transaction(async (tx) => {
-    const updatedUser = await tx.user.update({
-      where: { id: userId },
-      data: { balance: { decrement: new Decimal(quote.bundlePrice.toFixed(4)) } },
+  if (payWith === "credits") {
+    if (user.credits < quote.bundleCreditsPrice) throw new Error("Insufficient credits");
+    const result = await prisma.$transaction(async (tx) => {
+      const updatedUser = await tx.user.update({
+        where: { id: userId },
+        data: { credits: { decrement: quote.bundleCreditsPrice } },
+      });
+      await tx.project.update({ where: { id: projectId }, data: { features: JSON.stringify(updated) } });
+      return { newBalance: Number(updatedUser.balance), newCredits: updatedUser.credits, granted: quote.missingIds.slice(), charged: quote.bundleCreditsPrice };
     });
-
-    await tx.project.update({
-      where: { id: projectId },
-      data: { features: JSON.stringify(updated) },
+    return result;
+  } else {
+    if (Number(user.balance) < quote.bundlePrice) throw new Error("Insufficient balance");
+    const result = await prisma.$transaction(async (tx) => {
+      const updatedUser = await tx.user.update({
+        where: { id: userId },
+        data: { balance: { decrement: new Decimal(quote.bundlePrice.toFixed(4)) } },
+      });
+      await tx.project.update({ where: { id: projectId }, data: { features: JSON.stringify(updated) } });
+      return { newBalance: Number(updatedUser.balance), granted: quote.missingIds.slice(), charged: quote.bundlePrice };
     });
-
-    return {
-      newBalance: Number(updatedUser.balance),
-      granted: quote.missingIds.slice(),
-      charged: quote.bundlePrice,
-    };
-  });
-
-  return result;
+    return result;
+  }
 }

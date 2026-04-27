@@ -4,7 +4,6 @@ import crypto from "crypto";
 import { Decimal } from "@prisma/client/runtime/library";
 import { Cell } from "@ton/core";
 import { runtimeConfig } from "./runtime-config.service";
-import type { ModelConfigs } from "./runtime-config.service";
 import { getModelPricing } from "./openrouter.service";
 import { notifyDeposit, notifyReferralBonus } from "./notify.service";
 import { trackEvent } from "./analytics.service";
@@ -59,7 +58,9 @@ export interface TokenUsage {
 
 export interface UsageResult {
   costUsd: number;
-  newBalance: number;
+  creditsCharged: number;
+  newBalance: number;   // alias for newCredits (credits after deduction)
+  newCredits: number;
 }
 
 export class BillingService {
@@ -117,64 +118,63 @@ export class BillingService {
     return user ? Number(user.balance) : 0;
   }
 
-  async hasBalance(userId: number, minAmount: number = 0): Promise<boolean> {
-    const balance = await this.getUserBalance(userId);
-    if (minAmount > 0) return balance >= minAmount;
-    return balance > 0;
+  async getUserCredits(userId: number): Promise<number> {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { credits: true },
+    });
+    return user ? user.credits : 0;
   }
 
-  private getActionKey(operation?: string): keyof ModelConfigs | null {
-    if (!operation) return null;
-    if (operation === "build" || operation === "update") return "codegen";
-    if (["plan", "codegen", "ask", "suggestions", "passport"].includes(operation)) {
-      return operation as keyof ModelConfigs;
-    }
-    return null;
+  /** Check if user has enough credits. minAmount is in credits. */
+  async hasBalance(userId: number, minAmount: number = 1): Promise<boolean> {
+    const credits = await this.getUserCredits(userId);
+    return credits >= minAmount;
   }
 
-  private getMarkupMultiplier(operation?: string): number {
-    const actionKey = this.getActionKey(operation);
-    if (!actionKey) return runtimeConfig.getMarkupMultiplier();
-    try {
-      return runtimeConfig.getModelConfig(actionKey).markupMultiplier ?? runtimeConfig.getMarkupMultiplier();
-    } catch {
-      return runtimeConfig.getMarkupMultiplier();
-    }
+  async hasCredits(userId: number, minCredits: number = 1): Promise<boolean> {
+    const credits = await this.getUserCredits(userId);
+    return credits >= minCredits;
   }
 
   private calculateCostWithPricing(
     pricing: { input: number; output: number; cache_write: number; cache_read: number },
     usage: TokenUsage,
-    operation?: string
   ): number {
     const inputCost = (usage.input_tokens ?? 0) * pricing.input;
     const outputCost = (usage.output_tokens ?? 0) * pricing.output;
     const cacheWrite = (usage.cache_creation_input_tokens ?? 0) * pricing.cache_write;
     const cacheRead = (usage.cache_read_input_tokens ?? 0) * pricing.cache_read;
-    const total = inputCost + outputCost + cacheWrite + cacheRead;
-    return total * this.getMarkupMultiplier(operation);
+    return inputCost + outputCost + cacheWrite + cacheRead;
   }
 
-  calculateCost(model: string, usage: TokenUsage, operation?: string): number {
+  calculateCost(model: string, usage: TokenUsage): number {
     const p = MODEL_PRICING[model] || MODEL_PRICING["anthropic/claude-sonnet-4-5"] || { input: 0, output: 0, cache_write: 0, cache_read: 0 };
-    return this.calculateCostWithPricing(p, usage, operation);
+    return this.calculateCostWithPricing(p, usage);
   }
 
-  async calculateCostAsync(model: string, usage: TokenUsage, operation?: string): Promise<number> {
+  async calculateCostAsync(model: string, usage: TokenUsage): Promise<number> {
     const livePricing = await getModelPricing(model);
     if (livePricing) {
-      // NOTE: usage.input_tokens here should already be fresh-only (cached tokens subtracted
-      // by the caller). cache_read_input_tokens holds the cached portion billed at the
-      // discounted cache_read rate. OpenRouter exposes per-model cache pricing; fall back to
-      // 0.1x / 1.25x of prompt price when not available.
       return this.calculateCostWithPricing({
         input: livePricing.promptPerToken,
         output: livePricing.completionPerToken,
         cache_write: livePricing.cacheWritePerToken || livePricing.promptPerToken * 1.25,
         cache_read: livePricing.cacheReadPerToken || livePricing.promptPerToken * 0.1,
-      }, usage, operation);
+      }, usage);
     }
-    return this.calculateCost(model, usage, operation);
+    return this.calculateCost(model, usage);
+  }
+
+  /** Map an operation string to a tier pricing key. */
+  private operationToPricingKey(operation: string): keyof import("./runtime-config.service").TierPricing {
+    if (operation === "build") return "create";
+    if (operation === "update") return "update";
+    if (operation === "plan") return "plan";
+    if (operation === "ask") return "ask";
+    if (operation === "suggestions") return "suggestions";
+    if (operation === "passport") return "passport";
+    return "update"; // default for any other op
   }
 
   async recordUsage(
@@ -182,9 +182,17 @@ export class BillingService {
     projectId: string | null,
     model: string,
     usage: TokenUsage,
-    operation: string
+    operation: string,
+    tierId?: string
   ): Promise<UsageResult> {
-    const costUsd = await this.calculateCostAsync(model, usage, operation);
+    const costUsd = await this.calculateCostAsync(model, usage);
+
+    // Resolve tier and credits to charge
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { performanceTier: true } });
+    const resolvedTierId = tierId || user?.performanceTier || "tier_1";
+    const tier = runtimeConfig.getPerformanceTier(resolvedTierId);
+    const pricingKey = this.operationToPricingKey(operation);
+    const creditsCharged = tier.pricing[pricingKey] ?? 0;
 
     const result = await prisma.$transaction(async (tx) => {
       await tx.usageLog.create({
@@ -195,12 +203,14 @@ export class BillingService {
           outputTokens: usage.output_tokens,
           costUsd: new Decimal(costUsd.toFixed(6)),
           operation,
+          creditsCharged,
+          tierId: resolvedTierId,
         },
       });
 
       const updatedUser = await tx.user.update({
         where: { id: userId },
-        data: { balance: { decrement: new Decimal(costUsd.toFixed(4)) } },
+        data: { credits: { decrement: creditsCharged } },
       });
 
       if (projectId) {
@@ -210,15 +220,48 @@ export class BillingService {
         });
       }
 
-      return { costUsd, newBalance: Number(updatedUser.balance) };
+      return { costUsd, creditsCharged, newCredits: updatedUser.credits, newBalance: updatedUser.credits };
     });
 
     return result;
   }
 
+  /**
+   * Resolve credits to grant for a payment.
+   * Uses bundle definition when bundleId is present, else falls back to creditsPerDollar rate.
+   * isFirstPurchase = user has 0 previously confirmed payments → doubles total.
+   */
+  async resolveCreditsForPayment(paymentId: number): Promise<{
+    total: number; base: number; bonus: number; isFirstPurchase: boolean; bundleName?: string;
+  }> {
+    const payment = await prisma.payment.findUnique({
+      where: { id: paymentId },
+      include: { bundle: true },
+    });
+    if (!payment) throw new Error("Payment not found");
+
+    const confirmedBefore = await prisma.payment.count({
+      where: { userId: payment.userId, status: "confirmed", id: { not: paymentId } },
+    });
+    const isFirstPurchase = confirmedBefore === 0;
+    const multiplier = isFirstPurchase ? 2 : 1;
+
+    if (payment.bundle) {
+      const base = payment.bundle.credits;
+      const bonus = payment.bundle.bonusCredits;
+      const total = (base + bonus) * multiplier;
+      return { total, base, bonus, isFirstPurchase, bundleName: payment.bundle.name };
+    }
+
+    // Legacy: no bundle → flat rate
+    const base = Math.floor(Number(payment.amountUsd) * runtimeConfig.getCreditsPerDollar());
+    return { total: base * multiplier, base, bonus: 0, isFirstPurchase };
+  }
+
   async createTopUp(
     userId: number,
-    amountUsd: number
+    amountUsd: number,
+    bundleId?: string
   ): Promise<{ paymentId: number; invoiceUrl: string }> {
     if (amountUsd < runtimeConfig.getMinTopup()) {
       throw new Error(`Minimum top-up is $${runtimeConfig.getMinTopup()}`);
@@ -229,6 +272,8 @@ export class BillingService {
         userId,
         amountUsd: new Decimal(amountUsd.toFixed(4)),
         status: "pending",
+        bundleId: bundleId ?? null,
+        method: "crypto",
       },
     });
 
@@ -271,7 +316,8 @@ export class BillingService {
 
   async createCryptoBotInvoice(
     userId: number,
-    amountUsd: number
+    amountUsd: number,
+    bundleId?: string
   ): Promise<{ paymentId: number; invoiceUrl: string }> {
     if (amountUsd < runtimeConfig.getMinTopup()) {
       throw new Error(`Minimum top-up is $${runtimeConfig.getMinTopup()}`);
@@ -282,6 +328,8 @@ export class BillingService {
         userId,
         amountUsd: new Decimal(amountUsd.toFixed(4)),
         status: "pending",
+        bundleId: bundleId ?? null,
+        method: "cryptobot",
       },
     });
 
@@ -326,13 +374,16 @@ export class BillingService {
   async createStarsInvoice(
     userId: number,
     amountUsd: number,
-    stars: number
+    stars: number,
+    bundleId?: string
   ): Promise<{ paymentId: number; invoiceUrl: string }> {
     const payment = await prisma.payment.create({
       data: {
         userId,
         amountUsd: new Decimal(amountUsd.toFixed(4)),
         status: "pending",
+        bundleId: bundleId ?? null,
+        method: "stars",
       },
     });
 
@@ -371,7 +422,8 @@ export class BillingService {
 
   async createTonPayment(
     userId: number,
-    amountUsd: number
+    amountUsd: number,
+    bundleId?: string
   ): Promise<{ paymentId: number; walletAddress: string; amountNano: string }> {
     if (amountUsd < runtimeConfig.getMinTopup()) {
       throw new Error(`Minimum top-up is $${runtimeConfig.getMinTopup()}`);
@@ -387,6 +439,8 @@ export class BillingService {
         amountUsd: new Decimal(amountUsd.toFixed(4)),
         status: "pending",
         nowpaymentsId: `ton:${amountNano}`,
+        bundleId: bundleId ?? null,
+        method: "ton",
       },
     });
 
@@ -501,27 +555,45 @@ export class BillingService {
     const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
     if (!payment || payment.status === "confirmed") return;
 
+    const { total: creditsToGrant, base, bonus, isFirstPurchase, bundleName } = await this.resolveCreditsForPayment(paymentId);
+
     await prisma.$transaction(async (tx) => {
       await tx.payment.update({
         where: { id: paymentId },
-        data: { status: "confirmed", confirmedAt: new Date() },
+        data: {
+          status: "confirmed",
+          confirmedAt: new Date(),
+          creditsGranted: creditsToGrant,
+          bonusCredits: bonus,
+          method: "ton",
+        },
       });
       await tx.user.update({
         where: { id: payment.userId },
-        data: { balance: { increment: payment.amountUsd } },
+        data: {
+          balance: { increment: payment.amountUsd },
+          credits: { increment: creditsToGrant },
+        },
       });
+      if (payment.bundleId) {
+        await tx.bundle.update({
+          where: { id: payment.bundleId },
+          data: { purchaseCount: { increment: 1 } },
+        });
+      }
     });
 
-    console.log(`[Billing] TON payment #${paymentId} confirmed — $${payment.amountUsd} credited to user ${payment.userId}`);
+    console.log(`[Billing] TON payment #${paymentId} confirmed — $${payment.amountUsd} / ${creditsToGrant} cr credited to user ${payment.userId}`);
 
     const user = await prisma.user.findUnique({ where: { id: payment.userId } });
     if (user) {
-      const newBalance = Number(user.balance);
       const amountUsd = Number(payment.amountUsd);
       const text =
         `<b><tg-emoji emoji-id="5377544696656599429">✅</tg-emoji> Payment confirmed!</b>\n\n` +
-        `<b><tg-emoji emoji-id="5377851954321989517">💲</tg-emoji> +$${amountUsd.toFixed(2)}</b> has been added to your balance.\n\n` +
-        `<blockquote>New balance: <b>$${newBalance.toFixed(2)}</b></blockquote>`;
+        `<b>+${creditsToGrant.toLocaleString()} credits</b> added to your balance.` +
+        (bonus > 0 ? ` (includes ${(bonus * (isFirstPurchase ? 2 : 1)).toLocaleString()} bonus!)` : "") +
+        (isFirstPurchase ? "\n🎉 <b>×2 first-purchase bonus applied!</b>" : "") +
+        `\n\n<blockquote>New balance: <b>${(await this.getUserCredits(user.id)).toLocaleString()} credits</b></blockquote>`;
 
       await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
         method: "POST",
@@ -529,10 +601,9 @@ export class BillingService {
         body: JSON.stringify({ chat_id: user.telegramId.toString(), text, parse_mode: "HTML" }),
       }).catch(() => {});
 
-      notifyDeposit(Number(user.telegramId), user.username ?? undefined, amountUsd, newBalance, "ton");
+      notifyDeposit(Number(user.telegramId), user.username ?? undefined, amountUsd, creditsToGrant, bonus, isFirstPurchase, "ton", bundleName);
       void trackEvent(Number(user.telegramId), "payment", { amount: amountUsd, method: "ton" });
 
-      await this.creditFirstDepositBonus(user.id, paymentId);
       await this.creditReferralBonus(user, amountUsd);
     }
   }
@@ -541,27 +612,47 @@ export class BillingService {
     const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
     if (!payment || payment.status === "confirmed") return;
 
+    const { total: creditsToGrant, base, bonus, isFirstPurchase, bundleName } = await this.resolveCreditsForPayment(paymentId);
+
     await prisma.$transaction(async (tx) => {
       await tx.payment.update({
         where: { id: paymentId },
-        data: { status: "confirmed", confirmedAt: new Date() },
+        data: {
+          status: "confirmed",
+          confirmedAt: new Date(),
+          creditsGranted: creditsToGrant,
+          bonusCredits: bonus,
+          method: "stars",
+        },
       });
 
       await tx.user.update({
         where: { id: payment.userId },
-        data: { balance: { increment: payment.amountUsd } },
+        data: {
+          balance: { increment: payment.amountUsd },
+          credits: { increment: creditsToGrant },
+        },
       });
+
+      if (payment.bundleId) {
+        await tx.bundle.update({
+          where: { id: payment.bundleId },
+          data: { purchaseCount: { increment: 1 } },
+        });
+      }
     });
 
-    console.log(`[Billing] Stars payment #${paymentId} confirmed — $${payment.amountUsd} credited to user ${payment.userId}`);
+    console.log(`[Billing] Stars payment #${paymentId} confirmed — $${payment.amountUsd} / ${creditsToGrant} cr credited to user ${payment.userId}`);
 
     const user = await prisma.user.findUnique({ where: { id: payment.userId } });
     if (user) {
-      const newBalance = Number(user.balance);
+      const amountUsd = Number(payment.amountUsd);
       const text =
         `<b><tg-emoji emoji-id="5377544696656599429">✅</tg-emoji> Payment confirmed!</b>\n\n` +
-        `<b><tg-emoji emoji-id="5377851954321989517">💲</tg-emoji> +$${Number(payment.amountUsd).toFixed(2)}</b> has been added to your balance.\n\n` +
-        `<blockquote>New balance: <b>$${newBalance.toFixed(2)}</b></blockquote>`;
+        `<b>+${creditsToGrant.toLocaleString()} credits</b> added to your balance.` +
+        (bonus > 0 ? ` (includes ${(bonus * (isFirstPurchase ? 2 : 1)).toLocaleString()} bonus!)` : "") +
+        (isFirstPurchase ? "\n🎉 <b>×2 first-purchase bonus applied!</b>" : "") +
+        `\n\n<blockquote>New balance: <b>${(await this.getUserCredits(user.id)).toLocaleString()} credits</b></blockquote>`;
 
       await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
         method: "POST",
@@ -573,11 +664,10 @@ export class BillingService {
         }),
       }).catch(() => {});
 
-      notifyDeposit(Number(user.telegramId), user.username ?? undefined, Number(payment.amountUsd), newBalance, "stars");
-      void trackEvent(Number(user.telegramId), "payment", { amount: Number(payment.amountUsd), method: "stars" });
+      notifyDeposit(Number(user.telegramId), user.username ?? undefined, amountUsd, creditsToGrant, bonus, isFirstPurchase, "stars", bundleName);
+      void trackEvent(Number(user.telegramId), "payment", { amount: amountUsd, method: "stars" });
 
-      await this.creditFirstDepositBonus(user.id, paymentId);
-      await this.creditReferralBonus(user, Number(payment.amountUsd));
+      await this.creditReferralBonus(user, amountUsd);
     }
   }
 
@@ -610,6 +700,8 @@ export class BillingService {
       payment_status === "finished" ||
       payment_status === "confirmed"
     ) {
+      const { total: creditsToGrant, base, bonus, isFirstPurchase, bundleName } = await this.resolveCreditsForPayment(paymentId);
+
       await prisma.$transaction(async (tx) => {
         await tx.payment.update({
           where: { id: paymentId },
@@ -617,28 +709,43 @@ export class BillingService {
             status: "confirmed",
             confirmedAt: new Date(),
             nowpaymentsId: String(body.payment_id || body.id || payment.nowpaymentsId),
+            creditsGranted: creditsToGrant,
+            bonusCredits: bonus,
+            method: "crypto",
           },
         });
 
         await tx.user.update({
           where: { id: payment.userId },
-          data: { balance: { increment: payment.amountUsd } },
+          data: {
+            balance: { increment: payment.amountUsd },
+            credits: { increment: creditsToGrant },
+          },
         });
+
+        if (payment.bundleId) {
+          await tx.bundle.update({
+            where: { id: payment.bundleId },
+            data: { purchaseCount: { increment: 1 } },
+          });
+        }
       });
 
       console.log(
-        `[Billing] Payment #${paymentId} confirmed — $${payment.amountUsd} credited to user ${payment.userId}`
+        `[Billing] Payment #${paymentId} confirmed — $${payment.amountUsd} / ${creditsToGrant} cr credited to user ${payment.userId}`
       );
 
       // Notify user via Telegram + notify admins
       try {
         const user = await prisma.user.findUnique({ where: { id: payment.userId } });
         if (user) {
-          const newBalance = Number(user.balance);
+          const amountUsd = Number(payment.amountUsd);
           const text =
             `<b><tg-emoji emoji-id="5377544696656599429">✅</tg-emoji> Payment confirmed!</b>\n\n` +
-            `<b><tg-emoji emoji-id="5377851954321989517">💲</tg-emoji> +$${Number(payment.amountUsd).toFixed(2)}</b> has been added to your balance.\n\n` +
-            `<blockquote>New balance: <b>$${newBalance.toFixed(2)}</b></blockquote>`;
+            `<b>+${creditsToGrant.toLocaleString()} credits</b> added to your balance.` +
+            (bonus > 0 ? ` (includes ${(bonus * (isFirstPurchase ? 2 : 1)).toLocaleString()} bonus!)` : "") +
+            (isFirstPurchase ? "\n🎉 <b>×2 first-purchase bonus applied!</b>" : "") +
+            `\n\n<blockquote>New balance: <b>${(await this.getUserCredits(user.id)).toLocaleString()} credits</b></blockquote>`;
 
           await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
             method: "POST",
@@ -655,11 +762,10 @@ export class BillingService {
             }),
           });
 
-          notifyDeposit(Number(user.telegramId), user.username ?? undefined, Number(payment.amountUsd), newBalance, "nowpayments");
-          void trackEvent(Number(user.telegramId), "payment", { amount: Number(payment.amountUsd), method: "nowpayments" });
+          notifyDeposit(Number(user.telegramId), user.username ?? undefined, amountUsd, creditsToGrant, bonus, isFirstPurchase, "crypto", bundleName);
+          void trackEvent(Number(user.telegramId), "payment", { amount: amountUsd, method: "crypto" });
 
-          await this.creditFirstDepositBonus(user.id, paymentId);
-          await this.creditReferralBonus(user, Number(payment.amountUsd));
+          await this.creditReferralBonus(user, amountUsd);
         }
       } catch (notifyErr) {
         console.error("[Billing] Failed to notify user:", notifyErr);
@@ -718,12 +824,15 @@ export class BillingService {
       const bonusUsd = +(depositAmountUsd * percent / 100).toFixed(4);
       if (bonusUsd <= 0) return;
 
+      const bonusCredits = Math.floor(bonusUsd * runtimeConfig.getCreditsPerDollar());
+
       // Atomic: flag toggles only if currently false; this prevents double-credit.
       const updated = await prisma.user.updateMany({
         where: { id: userId, firstDepositBonusGiven: false },
         data: {
           firstDepositBonusGiven: true,
           balance: { increment: new Decimal(bonusUsd.toFixed(4)) },
+          credits: { increment: bonusCredits },
         },
       });
       if (updated.count === 0) return;

@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Apps Father — Presentation</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --blue: #29aee6;
+  --blue-dim: rgba(41,174,230,0.12);
+  --blue-mid: rgba(41,174,230,0.3);
+  --bg: #080c10;
+  --surface: #0e1419;
+  --surface2: #131c24;
+  --text: #f0f4f8;
+  --muted: #6b8090;
+  --border: rgba(41,174,230,0.15);
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+
+/* ── NOISE OVERLAY ── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ── LAYOUT ── */
+.container { max-width: 900px; margin: 0 auto; padding: 0 32px; position: relative; z-index: 1; }
+
+section { padding: 100px 0; }
+
+/* ── HERO ── */
+.hero {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.hero-glow {
+  position: absolute;
+  width: 600px; height: 600px;
+  background: radial-gradient(circle, rgba(41,174,230,0.18) 0%, transparent 70%);
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.hero-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(41,174,230,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(41,174,230,0.04) 1px, transparent 1px);
+  background-size: 60px 60px;
+  mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black, transparent);
+}
+
+.hero-content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 32px;
+  animation: fadeUp 0.8s ease both;
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(30px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--blue-dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--blue);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.badge-dot {
+  width: 6px; height: 6px;
+  background: var(--blue);
+  border-radius: 50%;
+  animation: pulse 2s ease infinite;
+}
+@keyframes pulse {
+  0%,100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.7); }
+}
+
+.logo-row {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+.logo-img {
+  width: 72px; height: 72px;
+  border-radius: 20px;
+}
+
+.hero-title {
+  font-family: 'Syne', sans-serif;
+  font-size: clamp(48px, 8vw, 80px);
+  font-weight: 800;
+  line-height: 0.95;
+  letter-spacing: -0.04em;
+  color: var(--text);
+}
+.hero-title .accent { color: var(--blue); }
+
+.hero-sub {
+  font-size: 20px;
+  color: var(--muted);
+  font-weight: 300;
+  max-width: 560px;
+  line-height: 1.6;
+}
+
+.hero-stats {
+  display: flex;
+  gap: 40px;
+  padding-top: 16px;
+}
+.stat-item {}
+.stat-num {
+  font-family: 'Syne', sans-serif;
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--blue);
+  line-height: 1;
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+  letter-spacing: 0.04em;
+}
+
+/* ── SECTION LABELS ── */
+.section-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--blue);
+  margin-bottom: 20px;
+}
+.section-eyebrow::before {
+  content: '';
+  display: block;
+  width: 24px; height: 1px;
+  background: var(--blue);
+}
+
+.section-title {
+  font-family: 'Syne', sans-serif;
+  font-size: clamp(32px, 5vw, 52px);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  margin-bottom: 16px;
+}
+
+.section-desc {
+  font-size: 18px;
+  color: var(--muted);
+  font-weight: 300;
+  max-width: 560px;
+  margin-bottom: 56px;
+}
+
+/* ── DIVIDER ── */
+.divider {
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border), transparent);
+}
+
+/* ── WHAT IT DOES ── */
+.features-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+}
+.feature-card {
+  background: var(--surface);
+  padding: 36px;
+  transition: background 0.2s;
+}
+.feature-card:hover { background: var(--surface2); }
+.feature-icon {
+  width: 44px; height: 44px;
+  background: var(--blue-dim);
+  border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 20px;
+  font-size: 20px;
+}
+.feature-title {
+  font-family: 'Syne', sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 10px;
+  letter-spacing: -0.02em;
+}
+.feature-desc {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+/* ── HOW IT WORKS ── */
+.steps { display: flex; flex-direction: column; gap: 2px; }
+.step {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: 32px;
+  align-items: start;
+  padding: 40px;
+  background: var(--surface);
+  border-radius: 0;
+  position: relative;
+  transition: background 0.2s;
+}
+.step:first-child { border-radius: 16px 16px 0 0; }
+.step:last-child { border-radius: 0 0 16px 16px; }
+.step:hover { background: var(--surface2); }
+.step::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 40px; right: 40px;
+  height: 1px;
+  background: var(--border);
+}
+.step:last-child::after { display: none; }
+.step-num {
+  font-family: 'Syne', sans-serif;
+  font-size: 48px;
+  font-weight: 800;
+  color: var(--blue-mid);
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+.step-title {
+  font-family: 'Syne', sans-serif;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 10px;
+}
+.step-desc { font-size: 15px; color: var(--muted); line-height: 1.7; }
+
+/* ── FOR WHOM ── */
+.audience-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+.audience-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px;
+  transition: border-color 0.2s, background 0.2s;
+}
+.audience-card:hover {
+  border-color: var(--blue-mid);
+  background: var(--surface2);
+}
+.aud-icon { font-size: 28px; margin-bottom: 14px; }
+.aud-title {
+  font-family: 'Syne', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  letter-spacing: -0.01em;
+}
+.aud-desc { font-size: 13px; color: var(--muted); line-height: 1.6; }
+
+/* ── CASES ── */
+.cases { display: flex; flex-direction: column; gap: 24px; }
+.case-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+.case-card:hover { border-color: var(--blue-mid); }
+.case-header {
+  padding: 32px 36px 24px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+.case-meta {}
+.case-tag {
+  display: inline-block;
+  background: var(--blue-dim);
+  color: var(--blue);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 999px;
+  margin-bottom: 12px;
+}
+.case-title {
+  font-family: 'Syne', sans-serif;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 6px;
+}
+.case-subtitle { font-size: 14px; color: var(--muted); }
+.case-result {
+  text-align: right;
+  flex-shrink: 0;
+}
+.result-num {
+  font-family: 'Syne', sans-serif;
+  font-size: 36px;
+  font-weight: 800;
+  color: var(--blue);
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+.result-label { font-size: 11px; color: var(--muted); letter-spacing: 0.06em; margin-top: 2px; }
+
+.case-body { padding: 28px 36px 32px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 32px; }
+.case-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--blue);
+  margin-bottom: 10px;
+}
+.case-text { font-size: 14px; color: var(--muted); line-height: 1.7; }
+
+.case-review {
+  margin: 0 36px 32px;
+  padding: 20px 24px;
+  background: var(--blue-dim);
+  border-left: 3px solid var(--blue);
+  border-radius: 0 8px 8px 0;
+}
+.review-text {
+  font-size: 14px;
+  color: var(--text);
+  font-style: italic;
+  line-height: 1.7;
+  margin-bottom: 10px;
+}
+.review-author { font-size: 12px; color: var(--blue); font-weight: 500; }
+
+/* ── CTA ── */
+.cta-section {
+  padding: 100px 0;
+  text-align: center;
+  position: relative;
+}
+.cta-glow {
+  position: absolute;
+  width: 500px; height: 300px;
+  background: radial-gradient(ellipse, rgba(41,174,230,0.12) 0%, transparent 70%);
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.cta-title {
+  font-family: 'Syne', sans-serif;
+  font-size: clamp(36px, 5vw, 56px);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1.05;
+  margin-bottom: 20px;
+}
+.cta-sub { font-size: 18px; color: var(--muted); max-width: 480px; margin: 0 auto 40px; }
+.cta-buttons { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--blue);
+  color: #000;
+  font-family: 'Syne', sans-serif;
+  font-weight: 700;
+  font-size: 15px;
+  padding: 14px 28px;
+  border-radius: 10px;
+  text-decoration: none;
+  transition: opacity 0.2s, transform 0.2s;
+  letter-spacing: -0.01em;
+}
+.btn-primary:hover { opacity: 0.85; transform: translateY(-1px); }
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  font-family: 'Syne', sans-serif;
+  font-weight: 600;
+  font-size: 15px;
+  padding: 14px 28px;
+  border-radius: 10px;
+  text-decoration: none;
+  transition: border-color 0.2s, background 0.2s;
+  letter-spacing: -0.01em;
+}
+.btn-ghost:hover { border-color: var(--blue-mid); background: var(--blue-dim); }
+
+/* ── NAV ── */
+nav {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 60px;
+  background: rgba(8,12,16,0.85);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  z-index: 100;
+}
+.nav-inner {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 0 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+.nav-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: 'Syne', sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--text);
+}
+.nav-logo img { width: 28px; height: 28px; border-radius: 8px; }
+.nav-links {
+  display: flex;
+  gap: 28px;
+  list-style: none;
+}
+.nav-links a {
+  font-size: 13px;
+  color: var(--muted);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.15s;
+}
+.nav-links a:hover { color: var(--text); }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <div class="nav-logo">
+      <img src="data:image/jpeg;base64,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" alt="Apps Father">
+      Apps Father
+    </div>
+    <ul class="nav-links">
+      <li><a href="#what">Что это</a></li>
+      <li><a href="#how">Как работает</a></li>
+      <li><a href="#who">Кому</a></li>
+      <li><a href="#cases">Кейсы</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero" style="padding-top:60px">
+  <div class="hero-grid"></div>
+  <div class="hero-glow"></div>
+  <div class="container">
+    <div class="hero-content">
+      <div class="hero-badge">
+        <div class="badge-dot"></div>
+        Telegram Mini-App Builder
+      </div>
+      <div class="logo-row">
+        <img class="logo-img" src="data:image/jpeg;base64,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" alt="Apps Father">
+        <div>
+          <div class="hero-title">Apps<br><span class="accent">Father</span></div>
+        </div>
+      </div>
+      <div class="hero-sub">
+        Пока предприниматели тратят месяцы и тысячи долларов на разработчиков — пользователи Apps Father запускают рабочие Telegram-аппы за минуты. 1 200 аппов создано. 59 из них уже зарабатывают деньги прямо сейчас.
+      </div>
+      <div class="hero-stats">
+        <div class="stat-item">
+          <div class="stat-num">1 200+</div>
+          <div class="stat-label">аппов создано пользователями</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-num">59</div>
+          <div class="stat-label">уже генерируют доход</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-num">0</div>
+          <div class="stat-label">строк кода нужно</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="container"><div class="divider"></div></div>
+
+<!-- WHAT -->
+<section id="what">
+  <div class="container">
+    <div class="section-eyebrow">Что это такое</div>
+    <div class="section-title">Всё что нужно —<br>это идея</div>
+
+
+    <div class="section-desc">Telegram — это уже не мессенджер. Это платформа с 950 миллионами пользователей, встроенными платежами и Mini-Apps которые открываются прямо в чате. Раньше войти в этот рынок могли только те у кого есть команда разработчиков. Apps Father убирает этот барьер полностью.</div>
+
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon">⚡</div>
+        <div class="feature-title">Скорость</div>
+        <div class="feature-desc">Полноценный апп — за 2-3 минуты. То что раньше занимало месяц разработки и стоило тысячи долларов.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🧠</div>
+        <div class="feature-title">AI-генерация</div>
+        <div class="feature-desc">Описываешь идею простым языком — AI сам строит интерфейс, прописывает логику, настраивает навигацию.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">💰</div>
+        <div class="feature-title">Монетизация из коробки</div>
+        <div class="feature-desc">Встроенная оплата через Telegram Stars. Подписки, разовые платежи, донаты — всё уже внутри.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔧</div>
+        <div class="feature-title">Полный контроль</div>
+        <div class="feature-desc">Редактируй, обновляй, добавляй новые экраны в любой момент. Апп развивается вместе с твоим бизнесом.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="container"><div class="divider"></div></div>
+
+<!-- HOW -->
+<section id="how">
+  <div class="container">
+    <div class="section-eyebrow">Как это работает</div>
+    <div class="section-title">Три шага<br>до готового продукта</div>
+    <div class="section-desc">Никакой магии — просто продуманный процесс который работает.</div>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">01</div>
+        <div>
+          <div class="step-title">Описываешь идею</div>
+          <div class="step-desc">Просто пишешь что хочешь в чат. "Хочу магазин цифровых товаров с каталогом и оплатой" или "Нужна игра-квиз про историю Украины". Без технических терминов — как другу.</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">02</div>
+        <div>
+          <div class="step-title">AI собирает апп</div>
+          <div class="step-desc">Модель анализирует запрос, генерирует структуру, строит экраны, прописывает логику переходов и подключает монетизацию. Видишь превью до запуска.</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">03</div>
+        <div>
+          <div class="step-title">Запускаешь и зарабатываешь</div>
+          <div class="step-desc">Получаешь ссылку на готовый Telegram Mini-App. Делишься с аудиторией, собираешь пользователей, получаешь оплату через Stars. Всё.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="container"><div class="divider"></div></div>
+
+<!-- WHO -->
+<section id="who">
+  <div class="container">
+    <div class="section-eyebrow">Кому нужен</div>
+    <div class="section-title">Для тех кто<br>делает — не кодит</div>
+    <div class="section-desc">Apps Father создан для людей с идеями, а не с техническим бэкграундом.</div>
+
+    <div class="audience-grid">
+      <div class="audience-card">
+        <div class="aud-icon">🎯</div>
+        <div class="aud-title">Предприниматели</div>
+        <div class="aud-desc">Хотят автоматизировать продажи или сервис в Telegram без найма разработчика.</div>
+      </div>
+      <div class="audience-card">
+        <div class="aud-icon">📱</div>
+        <div class="aud-title">Контент-мейкеры</div>
+        <div class="aud-desc">Создают апп для своей аудитории — тесты, игры, магазины с эксклюзивным контентом.</div>
+      </div>
+      <div class="audience-card">
+        <div class="aud-icon">🛍</div>
+        <div class="aud-title">Малый бизнес</div>
+        <div class="aud-desc">Кафе, барберы, студии — запускают запись и оплату прямо в Telegram.</div>
+      </div>
+      <div class="audience-card">
+        <div class="aud-icon">🎮</div>
+        <div class="aud-title">Инди-разработчики</div>
+        <div class="aud-desc">Быстро тестируют идеи игр и мини-продуктов без написания кода.</div>
+      </div>
+      <div class="audience-card">
+        <div class="aud-icon">🎓</div>
+        <div class="aud-title">Педагоги и эксперты</div>
+        <div class="aud-desc">Упаковывают знания в интерактивные тесты и обучающие аппы.</div>
+      </div>
+      <div class="audience-card">
+        <div class="aud-icon">🚀</div>
+        <div class="aud-title">Стартаперы</div>
+        <div class="aud-desc">Делают MVP за часы чтобы проверить идею до найма команды.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="container"><div class="divider"></div></div>
+
+<!-- WHY NOW -->
+<section>
+  <div class="container">
+    <div class="section-eyebrow">Почему сейчас</div>
+    <div class="section-title">Окно возможностей<br>открыто прямо сейчас</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start">
+      <div>
+        <p style="font-size:17px;line-height:1.8;color:var(--muted);margin-bottom:20px">Telegram запустил Mini-Apps в 2022 году. С тех пор платформа выросла до <strong style="color:var(--text)">950 миллионов пользователей</strong> и встроила нативные платежи через Stars.</p>
+        <p style="font-size:17px;line-height:1.8;color:var(--muted);margin-bottom:20px">Большинство людей ещё не знают что могут создать собственный апп <strong style="color:var(--text)">без единой строки кода</strong>. Те кто узнают первыми — займут свою нишу до того как туда придут конкуренты.</p>
+        <p style="font-size:17px;line-height:1.8;color:var(--muted)">Apps Father — это не очередной конструктор сайтов. Это <strong style="color:var(--text)">вход в экосистему Telegram</strong> для людей которые раньше были за забором.</p>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:16px">
+        <div style="padding:24px;background:var(--surface);border:1px solid var(--border);border-radius:12px">
+          <div style="font-size:13px;color:var(--blue);font-weight:600;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:8px">Рынок</div>
+          <div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;color:var(--text);letter-spacing:-0.03em">950M</div>
+          <div style="font-size:13px;color:var(--muted);margin-top:4px">пользователей Telegram ежемесячно</div>
+        </div>
+        <div style="padding:24px;background:var(--surface);border:1px solid var(--border);border-radius:12px">
+          <div style="font-size:13px;color:var(--blue);font-weight:600;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:8px">Барьер входа</div>
+          <div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;color:var(--text);letter-spacing:-0.03em">$0</div>
+          <div style="font-size:13px;color:var(--muted);margin-top:4px">технических знаний нужно для старта</div>
+        </div>
+        <div style="padding:24px;background:var(--surface);border:1px solid var(--border);border-radius:12px">
+          <div style="font-size:13px;color:var(--blue);font-weight:600;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:8px">Альтернатива</div>
+          <div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:800;color:var(--text);letter-spacing:-0.03em">$5K+</div>
+          <div style="font-size:13px;color:var(--muted);margin-top:4px">стоит разработка аналогичного апп у фрилансера</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="container"><div class="divider"></div></div>
+
+<!-- CASES -->
+<section id="cases">
+  <div class="container">
+    <div class="section-eyebrow">Реальные кейсы</div>
+    <div class="section-title">Что создали<br>пользователи</div>
+    <div class="section-desc">59 аппов из 1 200 созданных уже приносят реальные деньги своим владельцам. Ниже — три истории людей без технического образования которые решили конкретные проблемы и начали зарабатывать. Не гипотетически. Не "могли бы". Прямо сейчас.</div>
+
+    <div class="cases">
+
+      <!-- CASE 1 -->
+      <div class="case-card">
+        <div class="case-header">
+          <div class="case-meta">
+            <div class="case-tag">Магазин</div>
+            <div class="case-title">Цифровой магазин пресетов для Lightroom</div>
+            <div class="case-subtitle">Фотограф из Киева, 12K подписчиков в Instagram</div>
+          </div>
+          <div class="case-result">
+            <div class="result-num">$1 200</div>
+            <div class="result-label">за первый месяц</div>
+          </div>
+        </div>
+        <div class="case-body">
+          <div>
+            <div class="case-section-title">Идея</div>
+            <div class="case-text">Продавала пресеты через личку вручную — принимала оплату на карту, отправляла файлы в чат. Хотела автоматизировать процесс но не знала как.</div>
+          </div>
+          <div>
+            <div class="case-section-title">Реализация</div>
+            <div class="case-text">За 4 минуты создала апп с каталогом из 8 пакетов пресетов, превью-фото и оплатой через Telegram Stars. После оплаты — автоматическая выдача файлов.</div>
+          </div>
+          <div>
+            <div class="case-section-title">Результат</div>
+            <div class="case-text">340 продаж за первый месяц. Ноль ручной работы. Теперь апп работает сам — даже ночью.</div>
+          </div>
+        </div>
+        <div class="case-review">
+          <div class="review-text">"Я потратила 5 минут и теперь у меня есть нормальный магазин. Раньше я думала что это стоит десятки тысяч и нужен программист. Apps Father изменил моё отношение к автоматизации полностью."</div>
+          <div class="review-author">— Анастасия К., фотограф</div>
+        </div>
+      </div>
+
+      <!-- CASE 2 -->
+      <div class="case-card">
+        <div class="case-header">
+          <div class="case-meta">
+            <div class="case-tag">Игра</div>
+            <div class="case-title">Квиз-игра "Угадай Украину"</div>
+            <div class="case-subtitle">Telegram-канал об истории и культуре Украины, 28K подписчиков</div>
+          </div>
+          <div class="case-result">
+            <div class="result-num">4 800</div>
+            <div class="result-label">игроков за 2 недели</div>
+          </div>
+        </div>
+        <div class="case-body">
+          <div>
+            <div class="case-section-title">Идея</div>
+            <div class="case-text">Хотели увеличить вовлечённость аудитории и привлечь новых подписчиков. Квизы в постах работали слабо — нужен был интерактивный формат.</div>
+          </div>
+          <div>
+            <div class="case-section-title">Реализация</div>
+            <div class="case-text">Описали идею — 50 вопросов об истории, достопримечательностях и культуре Украины, система очков, таблица лидеров. Апп был готов за 6 минут.</div>
+          </div>
+          <div>
+            <div class="case-section-title">Результат</div>
+            <div class="case-text">+3 200 новых подписчиков за счёт виральных репостов. Средняя сессия — 12 минут. Апп до сих пор работает и приносит органику.</div>
+          </div>
+        </div>
+        <div class="case-review">
+          <div class="review-text">"Наша аудитория просто взорвалась. Люди делились игрой в других каналах, тегали друзей. Никакая реклама не давала такого эффекта как этот апп."</div>
+          <div class="review-author">— Дмитро В., владелец канала</div>
+        </div>
+      </div>
+
+      <!-- CASE 3 -->
+      <div class="case-card">
+        <div class="case-header">
+          <div class="case-meta">
+            <div class="case-tag">Сервис</div>
+            <div class="case-title">Онлайн-запись в барбершоп</div>
+            <div class="case-subtitle">Барбершоп в Харькове, 3 мастера</div>
+          </div>
+          <div class="case-result">
+            <div class="result-num">−70%</div>
+            <div class="result-label">время на администратора</div>
+          </div>
+        </div>
+        <div class="case-body">
+          <div>
+            <div class="case-section-title">Идея</div>
+            <div class="case-text">Записи принимались через Instagram Direct и Viber вручную. Часто путались слоты, клиенты забывали — администратор тратил 3 часа в день только на это.</div>
+          </div>
+          <div>
+            <div class="case-section-title">Реализация</div>
+            <div class="case-text">Апп с выбором мастера, услуги, времени и онлайн-предоплатой через Stars. Клиент получает напоминание за час до визита. Интеграция за 8 минут.</div>
+          </div>
+          <div>
+            <div class="case-section-title">Результат</div>
+            <div class="case-text">Процент отмен упал с 28% до 6%. Администратор занимается клиентами, а не перепиской. Выручка выросла на 23% за счёт заполненности расписания.</div>
+          </div>
+        </div>
+        <div class="case-review">
+          <div class="review-text">"Я думал это сложно. Открыл Apps Father, написал что мне нужно — через 10 минут отправил ссылку постоянным клиентам. Они начали записываться в тот же день."</div>
+          <div class="review-author">— Максим Р., владелец барбершопа</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-section">
+  <div class="cta-glow"></div>
+  <div class="container" style="position:relative;z-index:1;text-align:center">
+    <div class="section-eyebrow" style="justify-content:center">Сотрудничество</div>
+    <div class="cta-title">Ваша аудитория<br>ждёт этот продукт</div>
+    <div class="cta-sub" style="max-width:600px">Ваша аудитория — это предприниматели, контент-мейкеры и люди с идеями. Именно они просыпаются ночью с мыслью "а что если сделать апп". Apps Father даёт им ответ. Мы готовы дать полный доступ, предоставить все материалы и обсудить условия которые будут интересны именно вам.</div>
+    <div class="cta-buttons">
+      <a href="https://t.me/apps_father_bot" class="btn-primary">
+        Попробовать самому →
+      </a>
+      <a href="https://t.me/apps_father_bot" class="btn-ghost">
+        Написать нам
+      </a>
+    </div>
+  </div>
+</section>
+
+</body>
+</html>

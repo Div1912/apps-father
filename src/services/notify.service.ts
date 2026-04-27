@@ -154,19 +154,16 @@ const METHOD_LABELS: Record<string, string> = {
 export function notifyDeposit(
   telegramId: number,
   username: string | undefined,
-  amount: number,
-  newBalance: number,
+  amountUsd: number,
+  creditsGranted: number,
+  bonusCredits: number,
+  isFirstPurchase: boolean,
   method?: string,
+  bundleName?: string,
 ): void {
-  const uname = username ? ` (@${username})` : "";
-  const methodLine = method
-    ? `${METHOD_LABELS[method] || method}`
-    : "";
+  const uname = username ? `@${username}` : `#ID${telegramId}`;
+  const methodLabel = method ? (METHOD_LABELS[method] || method) : "—";
 
-  // Pull the user's attribution (utm_source / referredBy) so the deposit
-  // notification carries the same Source line as the new-user notification.
-  // Failure here is non-fatal — we still send the deposit notification, just
-  // without the Source line.
   void (async () => {
     let sourceLine = "";
     try {
@@ -178,28 +175,40 @@ export function notifyDeposit(
         const referredBy = user.referredBy ? Number(user.referredBy) : null;
         const source = user.utmSource || null;
         if (referredBy && source) {
-          sourceLine =
-            `Source: <b>#partnership</b>\n` +
-            `Partner: <b>${source}</b> | <b>${referredBy}</b>\n`;
+          sourceLine = `\nSource: <b>#partnership</b> · Partner: <b>${source}</b> | <b>${referredBy}</b>`;
         } else if (referredBy) {
-          sourceLine =
-            `Source: <b>#referral</b>\n` +
-            `Referred by: <b>${referredBy}</b>\n`;
+          sourceLine = `\nSource: <b>#referral</b> · Referred by: <b>${referredBy}</b>`;
         } else if (source) {
-          sourceLine = `Source: <b>#${source}</b>\n`;
-        } else {
-          sourceLine = `Source: <b>#organic</b>\n`;
+          sourceLine = `\nSource: <b>#${source}</b>`;
         }
       }
     } catch (err) {
       console.error("[Notify] notifyDeposit source lookup failed:", err);
     }
 
+    // Build credits breakdown line
+    const baseCredits = creditsGranted - (bonusCredits * (isFirstPurchase ? 2 : 1));
+    const bonusEffective = creditsGranted - (isFirstPurchase ? baseCredits : baseCredits);
+    // Simpler: just show total and note components
+    let creditsLine: string;
+    if (isFirstPurchase && bonusCredits > 0) {
+      creditsLine = `🪙 <b>${creditsGranted.toLocaleString()} cr</b> (×2 first purchase, incl. ${(bonusCredits * 2).toLocaleString()} bonus)`;
+    } else if (isFirstPurchase) {
+      creditsLine = `🪙 <b>${creditsGranted.toLocaleString()} cr</b> (×2 first purchase)`;
+    } else if (bonusCredits > 0) {
+      creditsLine = `🪙 <b>${creditsGranted.toLocaleString()} cr</b> (incl. ${bonusCredits.toLocaleString()} bonus)`;
+    } else {
+      creditsLine = `🪙 <b>${creditsGranted.toLocaleString()} cr</b>`;
+    }
+
+    const bundleLine = bundleName ? `📦 <b>${bundleName}</b> via ${methodLabel}` : `Method: <b>${methodLabel}</b>`;
+
     notifyAdmins(
-      `💵 <b>${amount.toFixed(2)}</b>\n` +
-      `Method: <b>${methodLine}</b>\n` +
-      `New balance: <b>${newBalance.toFixed(2)}</b>\n` +
-      `User: <b>${uname}</b> | ID: <b>#ID${telegramId}</b>\n` +
+      `💰 Payment\n` +
+      `${bundleLine}\n` +
+      `👤 ${uname} · TG <b>${telegramId}</b>\n` +
+      `${creditsLine}\n` +
+      `💵 $${amountUsd.toFixed(2)}` +
       sourceLine
     );
   })();

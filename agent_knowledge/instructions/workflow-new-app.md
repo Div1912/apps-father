@@ -77,9 +77,9 @@ WORKFLOW — NEW APP (Kind = App / standard Telegram Mini App)
 
 6. shell("npm install <pkg>") only if an external package is genuinely needed.
 
-7. configure_bot(name, description, shortDescription, menuButtonText)
-   - Call ONLY if db.botToken is non-empty. If empty → skip entirely.
-   - ONE atomic call. ONLY on the first build. NEVER call telegram_api for bot setup.
+7. configure_app(name, description, longDescription, menuButtonText)
+   - ONE atomic call. ONLY on the first build. NEVER call telegram_api for app/bot setup.
+   - It saves metadata to Apps Father DB first. If no bot is connected yet, the platform applies it automatically when the bot is linked.
    - NEVER use setMyCommands.
 
 8. fetch_url to read docs only when you need to learn an unfamiliar external API.

@@ -55,14 +55,15 @@ This workflow replaces the standard App workflow entirely.
 3. Write `frontend/index.html` — ONE file, inline CSS, `<script type="module">`.
    - Three.js via importmap (version 0.160.0, ESM CDN).
    - Canvas: 100vw × 100vh. Body: margin:0; overflow:hidden; background:#000; touch-action:none.
+   - HTML ids/classes must be plain, not escaped. Correct: `<canvas id="game-canvas">`; wrong: `<canvas id="\"game-canvas\"">`.
    - WebApp.ready(), WebApp.expand(), WebApp.disableVerticalSwipes?.(), WebApp.requestFullscreen?.() — all best-effort with try/catch.
    - One requestAnimationFrame loop with THREE.Clock. Clamp dt = Math.min(clock.getDelta(), 1/30).
    - Persistence via Telegram.WebApp.CloudStorage (getItem/setItem) with localStorage fallback.
    - Haptic feedback: HapticFeedback.impactOccurred / notificationOccurred on key events.
    - HTML overlay for score, start/death screen, mobile controls only — no Telegram chrome classes.
 
-4. configure_bot(name, description, shortDescription, menuButtonText)
-   - Call ONLY if db.botToken is non-empty. One atomic call. First build only.
+4. configure_app(name, description, longDescription, menuButtonText)
+   - One atomic call. First build only. It saves metadata to Apps Father DB first and configures the bot now or when it is later linked.
    - The menu button just opens the game (no special config needed beyond menuButtonText).
 
 5. deploy_to_dev() — deploy and verify via the Dev URL in Telegram.

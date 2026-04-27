@@ -141,6 +141,7 @@ export async function listUsers(params: UsersListParams = {}) {
     username: u.username,
     firstName: u.firstName,
     balance: Number(u.balance),
+    credits: (u as any).credits ?? 0,
     appSlots: u.appSlots,
     isPartner: u.isPartner,
     projectCount: u._count.projects,
@@ -193,17 +194,25 @@ export async function getUserDetail(userId: number) {
     where: { userId },
   });
 
+  // Credits charged (from usage logs)
+  const creditsUsed = await prisma.usageLog.aggregate({
+    _sum: { creditsCharged: true },
+    where: { userId },
+  });
+
   return {
     id: user.id,
     telegramId: user.telegramId.toString(),
     username: user.username,
     firstName: user.firstName,
     language: user.language,
-    balance: Number(user.balance),
+    balance: Number(user.balance),          // USD deposited (kept for accounting)
+    credits: (user as any).credits ?? 0,    // current credit balance (primary)
     appSlots: user.appSlots,
     referredBy: user.referredBy ? user.referredBy.toString() : null,
     utmSource: user.utmSource,
-    totalSpent: Number(totalSpent._sum.costUsd || 0),
+    totalSpent: Number(totalSpent._sum.costUsd || 0),         // real USD cost (for admins)
+    totalCreditsSpent: creditsUsed._sum.creditsCharged || 0,  // credits charged to user
     createdAt: user.createdAt,
     isPartner: user.isPartner,
     partnerPercent: user.partnerPercent ? Number(user.partnerPercent) : null,
@@ -233,7 +242,9 @@ export async function getUserDetail(userId: number) {
       operation: l.operation,
       inputTokens: l.inputTokens,
       outputTokens: l.outputTokens,
-      cost: Number(l.costUsd),
+      cost: Number(l.costUsd),                          // raw USD cost (admin transparency)
+      creditsCharged: (l as any).creditsCharged ?? null, // credits deducted from user
+      tierId: (l as any).tierId ?? null,
       createdAt: l.createdAt,
     })),
   };
@@ -252,6 +263,20 @@ export async function setUserBalance(userId: number, action: "set" | "add", amou
           data: { balance: { increment: v } },
         });
   return { balance: Number(updated.balance) };
+}
+
+/** Set or add credits directly (admin action). Credits are integers. */
+export async function setUserCredits(userId: number, action: "set" | "add", credits: number) {
+  if (!Number.isFinite(credits) || credits < 0) throw new Error("Invalid credits amount");
+  const v = Math.round(credits);
+  const updated =
+    action === "set"
+      ? await prisma.user.update({ where: { id: userId }, data: { credits: v } as any })
+      : await prisma.user.update({
+          where: { id: userId },
+          data: { credits: { increment: v } } as any,
+        });
+  return { credits: (updated as any).credits ?? 0 };
 }
 
 export async function updateUserPartner(

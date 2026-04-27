@@ -1,7 +1,9 @@
 /**
  * Admin → Models page
- * Allows configuring the OpenRouter API key and per-action model settings
- * (modelId, provider, markup, max tokens, max iterations, thinking budget).
+ * Section 1: OpenRouter API key + global status
+ * Section 2: Performance Tiers — add/remove, localized name+description,
+ *            per-action model/provider (live OR datalist), stats 0-10,
+ *            credit pricing per action.
  */
 window.AdminPages = window.AdminPages || {};
 
@@ -9,88 +11,69 @@ window.AdminPages.models = {
   title: "Models",
   render: function (container, ctx) {
 
-  // ── State ────────────────────────────────────────────────────────────────
-  let orModels = [];    // [{id, name, pricing:{prompt,completion}}] from OR catalog
-  let runtimeCfg = {}; // current runtimeConfig from /admin/api/config
-  let toast = null;
-  // Cache: modelId → provider names array (or null if fetch failed)
-  const providersByModelId = new Map();
-
+  // ── Constants ─────────────────────────────────────────────────────────────
   const ACTION_TYPES = [
-    { key: "plan",         label: "Plan",           hasIter: false, hasThink: false },
-    { key: "codegen",      label: "Code Gen",       hasIter: true,  hasThink: true },
-    { key: "ask",          label: "Ask / Q&A",      hasIter: false, hasThink: false },
-    { key: "suggestions",  label: "Suggestions",    hasIter: false, hasThink: false },
-    { key: "passport",     label: "Passport / CTX", hasIter: false, hasThink: false },
+    { key: "plan",        label: "Plan",           hasIter: false, hasThink: false, hasReason: true  },
+    { key: "codegen",     label: "Code Gen",        hasIter: true,  hasThink: true,  hasReason: true  },
+    { key: "ask",         label: "Ask / Q&A",       hasIter: false, hasThink: false, hasReason: true  },
+    { key: "suggestions", label: "Suggestions",     hasIter: false, hasThink: false, hasReason: true  },
+    { key: "passport",    label: "Passport / CTX",  hasIter: false, hasThink: false, hasReason: true  },
   ];
+  const PRICING_ACTIONS = ["create", "update", "plan", "ask", "suggestions", "passport"];
+  const LANGS = ["en", "ru", "uk"];
+  const LANG_LABELS = { en: "EN", ru: "RU", uk: "UK" };
   const PROVIDER_OPTIONS = [
-    "Minimax",
-    "Anthropic",
-    "OpenAI",
-    "Google",
-    "Meta",
-    "Mistral",
-    "DeepSeek",
-    "xAI",
-    "Qwen",
-    "Together",
-    "Fireworks",
-    "DeepInfra",
-    "Novita",
-    "Groq",
+    "Anthropic","OpenAI","Google","Meta","Mistral","DeepSeek","xAI","Qwen",
+    "Together","Fireworks","DeepInfra","Novita","Groq","Minimax",
   ];
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // ── State ─────────────────────────────────────────────────────────────────
+  let orModels = [];
+  let runtimeCfg = {};
+  let tiers = [];          // working copy, mutated in place by readTierCards()
+  let toastTimer = null;
+  const providerCache = new Map();  // modelId → string[] | null
+
+  // Per-tier active language tab. Key = tier index (string).
+  const activeLang = {};
+
+  // ── Root render ───────────────────────────────────────────────────────────
   function render() {
     container.innerHTML = `
       <div class="models-page">
         <div class="page-hdr">
           <div>
             <h1>Models</h1>
-            <div class="sub">Configure OpenRouter API key and per-action model settings. Changes take effect immediately without restart.</div>
+            <div class="sub">OpenRouter key, per-action defaults, and Performance Tier configuration.</div>
           </div>
         </div>
 
-        <!-- API Key Section -->
+        <!-- ① API Key -->
         <div class="card models-apikey-card">
-          <div class="card-header">
-            <h2>OpenRouter API Key</h2>
-          </div>
+          <div class="card-header"><h2>OpenRouter API Key</h2></div>
           <div class="models-apikey-row">
-            <input type="password" id="or-apikey-input" class="input" placeholder="sk-or-..." autocomplete="off" />
+            <input type="password" id="or-apikey-input" class="input" placeholder="sk-or-…" autocomplete="off" />
             <button class="btn btn-secondary" id="or-apikey-reveal">👁</button>
-            <button class="btn btn-primary" id="or-apikey-save">Save Key</button>
+            <button class="btn btn-primary"   id="or-apikey-save">Save Key</button>
             <button class="btn btn-secondary" id="or-apikey-test">Test &amp; Load Models</button>
           </div>
           <div id="or-apikey-status" class="models-apikey-status"></div>
         </div>
 
-        <!-- Per-action model table -->
-        <div class="card" style="margin-top:16px">
-          <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
-            <h2>Model Configuration</h2>
-            <button class="btn btn-primary" id="models-save-all">Save All</button>
+        <!-- ② Performance Tiers -->
+        <div class="card" style="margin-top:16px" id="tiers-card">
+          <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+            <div>
+              <h2 style="margin:0">Performance Tiers</h2>
+              <div class="sub" style="margin-top:2px">Each tier defines model settings, quality/speed/cost stats, and credit pricing. Users can pick a tier in the Mini App.</div>
+            </div>
+            <div style="display:flex;gap:8px;flex-shrink:0">
+              <button class="btn btn-secondary" id="tiers-add-btn">+ Add Tier</button>
+              <button class="btn btn-primary"   id="tiers-save-btn">Save Tiers</button>
+            </div>
           </div>
-          <div class="models-table-wrap">
-            <table class="models-table" id="models-table">
-              <thead>
-                <tr>
-                  <th>Action</th>
-                  <th>Model ID</th>
-                  <th>Provider</th>
-                  <th>Input $/M</th>
-                  <th>Output $/M</th>
-                  <th>Markup ×</th>
-                  <th>Max Tokens</th>
-                  <th>Max Iter</th>
-                  <th>Thinking</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody id="models-tbody">
-                <tr><td colspan="10" class="loading-cell">Loading configuration…</td></tr>
-              </tbody>
-            </table>
+          <div id="tiers-list" style="display:flex;flex-direction:column;gap:20px;padding:16px 0">
+            <div class="loading-cell" style="text-align:center;padding:24px">Loading tiers…</div>
           </div>
         </div>
 
@@ -98,51 +81,45 @@ window.AdminPages.models = {
       </div>
     `;
 
-    bindEvents();
-    loadConfig();
-  }
-
-  // ── Events ────────────────────────────────────────────────────────────────
-  function bindEvents() {
     document.getElementById('or-apikey-reveal').addEventListener('click', () => {
       const inp = document.getElementById('or-apikey-input');
       inp.type = inp.type === 'password' ? 'text' : 'password';
     });
-
     document.getElementById('or-apikey-save').addEventListener('click', saveApiKey);
     document.getElementById('or-apikey-test').addEventListener('click', testAndLoadModels);
-    document.getElementById('models-save-all').addEventListener('click', saveAll);
+    document.getElementById('tiers-add-btn').addEventListener('click', addTier);
+    document.getElementById('tiers-save-btn').addEventListener('click', saveTiers);
+
+    loadAll();
   }
 
   // ── Data loading ──────────────────────────────────────────────────────────
-  async function loadConfig() {
+  async function loadAll() {
     try {
-      const data = await Api.request('/config');
-      runtimeCfg = data || {};
-      // Populate API key field (masked — show placeholder only)
+      const [cfgData, tiersData] = await Promise.all([
+        Api.request('/config'),
+        Api.request('/config/tiers'),
+      ]);
+      runtimeCfg = cfgData || {};
+      tiers = (tiersData.tiers || []).map(normalizeTier);
       const keyInput = document.getElementById('or-apikey-input');
       if (runtimeCfg.openrouterApiKey) {
         keyInput.placeholder = '(key saved — enter new value to change)';
       }
-      renderTable();
+      renderTierList();
     } catch (err) {
       showStatus('or-apikey-status', `Failed to load config: ${err.message}`, 'error');
+      document.getElementById('tiers-list').innerHTML =
+        `<div class="error-state">Load failed: ${esc(err.message)}</div>`;
     }
   }
 
   async function testAndLoadModels() {
-    const key = document.getElementById('or-apikey-input').value.trim()
-      || runtimeCfg.openrouterApiKey;
-    if (!key) {
-      showStatus('or-apikey-status', 'Enter an API key first.', 'error');
-      return;
-    }
-
+    const key = document.getElementById('or-apikey-input').value.trim() || runtimeCfg.openrouterApiKey;
+    if (!key) { showStatus('or-apikey-status', 'Enter an API key first.', 'error'); return; }
     const btn = document.getElementById('or-apikey-test');
-    btn.disabled = true;
-    btn.textContent = 'Loading…';
+    btn.disabled = true; btn.textContent = 'Loading…';
     showStatus('or-apikey-status', 'Fetching models from OpenRouter…', '');
-
     try {
       const data = await Api.request('/openrouter/models');
       orModels = (data.data || []).map(m => ({
@@ -154,247 +131,395 @@ window.AdminPages.models = {
         },
       }));
       showStatus('or-apikey-status', `✅ Connected — ${orModels.length} models available`, 'success');
-      renderTable();
+      // Re-render tiers so datalists pick up the new model list
+      renderTierList();
     } catch (err) {
       showStatus('or-apikey-status', `❌ ${err.message}`, 'error');
     } finally {
-      btn.disabled = false;
-      btn.textContent = 'Test & Load Models';
+      btn.disabled = false; btn.textContent = 'Test & Load Models';
     }
   }
 
-  // ── Table rendering ────────────────────────────────────────────────────────
-  function renderTable() {
-    const tbody = document.getElementById('models-tbody');
-    if (!tbody) return;
-    const modelConfigs = runtimeCfg.modelConfigs || {};
-    tbody.innerHTML = ACTION_TYPES.map(at => renderRow(at, modelConfigs[at.key] || {})).join('');
-    attachRowEvents();
-    prefetchProviders();
+  // ── Tier normalization ────────────────────────────────────────────────────
+  function normalizeTier(t) {
+    const out = JSON.parse(JSON.stringify(t));
+    if (!out.nameI18n)        out.nameI18n        = { en: out.name || '', ru: '', uk: '' };
+    if (!out.descriptionI18n) out.descriptionI18n = { en: '', ru: '', uk: '' };
+    if (!out.stats)   out.stats   = { speed: 5, quality: 5, price: 5 };
+    if (!out.pricing) out.pricing = {};
+    PRICING_ACTIONS.forEach(a => { if (out.pricing[a] == null) out.pricing[a] = 0; });
+    if (!out.models)  out.models  = {};
+    ACTION_TYPES.forEach(at => {
+      out.models[at.key] = out.models[at.key] || { modelId: '', provider: '', maxTokens: 8000 };
+    });
+    return out;
   }
 
-  function renderRow(at, cfg) {
-    const modelId = cfg.modelId || '';
-    const provider = cfg.provider || '';
-    const markup  = cfg.markupMultiplier ?? 5;
-    const maxTok  = cfg.maxTokens ?? 16000;
-    const maxIter = cfg.maxIterations ?? '';
-    const thinking = cfg.thinkingBudget ?? '';
+  function newTier(index) {
+    return normalizeTier({
+      id:   `tier_${index}`,
+      name: `Tier ${index}`,
+      nameI18n:        { en: `Tier ${index}`, ru: '', uk: '' },
+      descriptionI18n: { en: '', ru: '', uk: '' },
+      stats:   { speed: 5, quality: 5, price: 5 },
+      models:  {},
+      pricing: {},
+    });
+  }
 
-    // Pricing from catalog
-    const orModel = orModels.find(m => m.id === modelId);
-    const inPriceM  = orModel ? orModel.pricing.prompt.toFixed(4)     : '—';
-    const outPriceM = orModel ? orModel.pricing.completion.toFixed(4) : '—';
+  // ── Tier list rendering ───────────────────────────────────────────────────
+  function renderTierList() {
+    const list = document.getElementById('tiers-list');
+    if (!list) return;
+    if (!tiers.length) {
+      list.innerHTML = `<div style="text-align:center;padding:24px;opacity:0.5">No tiers yet. Click "+ Add Tier" to create one.</div>`;
+      return;
+    }
+    list.innerHTML = '';
+    tiers.forEach((tier, idx) => {
+      const card = document.createElement('div');
+      card.className = 'tier-editor-card';
+      card.dataset.tierIdx = idx;
+      card.innerHTML = renderTierCard(tier, idx);
+      list.appendChild(card);
+      bindTierCardEvents(card, tier, idx);
+    });
+    // Pre-fetch providers for already-set models
+    tiers.forEach((tier, idx) => {
+      ACTION_TYPES.forEach(at => {
+        const mid = tier.models?.[at.key]?.modelId;
+        if (mid) prefetchProvider(idx, at.key, mid);
+      });
+    });
+  }
 
-    const datalistId = `dl-${at.key}`;
-    const providerDatalistId = `providers-${at.key}`;
+  function renderTierCard(tier, idx) {
+    const lang = activeLang[idx] || 'en';
+    const canRemove = tiers.length > 1;
+    const modelRows = ACTION_TYPES.map(at => renderModelRow(tier, idx, at)).join('');
 
     return `
-      <tr data-action="${at.key}">
+      <div class="tier-editor-header">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="tier-id-badge">${esc(tier.id)}</span>
+          <span style="opacity:0.5;font-size:13px">drag to reorder</span>
+        </div>
+        ${canRemove
+          ? `<button class="btn btn-danger-sm tier-remove-btn" data-idx="${idx}" title="Remove tier">Remove</button>`
+          : ''}
+      </div>
+
+      <!-- Localized names -->
+      <div class="tier-section">
+        <div class="tier-section-label">Name &amp; Description</div>
+        <div class="lang-tabs">
+          ${LANGS.map(l => `
+            <button class="lang-tab ${l === lang ? 'active' : ''}" data-lang="${l}" data-tier-idx="${idx}">
+              ${LANG_LABELS[l]}
+            </button>
+          `).join('')}
+        </div>
+        <div class="tier-i18n-fields">
+          ${LANGS.map(l => `
+            <div class="i18n-group" data-lang-group="${l}" data-tier-idx="${idx}" ${l !== lang ? 'style="display:none"' : ''}>
+              <input class="input tier-name-input" data-lang="${l}" data-tier-idx="${idx}"
+                placeholder="Tier name (${l.toUpperCase()})"
+                value="${esc(tier.nameI18n?.[l] || '')}" />
+              <textarea class="input tier-desc-input" data-lang="${l}" data-tier-idx="${idx}"
+                placeholder="Description (${l.toUpperCase()}) — shown to users in tier selector"
+                rows="2">${esc(tier.descriptionI18n?.[l] || '')}</textarea>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="tier-section">
+        <div class="tier-section-label">Stats (0 – 10)</div>
+        <div class="tier-stats-row">
+          ${['speed','quality','price'].map(s => `
+            <div class="tier-stat-group">
+              <label>${s.charAt(0).toUpperCase() + s.slice(1)}</label>
+              <input type="range" class="tier-stat-range tier-stat-input" min="0" max="10" step="1"
+                data-stat="${s}" data-tier-idx="${idx}" value="${tier.stats?.[s] ?? 5}">
+              <span class="tier-stat-val" id="stat-val-${idx}-${s}">${tier.stats?.[s] ?? 5}</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+
+      <!-- Models -->
+      <div class="tier-section">
+        <div class="tier-section-label">Models</div>
+        <div class="tier-models-wrap">
+          <table class="models-table tier-models-table">
+            <thead>
+              <tr>
+                <th>Action</th>
+                <th>Model ID</th>
+                <th>Provider</th>
+                <th>$/M in</th>
+                <th>$/M out</th>
+                <th>Max Tokens</th>
+                <th>Max Iter</th>
+                <th>Thinking</th>
+                <th title="OpenRouter reasoning.max_tokens — for Kimi, DeepSeek-R1, etc.">Reasoning</th>
+              </tr>
+            </thead>
+            <tbody>${modelRows}</tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Credit pricing -->
+      <div class="tier-section">
+        <div class="tier-section-label">Credit Pricing</div>
+        <div class="tier-pricing-grid">
+          ${PRICING_ACTIONS.map(a => `
+            <div class="tier-pricing-item">
+              <label>${a}</label>
+              <input type="number" class="input tier-pricing-input" min="0" step="5"
+                data-action="${a}" data-tier-idx="${idx}"
+                value="${tier.pricing?.[a] ?? 0}" />
+              <span class="pricing-unit">cr</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderModelRow(tier, tierIdx, at) {
+    const cfg      = tier.models?.[at.key] || {};
+    const modelId  = cfg.modelId  || '';
+    const provider = cfg.provider || '';
+    const maxTok   = cfg.maxTokens ?? 8000;
+    const maxIter  = cfg.maxIterations ?? '';
+    const thinking = cfg.thinkingBudget ?? '';
+    const reasoning = cfg.reasoningBudget ?? '';
+    const dlModel  = `dl-t${tierIdx}-${at.key}`;
+    const dlProv   = `dlp-t${tierIdx}-${at.key}`;
+    const orModel  = orModels.find(m => m.id === modelId);
+    const inP      = orModel ? orModel.pricing.prompt.toFixed(4) : '—';
+    const outP     = orModel ? orModel.pricing.completion.toFixed(4) : '—';
+
+    return `
+      <tr data-tier-idx="${tierIdx}" data-action="${at.key}">
         <td class="models-action-label">${at.label}</td>
         <td class="models-model-cell">
-          <input list="${datalistId}" class="input models-model-input" data-field="modelId"
+          <input list="${dlModel}" class="input tier-model-input" data-field="modelId"
+            data-tier-idx="${tierIdx}" data-action="${at.key}"
             value="${esc(modelId)}" placeholder="e.g. anthropic/claude-sonnet-4-5" />
-          <datalist id="${datalistId}">
+          <datalist id="${dlModel}">
             ${orModels.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}
           </datalist>
         </td>
         <td class="models-provider-cell">
-          <input list="${providerDatalistId}" class="input models-provider-input" data-field="provider"
-            value="${esc(provider)}" placeholder="Auto" title="OpenRouter provider name, e.g. Minimax. Empty = auto/fallback by model." />
-          <datalist id="${providerDatalistId}">
+          <input list="${dlProv}" class="input tier-provider-input" data-field="provider"
+            data-tier-idx="${tierIdx}" data-action="${at.key}"
+            value="${esc(provider)}" placeholder="Auto" />
+          <datalist id="${dlProv}">
             <option value="">Auto</option>
             ${PROVIDER_OPTIONS.map(p => `<option value="${esc(p)}"></option>`).join('')}
           </datalist>
-          <span class="models-provider-note" style="display:none;font-size:10px;color:#f8a;margin-top:2px;"></span>
         </td>
-        <td><span class="models-price-cell" data-pricetype="in">${inPriceM}</span></td>
-        <td><span class="models-price-cell" data-pricetype="out">${outPriceM}</span></td>
-        <td><input type="number" class="input models-num-input" data-field="markupMultiplier"
-              value="${markup}" min="1" step="0.5" /></td>
-        <td><input type="number" class="input models-num-input" data-field="maxTokens"
+        <td><span class="models-price-cell" data-tier-idx="${tierIdx}" data-action="${at.key}" data-pricetype="in">${inP}</span></td>
+        <td><span class="models-price-cell" data-tier-idx="${tierIdx}" data-action="${at.key}" data-pricetype="out">${outP}</span></td>
+        <td><input type="number" class="input models-num-input tier-model-input" data-field="maxTokens"
+              data-tier-idx="${tierIdx}" data-action="${at.key}"
               value="${maxTok}" min="256" step="256" /></td>
         <td>${at.hasIter
-          ? `<input type="number" class="input models-num-input" data-field="maxIterations"
-                value="${maxIter}" min="1" step="1" />`
+          ? `<input type="number" class="input models-num-input tier-model-input" data-field="maxIterations"
+                data-tier-idx="${tierIdx}" data-action="${at.key}"
+                value="${maxIter}" min="1" step="1" placeholder="—" />`
           : '<span class="models-na">—</span>'}
         </td>
         <td>${at.hasThink
-          ? `<input type="number" class="input models-num-input" data-field="thinkingBudget"
-                value="${thinking}" min="0" step="500" />`
+          ? `<input type="number" class="input models-num-input tier-model-input" data-field="thinkingBudget"
+                data-tier-idx="${tierIdx}" data-action="${at.key}"
+                value="${thinking}" min="0" step="500" placeholder="0" />`
           : '<span class="models-na">—</span>'}
         </td>
-        <td><button class="btn btn-secondary models-save-row-btn" data-action="${at.key}">Save</button></td>
+        <td>${at.hasReason
+          ? `<input type="number" class="input models-num-input tier-model-input" data-field="reasoningBudget"
+                data-tier-idx="${tierIdx}" data-action="${at.key}"
+                value="${reasoning}" min="0" step="1000" placeholder="off" title="OpenRouter reasoning.max_tokens. Set > 0 to cap model reasoning (Kimi, DeepSeek-R1, etc.). Must be less than Max Tokens." />`
+          : '<span class="models-na">—</span>'}
+        </td>
       </tr>
     `;
   }
 
-  // ── Provider fetching ─────────────────────────────────────────────────────
-
-  /**
-   * Populate the per-row provider datalist from the OpenRouter endpoints API.
-   * Caches results in `providersByModelId`. If the fetch fails, falls back to
-   * PROVIDER_OPTIONS and shows a small note next to the input.
-   */
-  async function fetchAndPopulateProviders(row, modelId) {
-    if (!modelId || !modelId.includes('/')) {
-      populateProviderDatalist(row, PROVIDER_OPTIONS, false);
-      return;
-    }
-
-    if (providersByModelId.has(modelId)) {
-      const cached = providersByModelId.get(modelId);
-      populateProviderDatalist(row, cached || PROVIDER_OPTIONS, cached === null);
-      return;
-    }
-
-    const [author, ...slugParts] = modelId.split('/');
-    const slug = slugParts.join('/');
-
-    try {
-      const data = await Api.request(`/openrouter/models/${encodeURIComponent(author)}/${encodeURIComponent(slug)}/endpoints`);
-      const providers = (data?.data?.endpoints || [])
-        .map(e => e.provider_name)
-        .filter(Boolean)
-        .filter((v, i, a) => a.indexOf(v) === i);  // deduplicate
-
-      if (providers.length > 0) {
-        providersByModelId.set(modelId, providers);
-        populateProviderDatalist(row, providers, false);
-      } else {
-        providersByModelId.set(modelId, null);
-        populateProviderDatalist(row, PROVIDER_OPTIONS, false);
-      }
-    } catch {
-      providersByModelId.set(modelId, null);
-      populateProviderDatalist(row, PROVIDER_OPTIONS, true);
-    }
-  }
-
-  function populateProviderDatalist(row, providers, fetchFailed) {
-    const action = row.dataset.action;
-    const datalist = document.getElementById(`providers-${action}`);
-    const note = row.querySelector('.models-provider-note');
-    if (!datalist) return;
-
-    datalist.innerHTML = '<option value="">Auto</option>' +
-      providers.map(p => `<option value="${esc(p)}"></option>`).join('');
-
-    if (note) {
-      note.textContent = fetchFailed ? '⚠ using static list' : '';
-      note.style.display = fetchFailed ? '' : 'none';
-    }
-  }
-
-  function attachRowEvents() {
-    // When model ID changes: update pricing + reload provider datalist (debounced)
-    const debounceTimers = {};
-    document.querySelectorAll('.models-model-input').forEach(inp => {
-      inp.addEventListener('input', e => {
-        const row = e.target.closest('tr');
-        const action = row?.dataset?.action;
-        const modelId = e.target.value.trim();
-
-        // Update pricing display immediately
-        const orModel = orModels.find(m => m.id === modelId);
-        const inCell  = row.querySelector('[data-pricetype="in"]');
-        const outCell = row.querySelector('[data-pricetype="out"]');
-        if (orModel) {
-          inCell.textContent  = orModel.pricing.prompt.toFixed(4);
-          outCell.textContent = orModel.pricing.completion.toFixed(4);
-        } else {
-          inCell.textContent  = '—';
-          outCell.textContent = '—';
-        }
-
-        // Debounced provider fetch (600ms after user stops typing)
-        clearTimeout(debounceTimers[action]);
-        debounceTimers[action] = setTimeout(() => {
-          fetchAndPopulateProviders(row, modelId);
-        }, 600);
+  // ── Card events ───────────────────────────────────────────────────────────
+  function bindTierCardEvents(card, tier, idx) {
+    // Lang tabs
+    card.querySelectorAll('.lang-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const lang = btn.dataset.lang;
+        const tidx = parseInt(btn.dataset.tierIdx, 10);
+        activeLang[tidx] = lang;
+        card.querySelectorAll('.lang-tab').forEach(b =>
+          b.classList.toggle('active', b.dataset.lang === lang));
+        card.querySelectorAll('.i18n-group').forEach(g =>
+          (g.style.display = g.dataset.langGroup === lang ? '' : 'none'));
       });
     });
 
-    document.querySelectorAll('.models-save-row-btn').forEach(btn => {
-      btn.addEventListener('click', () => saveRow(btn.dataset.action));
+    // Remove tier
+    card.querySelector('.tier-remove-btn')?.addEventListener('click', () => {
+      if (!confirm(`Remove tier "${tier.id}"? This cannot be undone without saving.`)) return;
+      tiers.splice(idx, 1);
+      renderTierList();
+    });
+
+    // Stat range → live value display
+    card.querySelectorAll('.tier-stat-input').forEach(inp => {
+      inp.addEventListener('input', () => {
+        const valEl = document.getElementById(`stat-val-${inp.dataset.tierIdx}-${inp.dataset.stat}`);
+        if (valEl) valEl.textContent = inp.value;
+      });
+    });
+
+    // Model ID input → update pricing, debounce provider fetch
+    const debounce = {};
+    card.querySelectorAll('.tier-model-input[data-field="modelId"]').forEach(inp => {
+      inp.addEventListener('input', () => {
+        const tidx   = parseInt(inp.dataset.tierIdx, 10);
+        const action = inp.dataset.action;
+        const mid    = inp.value.trim();
+        // Update price cells
+        const orM = orModels.find(m => m.id === mid);
+        const inCell  = card.querySelector(`[data-pricetype="in"][data-tier-idx="${tidx}"][data-action="${action}"]`);
+        const outCell = card.querySelector(`[data-pricetype="out"][data-tier-idx="${tidx}"][data-action="${action}"]`);
+        if (inCell)  inCell.textContent  = orM ? orM.pricing.prompt.toFixed(4) : '—';
+        if (outCell) outCell.textContent = orM ? orM.pricing.completion.toFixed(4) : '—';
+        // Debounced provider fetch
+        const key = `${tidx}-${action}`;
+        clearTimeout(debounce[key]);
+        debounce[key] = setTimeout(() => fetchAndPopulateProvider(tidx, action, mid), 600);
+      });
     });
   }
 
-  // Pre-fetch providers for every row that already has a saved modelId
-  async function prefetchProviders() {
-    const rows = document.querySelectorAll('#models-tbody tr[data-action]');
-    for (const row of rows) {
-      const inp = row.querySelector('.models-model-input');
-      if (inp && inp.value.trim()) {
-        fetchAndPopulateProviders(row, inp.value.trim());
-        // stagger requests so we don't hammer OR API all at once
-        await new Promise(r => setTimeout(r, 120));
-      }
+  // ── Provider fetching ─────────────────────────────────────────────────────
+  async function prefetchProvider(tierIdx, action, modelId) {
+    if (!modelId || !modelId.includes('/')) return;
+    await fetchAndPopulateProvider(tierIdx, action, modelId);
+  }
+
+  async function fetchAndPopulateProvider(tierIdx, action, modelId) {
+    const dlId = `dlp-t${tierIdx}-${action}`;
+    const dl = document.getElementById(dlId);
+    if (!dl) return;
+
+    if (providerCache.has(modelId)) {
+      populateDl(dl, providerCache.get(modelId));
+      return;
     }
-  }
 
-  // ── Save helpers ───────────────────────────────────────────────────────────
-  function getRowValues(actionKey) {
-    const row = document.querySelector(`tr[data-action="${actionKey}"]`);
-    if (!row) return null;
-    const get = (field) => {
-      const el = row.querySelector(`[data-field="${field}"]`);
-      return el ? el.value : null;
-    };
-    const cfg = {
-      modelId:         get('modelId') || '',
-      provider:        (get('provider') || '').trim(),
-      markupMultiplier: parseFloat(get('markupMultiplier')) || 5,
-      maxTokens:        parseInt(get('maxTokens'))  || 16000,
-    };
-    const iterEl     = row.querySelector('[data-field="maxIterations"]');
-    const thinkingEl = row.querySelector('[data-field="thinkingBudget"]');
-    if (iterEl     && iterEl.value)     cfg.maxIterations  = parseInt(iterEl.value);
-    if (thinkingEl && thinkingEl.value) cfg.thinkingBudget = parseInt(thinkingEl.value);
-    return cfg;
-  }
-
-  async function saveRow(actionKey) {
-    const cfg = getRowValues(actionKey);
-    if (!cfg) return;
-    const btn = document.querySelector(`.models-save-row-btn[data-action="${actionKey}"]`);
-    btn.disabled = true;
-    btn.textContent = '…';
+    if (!modelId.includes('/')) { populateDl(dl, null); return; }
+    const [author, ...rest] = modelId.split('/');
+    const slug = rest.join('/');
     try {
-      const modelConfigs = { ...(runtimeCfg.modelConfigs || {}) };
-      modelConfigs[actionKey] = cfg;
-      await Api.request('/config', { method: 'POST', body: { modelConfigs } });
-      runtimeCfg.modelConfigs = modelConfigs;
-      showToast(`✅ ${actionKey} saved`);
-    } catch (err) {
-      showToast(`❌ Save failed: ${err.message}`, true);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Save';
+      const data = await Api.request(`/openrouter/models/${encodeURIComponent(author)}/${encodeURIComponent(slug)}/endpoints`);
+      const providers = (data?.data?.endpoints || [])
+        .map(e => e.provider_name).filter(Boolean)
+        .filter((v, i, a) => a.indexOf(v) === i);
+      const list = providers.length ? providers : null;
+      providerCache.set(modelId, list);
+      populateDl(dl, list);
+    } catch {
+      providerCache.set(modelId, null);
+      populateDl(dl, null);
     }
   }
 
-  async function saveAll() {
-    const btn = document.getElementById('models-save-all');
-    btn.disabled = true;
-    btn.textContent = 'Saving…';
+  function populateDl(dl, providers) {
+    const list = providers || PROVIDER_OPTIONS;
+    dl.innerHTML = '<option value="">Auto</option>' +
+      list.map(p => `<option value="${esc(p)}"></option>`).join('');
+  }
+
+  // ── Read card values → tiers array ────────────────────────────────────────
+  function readAllTierCards() {
+    const list = document.getElementById('tiers-list');
+    if (!list) return;
+    list.querySelectorAll('.tier-editor-card').forEach(card => {
+      const idx = parseInt(card.dataset.tierIdx, 10);
+      if (!tiers[idx]) return;
+      const tier = tiers[idx];
+
+      // i18n
+      tier.nameI18n        = tier.nameI18n        || {};
+      tier.descriptionI18n = tier.descriptionI18n || {};
+      LANGS.forEach(l => {
+        const ni = card.querySelector(`.tier-name-input[data-lang="${l}"]`);
+        const di = card.querySelector(`.tier-desc-input[data-lang="${l}"]`);
+        if (ni) tier.nameI18n[l]        = ni.value.trim();
+        if (di) tier.descriptionI18n[l] = di.value.trim();
+      });
+      // Use EN name as canonical `name`
+      tier.name = tier.nameI18n.en || tier.id;
+
+      // Stats
+      card.querySelectorAll('.tier-stat-input').forEach(inp => {
+        tier.stats[inp.dataset.stat] = parseInt(inp.value, 10);
+      });
+
+      // Models
+      card.querySelectorAll('tr[data-tier-idx]').forEach(row => {
+        const action = row.dataset.action;
+        if (!action) return;
+        tier.models[action] = tier.models[action] || {};
+        const get = field => {
+          const el = row.querySelector(`[data-field="${field}"]`);
+          return el ? el.value : null;
+        };
+        tier.models[action].modelId  = get('modelId') || '';
+        tier.models[action].provider = (get('provider') || '').trim();
+        const maxTok = get('maxTokens');
+        if (maxTok) tier.models[action].maxTokens = parseInt(maxTok, 10);
+        const maxIter = get('maxIterations');
+        if (maxIter !== null && maxIter !== '') tier.models[action].maxIterations = parseInt(maxIter, 10);
+        const thinking = get('thinkingBudget');
+        if (thinking !== null && thinking !== '') tier.models[action].thinkingBudget = parseInt(thinking, 10);
+        const reasoning = get('reasoningBudget');
+        if (reasoning !== null && reasoning !== '') tier.models[action].reasoningBudget = parseInt(reasoning, 10);
+        else delete tier.models[action].reasoningBudget;
+      });
+
+      // Pricing
+      card.querySelectorAll('.tier-pricing-input').forEach(inp => {
+        tier.pricing[inp.dataset.action] = parseInt(inp.value, 10) || 0;
+      });
+    });
+  }
+
+  // ── Add / save tiers ──────────────────────────────────────────────────────
+  function addTier() {
+    readAllTierCards();
+    tiers.push(newTier(tiers.length));
+    renderTierList();
+    // Scroll to new card
+    const list = document.getElementById('tiers-list');
+    list.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  async function saveTiers() {
+    readAllTierCards();
+    const btn = document.getElementById('tiers-save-btn');
+    btn.disabled = true; btn.textContent = 'Saving…';
     try {
-      const modelConfigs = {};
-      for (const at of ACTION_TYPES) {
-        const cfg = getRowValues(at.key);
-        if (cfg) modelConfigs[at.key] = cfg;
-      }
-      await Api.request('/config', { method: 'POST', body: { modelConfigs } });
-      runtimeCfg.modelConfigs = modelConfigs;
-      showToast('✅ All model configs saved');
+      await Api.request('/config/tiers', { method: 'POST', body: { tiers } });
+      showToast('✅ Tiers saved');
     } catch (err) {
-      showToast(`❌ Save failed: ${err.message}`, true);
+      showToast(`❌ ${err.message}`, true);
     } finally {
-      btn.disabled = false;
-      btn.textContent = 'Save All';
+      btn.disabled = false; btn.textContent = 'Save Tiers';
     }
   }
 
+  // ── API key helpers ───────────────────────────────────────────────────────
   async function saveApiKey() {
     const key = document.getElementById('or-apikey-input').value.trim();
     if (!key) { showStatus('or-apikey-status', 'Enter a key to save.', 'error'); return; }
@@ -427,15 +552,15 @@ window.AdminPages.models = {
     el.textContent = msg;
     el.className = `models-toast ${isError ? 'error' : 'success'}`;
     el.style.display = 'block';
-    clearTimeout(toast);
-    toast = setTimeout(() => { el.style.display = 'none'; }, 3000);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.style.display = 'none'; }, 3500);
   }
 
   function esc(str) {
-    return String(str || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    return String(str ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
-  // ── Lifecycle ─────────────────────────────────────────────────────────────
+  // ── Boot ──────────────────────────────────────────────────────────────────
   render();
 
   },

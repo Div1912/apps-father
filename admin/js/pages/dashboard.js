@@ -169,7 +169,15 @@
         kpisEl.innerHTML = kpiSkeleton();
         actEl.innerHTML  = `<div class="loading-state"><div class="spinner"></div>Loading recent activity…</div>`;
         try {
-          const data = await Api.request("/stats" + rangeQuery());
+          const [data, tierStats] = await Promise.all([
+            Api.request("/stats" + rangeQuery()),
+            Api.request("/stats/tiers" + rangeQuery()).catch(() => null),
+          ]);
+          if (tierStats) {
+            data.creditsOutstanding = tierStats.totalCreditsOutstanding;
+            data.creditsSpent = tierStats.totalCreditsSpent;
+            data.realCostUsd = tierStats.totalRealCostUsd;
+          }
           renderKpis(kpisEl, data);
           renderActivity(actEl, data.recentUsage || []);
         } catch (err) {
@@ -370,18 +378,38 @@
 
   function renderKpis(el, d) {
     const items = [
-      { label: "Users",          icon: iconUsers,    value: Fmt.intK(d.userCount), cls: "accent" },
-      { label: "Apps",           icon: iconApps,     value: Fmt.intK(d.projectCount), cls: "" },
-      { label: "Total Revenue",  icon: iconCash,     value: Fmt.money(d.totalTopups, 2), cls: "green" },
-      { label: "Service Cost",   icon: iconBolt,     value: Fmt.money(d.totalSpent, 2), cls: "warn" },
+      { label: "Users",            icon: iconUsers,    value: Fmt.intK(d.userCount), cls: "accent" },
+      { label: "Apps",             icon: iconApps,     value: Fmt.intK(d.projectCount), cls: "" },
+      { label: "Deposits",         icon: iconCash,     value: Fmt.money(d.totalTopups, 2), cls: "green", sub: d.paymentCount != null ? `${d.paymentCount} payments` : null },
+      { label: "Service Cost",     icon: iconBolt,     value: Fmt.money(d.totalSpent, 2), cls: "warn" },
     ];
     el.innerHTML = items.map(it => `
       <div class="kpi-card">
         <div class="label">${it.icon}<span>${Fmt.escapeHtml(it.label)}</span></div>
         <div class="value ${it.cls}">${Fmt.escapeHtml(it.value)}</div>
-        <div class="delta">&nbsp;</div>
+        <div class="delta">${it.sub ? Fmt.escapeHtml(it.sub) : '&nbsp;'}</div>
       </div>
     `).join("");
+
+    // Append credits cards if data available
+    if (d.creditsOutstanding !== undefined) {
+      el.insertAdjacentHTML("beforeend", `
+        <div class="kpi-card">
+          <div class="label" style="gap:4px">
+            <span>Credits Outstanding</span>
+          </div>
+          <div class="value accent">${Fmt.creditsHtml(d.creditsOutstanding || 0, '#818cf8')}</div>
+          <div class="delta">&nbsp;</div>
+        </div>
+        <div class="kpi-card">
+          <div class="label" style="gap:4px">
+            <span>Credits Spent</span>
+          </div>
+          <div class="value warn">${Fmt.creditsHtml(d.creditsSpent || 0, '#fbbf24')}</div>
+          <div class="delta" style="font-size:11px">Real cost: ${Fmt.money(d.realCostUsd || 0, 2)}</div>
+        </div>
+      `);
+    }
   }
 
   function renderActivity(el, rows) {

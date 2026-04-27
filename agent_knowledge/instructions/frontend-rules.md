@@ -9,3 +9,4 @@ RULES FOR FRONTEND:
      return fetch(endpoint, { ...options, headers });
    }
 6. API base URL: /api/{projectId}/
+7. NEVER escape quotes inside HTML attributes. Correct: id="game-canvas" and class="screen active". Wrong: id="\"game-canvas\"", id='"game-canvas"', or document.getElementById("\"game-canvas\""). JavaScript must query the plain id: document.getElementById("game-canvas").

@@ -2,6 +2,14 @@ import { prisma } from "../db";
 import { encryptToken, decryptToken } from "./crypto.service";
 import { ProjectStatus } from "../types";
 import { notifyNewUser } from "./notify.service";
+import { config } from "../config";
+
+export interface ProjectAppConfigInput {
+  name?: string;
+  description?: string;
+  longDescription?: string;
+  menuButtonText?: string;
+}
 
 export class ProjectService {
   async getOrCreateUser(telegramId: number, username?: string, firstName?: string, referredBy?: number, utmSource?: string | null) {
@@ -161,6 +169,61 @@ export class ProjectService {
     });
   }
 
+  async updateProjectAppConfig(projectId: string, input: ProjectAppConfigInput) {
+    const data: any = {};
+    if (input.name !== undefined) data.name = input.name;
+    if (input.description !== undefined) data.appDescription = input.description;
+    if (input.longDescription !== undefined) data.appLongDescription = input.longDescription;
+    if (input.menuButtonText !== undefined) data.appMenuButtonText = input.menuButtonText;
+    return prisma.project.update({
+      where: { id: projectId },
+      data,
+    });
+  }
+
+  async configureProjectBotFromAppConfig(projectId: string, botToken?: string): Promise<{ configured: boolean; lines: string[] }> {
+    const project = await this.getProject(projectId);
+    if (!project) return { configured: false, lines: ["project not found"] };
+
+    const token = botToken || (project.botTokenEncrypted ? decryptToken(project.botTokenEncrypted) : "");
+    if (!token) return { configured: false, lines: ["bot token not available; saved app config for later bot linking"] };
+
+    const appDescription = ((project as any).appDescription || "Open the app below").toString().substring(0, 120);
+    const appLongDescription = ((project as any).appLongDescription || project.description || "Telegram Mini App powered by Apps Father").toString().substring(0, 512);
+    const rawMenuButtonText = ((project as any).appMenuButtonText ?? "Launch App").toString().substring(0, 32);
+    let isTextBot = false;
+    try {
+      isTextBot = JSON.parse((project as any).preferences || "{}")?.kind === "textBot";
+    } catch {}
+
+    const appUrl = `${config.baseUrl}/app/${projectId}/`;
+    const base = `https://api.telegram.org/bot${token}`;
+    const callApi = async (method: string, params: any) => {
+      const resp = await fetch(`${base}/${method}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(params),
+      });
+      return { method, status: resp.status, body: await resp.text() };
+    };
+
+    const menuButtonPayload = isTextBot || rawMenuButtonText === ""
+      ? { menu_button: { type: "default" as const } }
+      : { menu_button: { type: "web_app" as const, text: rawMenuButtonText, web_app: { url: appUrl } } };
+    const calls: Array<Promise<{ method: string; status: number; body: string }>> = [
+      callApi("setMyDescription", { description: appLongDescription }),
+      callApi("setMyShortDescription", { short_description: appDescription }),
+      callApi("setChatMenuButton", menuButtonPayload),
+    ];
+    if (project.name) {
+      calls.push(callApi("setMyName", { name: project.name.toString().substring(0, 64) }));
+    }
+
+    const results = await Promise.all(calls);
+    const lines = results.map(r => `${r.method}: ${r.status} ${r.body.substring(0, 200)}`);
+    return { configured: true, lines };
+  }
+
   async getProject(projectId: string) {
     return prisma.project.findUnique({ where: { id: projectId } });
   }
@@ -287,18 +350,19 @@ export class ProjectService {
     });
   }
 
-  async buySlot(userId: number): Promise<{ newSlots: number; newBalance: number }> {
-    const SLOT_PRICE = 5;
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { balance: true, appSlots: true } });
-    if (!user || Number(user.balance) < SLOT_PRICE) throw new Error("Insufficient balance");
+  async buySlot(userId: number): Promise<{ newSlots: number; newBalance: number; newCredits: number }> {
+    const { runtimeConfig } = await import("./runtime-config.service");
+    const SLOT_PRICE_CREDITS = runtimeConfig.get().slotPriceCredits || 250;
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { credits: true, appSlots: true } });
+    if (!user || (user.credits ?? 0) < SLOT_PRICE_CREDITS) throw new Error("Insufficient credits");
     const updated = await prisma.user.update({
       where: { id: userId },
       data: {
-        balance: { decrement: SLOT_PRICE },
+        credits: { decrement: SLOT_PRICE_CREDITS },
         appSlots: { increment: 1 },
       },
     });
-    return { newSlots: updated.appSlots, newBalance: Number(updated.balance) };
+    return { newSlots: updated.appSlots, newBalance: updated.credits, newCredits: updated.credits };
   }
 }
 

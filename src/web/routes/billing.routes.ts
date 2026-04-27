@@ -72,6 +72,8 @@ router.post("/cryptobot", async (req: Request, res: Response) => {
       return;
     }
 
+    const { total: creditsToGrant, base, bonus, isFirstPurchase, bundleName } = await billingService.resolveCreditsForPayment(paymentId);
+
     await prisma.$transaction(async (tx) => {
       await tx.payment.update({
         where: { id: paymentId },
@@ -79,24 +81,38 @@ router.post("/cryptobot", async (req: Request, res: Response) => {
           status: "confirmed",
           confirmedAt: new Date(),
           nowpaymentsId: String(invoice.invoice_id),
+          creditsGranted: creditsToGrant,
+          bonusCredits: bonus,
+          method: "cryptobot",
         },
       });
       await tx.user.update({
         where: { id: payment.userId },
-        data: { balance: { increment: payment.amountUsd } },
+        data: {
+          balance: { increment: payment.amountUsd },
+          credits: { increment: creditsToGrant },
+        },
       });
+      if (payment.bundleId) {
+        await tx.bundle.update({
+          where: { id: payment.bundleId },
+          data: { purchaseCount: { increment: 1 } },
+        });
+      }
     });
 
-    console.log(`[CryptoBot] Payment #${paymentId} confirmed — $${payment.amountUsd} credited to user ${payment.userId}`);
+    console.log(`[CryptoBot] Payment #${paymentId} confirmed — $${payment.amountUsd} / ${creditsToGrant} cr credited to user ${payment.userId}`);
 
     try {
       const user = await prisma.user.findUnique({ where: { id: payment.userId } });
       if (user) {
-        const newBalance = Number(user.balance);
+        const amountUsd = Number(payment.amountUsd);
         const text =
           `<b><tg-emoji emoji-id="5377544696656599429">✅</tg-emoji> Payment confirmed!</b>\n\n` +
-          `<b><tg-emoji emoji-id="5377851954321989517">💲</tg-emoji> +$${Number(payment.amountUsd).toFixed(2)}</b> has been added to your balance.\n\n` +
-          `<blockquote>New balance: <b>$${newBalance.toFixed(2)}</b></blockquote>`;
+          `<b>+${creditsToGrant.toLocaleString()} credits</b> added to your balance.` +
+          (bonus > 0 ? ` (includes ${(bonus * (isFirstPurchase ? 2 : 1)).toLocaleString()} bonus!)` : "") +
+          (isFirstPurchase ? "\n🎉 <b>×2 first-purchase bonus applied!</b>" : "") +
+          `\n\n<blockquote>New balance: <b>${(await billingService.getUserCredits(user.id)).toLocaleString()} credits</b></blockquote>`;
 
         await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
           method: "POST",
@@ -108,11 +124,10 @@ router.post("/cryptobot", async (req: Request, res: Response) => {
           }),
         });
 
-        notifyDeposit(Number(user.telegramId), user.username ?? undefined, Number(payment.amountUsd), newBalance, "cryptobot");
-        void trackEvent(Number(user.telegramId), "payment", { amount: Number(payment.amountUsd), method: "cryptobot" });
+        notifyDeposit(Number(user.telegramId), user.username ?? undefined, amountUsd, creditsToGrant, bonus, isFirstPurchase, "cryptobot", bundleName);
+        void trackEvent(Number(user.telegramId), "payment", { amount: amountUsd, method: "cryptobot" });
 
-        await billingService.creditFirstDepositBonus(user.id, paymentId);
-        await billingService.creditReferralBonus(user, Number(payment.amountUsd));
+        await billingService.creditReferralBonus(user, amountUsd);
       }
     } catch (notifyErr) {
       console.error("[CryptoBot] Notify error:", notifyErr);

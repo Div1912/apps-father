@@ -165,6 +165,71 @@ scp tmp_app_logs.sql "${SERVER}:/tmp/tmp_app_logs.sql"
 ssh $SERVER "docker cp /tmp/tmp_app_logs.sql ${DB_CTR}:/tmp/tmp_app_logs.sql; docker exec ${DB_CTR} psql -U ${DB_USER} -d ${DB_NAME} -f /tmp/tmp_app_logs.sql"
 Remove-Item tmp_app_logs.sql -ErrorAction SilentlyContinue
 
+# Projects: app profile fields (Prisma: appDescription, appLongDescription, appMenuButtonText)
+Write-Host "=== [$ENV_NAME] Projects app profile columns ===" -ForegroundColor $COLOR
+ssh $SERVER "$psql 'ALTER TABLE projects ADD COLUMN IF NOT EXISTS app_description TEXT;'"
+ssh $SERVER "$psql 'ALTER TABLE projects ADD COLUMN IF NOT EXISTS app_long_description TEXT;'"
+ssh $SERVER "$psql 'ALTER TABLE projects ADD COLUMN IF NOT EXISTS app_menu_button_text TEXT;'"
+
+# Credits & performance tiers (Prisma: User.credits, User.performanceTier;
+# UsageLog.creditsCharged, UsageLog.tierId). Must match prisma/schema.prisma.
+Write-Host "=== [$ENV_NAME] Credits / tier columns (Prisma) ===" -ForegroundColor $COLOR
+ssh $SERVER "$psql 'ALTER TABLE users ADD COLUMN IF NOT EXISTS credits INTEGER NOT NULL DEFAULT 0;'"
+ssh $SERVER "$psql 'ALTER TABLE users ADD COLUMN IF NOT EXISTS performance_tier TEXT NOT NULL DEFAULT ''tier_1'';'"
+ssh $SERVER "$psql 'ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS credits_charged INTEGER;'"
+ssh $SERVER "$psql 'ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS tier_id TEXT;'"
+# One-time: map legacy USD balance -> credits (50 credits per $1). Skipped on subsequent deploys.
+$creditsBackfillSql = @"
+DO `$`$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = '_credits_backfill_v1_done') THEN
+    UPDATE users SET credits = GREATEST(0, FLOOR((balance)::numeric * 50)::int)
+      WHERE credits = 0;
+    CREATE TABLE _credits_backfill_v1_done (applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+  END IF;
+END
+`$`$;
+"@
+$creditsBackfillSql | Out-File -Encoding utf8 -FilePath tmp_credits_bf.sql
+scp tmp_credits_bf.sql "${SERVER}:/tmp/tmp_credits_bf.sql"
+ssh $SERVER "docker cp /tmp/tmp_credits_bf.sql ${DB_CTR}:/tmp/tmp_credits_bf.sql; docker exec ${DB_CTR} psql -U ${DB_USER} -d ${DB_NAME} -f /tmp/tmp_credits_bf.sql"
+Remove-Item tmp_credits_bf.sql -ErrorAction SilentlyContinue
+
+# Bundles topup system
+Write-Host "=== [$ENV_NAME] Bundles topup system ===" -ForegroundColor $COLOR
+$bundlesSql = @"
+CREATE TABLE IF NOT EXISTS bundles (
+  id             TEXT          PRIMARY KEY,
+  name           TEXT          NOT NULL,
+  credits        INTEGER       NOT NULL,
+  bonus_credits  INTEGER       NOT NULL DEFAULT 0,
+  price_usd      DECIMAL(12,4) NOT NULL,
+  discount       INTEGER       NOT NULL DEFAULT 0,
+  is_limited     BOOLEAN       NOT NULL DEFAULT false,
+  limit_total    INTEGER,
+  purchase_count INTEGER       NOT NULL DEFAULT 0,
+  is_active      BOOLEAN       NOT NULL DEFAULT true,
+  sort_order     INTEGER       NOT NULL DEFAULT 0,
+  created_at     TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+);
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS bundle_id       TEXT REFERENCES bundles(id);
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS credits_granted INTEGER;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS bonus_credits   INTEGER;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS method          TEXT;
+"@
+$bundlesSql | Out-File -Encoding utf8 -FilePath tmp_bundles.sql
+scp tmp_bundles.sql "${SERVER}:/tmp/tmp_bundles.sql"
+ssh $SERVER "docker cp /tmp/tmp_bundles.sql ${DB_CTR}:/tmp/tmp_bundles.sql; docker exec ${DB_CTR} psql -U ${DB_USER} -d ${DB_NAME} -f /tmp/tmp_bundles.sql"
+Remove-Item tmp_bundles.sql -ErrorAction SilentlyContinue
+
+# Vouchers credits column
+Write-Host "=== [$ENV_NAME] Vouchers credits migration ===" -ForegroundColor $COLOR
+$voucherSql = "ALTER TABLE vouchers ADD COLUMN IF NOT EXISTS credits INTEGER NOT NULL DEFAULT 0;"
+$voucherSql | Out-File -Encoding utf8 -FilePath tmp_vouchers.sql
+scp tmp_vouchers.sql "${SERVER}:/tmp/tmp_vouchers.sql"
+ssh $SERVER "docker cp /tmp/tmp_vouchers.sql ${DB_CTR}:/tmp/tmp_vouchers.sql; docker exec ${DB_CTR} psql -U ${DB_USER} -d ${DB_NAME} -f /tmp/tmp_vouchers.sql"
+Remove-Item tmp_vouchers.sql -ErrorAction SilentlyContinue
+
 Write-Host "Migration OK" -ForegroundColor Green
 
 # ── Agent knowledge (instructions + skills) ───────────────

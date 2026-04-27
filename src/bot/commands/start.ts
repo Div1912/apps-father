@@ -112,11 +112,19 @@ export async function startCommand(ctx: BotContext) {
           where: { voucherId_userId: { voucherId: voucher.id, userId: user.id } },
         });
         if (!alreadyUsed) {
+          const isCredits = voucher.credits > 0;
           await prisma.$transaction(async (tx) => {
-            await tx.user.update({
-              where: { id: user.id },
-              data: { balance: { increment: new Decimal(Number(voucher.amountUsd).toFixed(4)) } },
-            });
+            if (isCredits) {
+              await tx.user.update({
+                where: { id: user.id },
+                data: { credits: { increment: voucher.credits } },
+              });
+            } else {
+              await tx.user.update({
+                where: { id: user.id },
+                data: { balance: { increment: new Decimal(Number(voucher.amountUsd).toFixed(4)) } },
+              });
+            }
             await tx.voucher.update({
               where: { id: voucher.id },
               data: { usedCount: { increment: 1 } },
@@ -125,9 +133,10 @@ export async function startCommand(ctx: BotContext) {
               data: { voucherId: voucher.id, userId: user.id },
             });
           });
-          voucherMsg =
-            `${ce(EMOJI.indicator_success, "✅")} <b>${t(lang, "voucher_redeemed")}</b>\n\n` +
-            t(lang, "voucher_redeemed_detail", { amount: Number(voucher.amountUsd).toFixed(2) });
+          voucherMsg = isCredits
+            ? `${ce(EMOJI.indicator_success, "✅")} <b>${t(lang, "voucher_redeemed")}</b>\n\n🪙 <b>+${voucher.credits.toLocaleString()} credits</b> added to your balance!`
+            : `${ce(EMOJI.indicator_success, "✅")} <b>${t(lang, "voucher_redeemed")}</b>\n\n` +
+              t(lang, "voucher_redeemed_detail", { amount: Number(voucher.amountUsd).toFixed(2) });
         } else {
           voucherMsg = `${ce(EMOJI.indicator_warning, "⚠️")} ${t(lang, "voucher_already_used")}`;
         }

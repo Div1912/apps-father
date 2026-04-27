@@ -109,6 +109,15 @@ function forwardAgentProgress(
     case "narration_end":
       broadcastToProject(projectId, { ...base, type: "agent_narration_end" });
       break;
+    case "writing_chunk":
+      broadcastToProject(projectId, {
+        ...base,
+        type: "agent_writing_chunk",
+        toolName: p.toolName,
+        delta: p.delta,
+        text: p.text,
+      });
+      break;
   }
   return true;
 }
@@ -616,6 +625,85 @@ export function createWebServer() {
     }
   });
 
+  app.post("/telegram-mini-app/api/user/performance-tier", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const { tierId } = req.body;
+      const allTiers = runtimeConfig.getAllTiers();
+      if (!tierId || !allTiers.find(t => t.id === tierId)) {
+        res.status(400).json({ error: "Invalid tierId" });
+        return;
+      }
+      await prisma.user.update({ where: { id: user.id }, data: { performanceTier: tierId } });
+      res.json({ ok: true, tierId });
+    } catch (err) {
+      console.error("[MiniApp API] Performance tier error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // ── Project .env variables editor ──
+  const _PROJECTS_DIR_ENV = path.join(process.cwd(), "projects");
+
+  app.get("/telegram-mini-app/api/project-env/:projectId", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const { projectId } = req.params;
+      const project = await projectService.getProject(projectId);
+      const ADMIN_TG_IDS = [8784357184, 8796958409];
+      if (!project || (project.userId !== user.id && !ADMIN_TG_IDS.includes(auth.telegramId || 0))) {
+        res.status(403).json({ error: "Forbidden" }); return;
+      }
+      const env = (req.query.env as string) === "release" ? "release" : "dev";
+      const envDir = env === "release" ? "release" : "development";
+      const envPath = path.join(_PROJECTS_DIR_ENV, projectId, envDir, "backend", ".env");
+      if (!fs.existsSync(envPath)) {
+        res.json({ vars: {} }); return;
+      }
+      const dotenv = await import("dotenv");
+      const vars = dotenv.parse(fs.readFileSync(envPath));
+      res.json({ vars });
+    } catch (err) {
+      console.error("[MiniApp API] project-env GET error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.post("/telegram-mini-app/api/project-env/:projectId", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const { projectId } = req.params;
+      const project = await projectService.getProject(projectId);
+      const ADMIN_TG_IDS_W = [8784357184, 8796958409];
+      if (!project || (project.userId !== user.id && !ADMIN_TG_IDS_W.includes(auth.telegramId || 0))) {
+        res.status(403).json({ error: "Forbidden" }); return;
+      }
+      const { vars, env } = req.body as { vars: Record<string, string>; env: string };
+      if (!vars || typeof vars !== "object") {
+        res.status(400).json({ error: "vars required" }); return;
+      }
+      const envDir = env === "release" ? "release" : "development";
+      const backendDir = path.join(_PROJECTS_DIR_ENV, projectId, envDir, "backend");
+      fs.mkdirSync(backendDir, { recursive: true });
+      const envContent = Object.entries(vars)
+        .filter(([k]) => k && /^[A-Z_][A-Z0-9_]*$/i.test(k))
+        .map(([k, v]) => `${k}=${v}`)
+        .join("\n");
+      fs.writeFileSync(path.join(backendDir, ".env"), envContent, "utf-8");
+      try { invalidateProjectDbCache(projectId); } catch {}
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("[MiniApp API] project-env POST error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   app.post("/telegram-mini-app/api/buy-slot", async (req, res) => {
     try {
       const auth = validateAuth(req);
@@ -636,33 +724,89 @@ export function createWebServer() {
     }
   });
 
+  app.get("/telegram-mini-app/api/bundles", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+
+      const confirmedCount = await prisma.payment.count({
+        where: { userId: user.id, status: "confirmed" },
+      });
+      const isFirstPurchase = confirmedCount === 0;
+
+      const bundles = await prisma.bundle.findMany({
+        where: { isActive: true },
+        orderBy: { sortOrder: "asc" },
+      });
+
+      const result = bundles.map((b) => ({
+        id: b.id,
+        name: b.name,
+        credits: b.credits,
+        bonusCredits: b.bonusCredits,
+        priceUsd: Number(b.priceUsd),
+        discount: b.discount,
+        isLimited: b.isLimited,
+        limitTotal: b.limitTotal,
+        purchaseCount: b.purchaseCount,
+        isSoldOut: b.isLimited && b.limitTotal !== null && b.purchaseCount >= b.limitTotal,
+        sortOrder: b.sortOrder,
+        isFirstPurchase,
+      }));
+
+      res.json({ bundles: result, isFirstPurchase });
+    } catch (err: any) {
+      console.error("[MiniApp API] Bundles error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   app.post("/telegram-mini-app/api/topup", async (req, res) => {
     try {
       const auth = validateAuth(req);
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const { user } = await getOrCreateUserFromReq(req, auth);
-      const { amount, method } = req.body;
-      const amountUsd = parseFloat(amount);
-      if (isNaN(amountUsd) || amountUsd < 2) {
-        res.status(400).json({ error: "Minimum top-up is $2" });
-        return;
+      const { bundleId, amount, method } = req.body;
+
+      let amountUsd: number;
+
+      if (bundleId) {
+        // Bundle-based topup
+        const bundle = await prisma.bundle.findUnique({ where: { id: bundleId } });
+        if (!bundle || !bundle.isActive) {
+          res.status(400).json({ error: "Bundle not found or inactive" });
+          return;
+        }
+        if (bundle.isLimited && bundle.limitTotal !== null && bundle.purchaseCount >= bundle.limitTotal) {
+          res.status(400).json({ error: "This bundle is sold out" });
+          return;
+        }
+        amountUsd = Number(bundle.priceUsd);
+      } else {
+        // Legacy free-form topup
+        amountUsd = parseFloat(amount);
+        if (isNaN(amountUsd) || amountUsd < 2) {
+          res.status(400).json({ error: "Minimum top-up is $2" });
+          return;
+        }
       }
 
       let invoiceUrl: string;
       let paymentId: number | undefined;
       if (method === "cryptobot") {
-        const result = await billingService.createCryptoBotInvoice(user.id, amountUsd);
+        const result = await billingService.createCryptoBotInvoice(user.id, amountUsd, bundleId);
         invoiceUrl = result.invoiceUrl;
         paymentId = result.paymentId;
       } else if (method === "stars") {
         const STAR_RATE = 0.013;
         const rawStars = Math.ceil(amountUsd / STAR_RATE);
         const stars = Math.floor(rawStars / 10) * 10;
-        const result = await billingService.createStarsInvoice(user.id, amountUsd, stars);
+        const result = await billingService.createStarsInvoice(user.id, amountUsd, stars, bundleId);
         invoiceUrl = result.invoiceUrl;
         paymentId = result.paymentId;
       } else if (method === "ton") {
-        const result = await billingService.createTonPayment(user.id, amountUsd);
+        const result = await billingService.createTonPayment(user.id, amountUsd, bundleId);
         res.json({ ok: true, ton: true, paymentId: result.paymentId, walletAddress: result.walletAddress, amountNano: result.amountNano });
         return;
       } else {
@@ -672,7 +816,7 @@ export function createWebServer() {
           res.status(400).json({ error: "Other Crypto requires a minimum of $15. Please use TON, Stars or Crypto Bot for smaller amounts." });
           return;
         }
-        const result = await billingService.createTopUp(user.id, amountUsd);
+        const result = await billingService.createTopUp(user.id, amountUsd, bundleId);
         invoiceUrl = result.invoiceUrl;
         paymentId = (result as any).paymentId;
       }
@@ -747,18 +891,27 @@ export function createWebServer() {
       if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
       const { user } = await getOrCreateUserFromReq(req, auth);
       await billingService.reconcilePendingTonPaymentsForUser(user.id);
-      const [balance, paymentCount, fullUser] = await Promise.all([
-        billingService.getUserBalance(user.id),
+      const [credits, paymentCount, fullUser] = await Promise.all([
+        billingService.getUserCredits(user.id),
         prisma.payment.count({ where: { userId: user.id, status: "confirmed" } }),
-        prisma.user.findUnique({ where: { id: user.id }, select: { firstDepositBonusGiven: true } }),
+        prisma.user.findUnique({ where: { id: user.id }, select: { firstDepositBonusGiven: true, performanceTier: true } }),
       ]);
       const firstDepositBonusEligible = paymentCount === 0 && !fullUser?.firstDepositBonusGiven;
       const firstDepositBonusPercent = Number(runtimeConfig.get().firstTopupBonusPercent) || 0;
+      const creditsPerDollar = runtimeConfig.getCreditsPerDollar();
+      const tierId = fullUser?.performanceTier || "tier_1";
+      const tier = runtimeConfig.getPerformanceTier(tierId);
+      const allTiers = runtimeConfig.getAllTiers();
       res.json({
-        balance,
+        balance: credits,         // credits is the main UI balance
+        credits,
+        tierId,
+        tier,
+        allTiers,
         paymentCount,
         firstDepositBonusEligible,
         firstDepositBonusPercent,
+        creditsPerDollar,
         minTopupUsd: 2,
       });
     } catch (err) {
@@ -1064,9 +1217,12 @@ export function createWebServer() {
           return;
         }
 
-        const balance = await billingService.getUserBalance(user.id);
-        if (balance < 5) {
-          const errMsg = chatService.addMessage(projectId, { role: "system", type: "balance_error", content: t(lang, "insufficient_balance_amount", { balance: `$${balance.toFixed(2)}`, min: "$5.00" }), metadata: { balance } });
+        const userForBuild = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true, performanceTier: true } });
+        const userTierId = req.body.tierId || userForBuild?.performanceTier || "tier_1";
+        const userTier = runtimeConfig.getPerformanceTier(userTierId);
+        const userCredits = userForBuild?.credits ?? 0;
+        if (userCredits < userTier.pricing.update) {
+          const errMsg = chatService.addMessage(projectId, { role: "system", type: "balance_error", content: t(lang, "insufficient_balance_amount", { balance: `${userCredits} cr`, min: `${userTier.pricing.update} cr` }), metadata: { balance: userCredits } });
           broadcastToProject(projectId, { type: "message", message: errMsg });
           res.json({ messageId: userMsg.id, status: "error", error: "insufficient_balance" });
           return;
@@ -1096,7 +1252,6 @@ export function createWebServer() {
 
           try {
             await projectService.updateProjectStatus(projectId, "building");
-            const currentBalance = await billingService.getUserBalance(user.id);
 
             let progressDone = false;
             const onProgress = async (p: AgentProgress) => {
@@ -1152,13 +1307,13 @@ export function createWebServer() {
 
             const result = await agentService.updateApp(
               projectId, text.trim(), onProgress, attachments,
-              onAskUser, lang, currentBalance,
+              onAskUser, lang, userCredits, userTierId,
             );
 
             const usage = await billingService.recordUsage(
               user.id, projectId, result.model,
               { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: result.cacheWriteTokens, cache_read_input_tokens: result.cacheReadTokens },
-              "update",
+              "update", userTierId,
             );
 
             await projectService.updateProjectStatus(projectId, "deployed");
@@ -1219,7 +1374,7 @@ export function createWebServer() {
               await billingService.recordUsage(
                 user.id, projectId, err.model,
                 { input_tokens: err.inputTokens, output_tokens: err.outputTokens, cache_creation_input_tokens: err.cacheWriteTokens, cache_read_input_tokens: err.cacheReadTokens },
-                "update",
+                "update", userTierId,
               );
               await projectService.updateProjectStatus(projectId, "deployed");
               processingProjects.delete(projectId);
@@ -1263,9 +1418,12 @@ export function createWebServer() {
       }
 
       if (msgType === "question") {
-        const balance = await billingService.getUserBalance(user.id);
-        if (balance < 0.5) {
-          const errMsg = chatService.addMessage(projectId, { role: "system", type: "balance_error", content: t(lang, "insufficient_balance_amount", { balance: `$${balance.toFixed(2)}`, min: "$0.50" }), metadata: { balance } });
+        const askUserData = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true, performanceTier: true } });
+        const askTierId = req.body.tierId || askUserData?.performanceTier || "tier_1";
+        const askTier = runtimeConfig.getPerformanceTier(askTierId);
+        const askCredits = askUserData?.credits ?? 0;
+        if (askCredits < askTier.pricing.ask) {
+          const errMsg = chatService.addMessage(projectId, { role: "system", type: "balance_error", content: t(lang, "insufficient_balance_amount", { balance: `${askCredits} cr`, min: `${askTier.pricing.ask} cr` }), metadata: { balance: askCredits } });
           broadcastToProject(projectId, { type: "message", message: errMsg });
           res.json({ messageId: userMsg.id, status: "error", error: "insufficient_balance" });
           return;
@@ -1298,13 +1456,13 @@ export function createWebServer() {
               (_chunk, fullText) => {
                 broadcastToProject(projectId, { type: "stream_chunk", projectId, messageId: streamMsgId, text: fullText });
               },
-              lastUpdate, proj?.description || undefined, askHistory, lang,
+              lastUpdate, proj?.description || undefined, askHistory, lang, askTierId,
             );
 
             const usage = await billingService.recordUsage(
-              user.id, projectId, runtimeConfig.getModelConfig("ask").modelId,
+              user.id, projectId, runtimeConfig.getModelConfig("ask", askTierId).modelId,
               { input_tokens: answer.inputTokens, output_tokens: answer.outputTokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-              "ask",
+              "ask", askTierId,
             );
 
             const ansMsg = chatService.addMessage(projectId, {
@@ -1378,12 +1536,15 @@ export function createWebServer() {
       if (!owner) return;
       const ownerLang = (owner.language as Lang) || "en";
 
-      const balance = await billingService.getUserBalance(owner.id);
-      if (balance < 5) {
+      const ownerData = await prisma.user.findUnique({ where: { id: owner.id }, select: { credits: true, performanceTier: true } });
+      const ownerTierId = ownerData?.performanceTier || "tier_1";
+      const ownerTier = runtimeConfig.getPerformanceTier(ownerTierId);
+      const ownerCredits = ownerData?.credits ?? 0;
+      if (ownerCredits < ownerTier.pricing.update) {
         const errMsg = chatService.addMessage(projectId, {
           role: "system", type: "balance_error",
-          content: t(ownerLang, "autofix_insufficient_balance", { balance: `$${balance.toFixed(2)}` }),
-          metadata: { balance },
+          content: t(ownerLang, "autofix_insufficient_balance", { balance: `${ownerCredits} cr` }),
+          metadata: { balance: ownerCredits },
         });
         broadcastToProject(projectId, { type: "message", message: errMsg });
         return;
@@ -1400,7 +1561,6 @@ export function createWebServer() {
 
         try {
           await projectService.updateProjectStatus(projectId, "building");
-          const currentBalance = await billingService.getUserBalance(owner.id);
 
           let progressDone = false;
           const onProgress = async (p: AgentProgress) => {
@@ -1411,12 +1571,12 @@ export function createWebServer() {
             broadcastToProject(projectId, { type: "progress", projectId, messageId: progressMsgId, percent: p.percent, message: `${p.action} ${p.detail}`, checklist: items, costUsd: p.costUsd, balance: p.balance });
           };
 
-          const result = await agentService.updateApp(projectId, errorText, onProgress, [], undefined, ownerLang, currentBalance);
+          const result = await agentService.updateApp(projectId, errorText, onProgress, [], undefined, ownerLang, ownerCredits, ownerTierId);
 
           const usage = await billingService.recordUsage(
             owner.id, projectId, result.model,
             { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: result.cacheWriteTokens, cache_read_input_tokens: result.cacheReadTokens },
-            "update",
+            "update", ownerTierId,
           );
 
           await projectService.updateProjectStatus(projectId, "deployed");
@@ -1449,7 +1609,7 @@ export function createWebServer() {
             await billingService.recordUsage(
               owner.id, projectId, err.model,
               { input_tokens: err.inputTokens, output_tokens: err.outputTokens, cache_creation_input_tokens: err.cacheWriteTokens, cache_read_input_tokens: err.cacheReadTokens },
-              "update",
+              "update", ownerTierId,
             );
             await projectService.updateProjectStatus(projectId, "deployed");
             processingProjects.delete(projectId);
@@ -1477,7 +1637,9 @@ export function createWebServer() {
       const project = await projectService.getProject(req.params.projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
-      const suggestions = await agentService.getSuggestions(req.params.projectId, suggestLang);
+      const suggUserData = await prisma.user.findUnique({ where: { id: user.id }, select: { performanceTier: true } });
+      const suggTierId = req.body.tierId || suggUserData?.performanceTier || "tier_1";
+      const suggestions = await agentService.getSuggestions(req.params.projectId, suggestLang, suggTierId);
       res.json({ suggestions });
     } catch (err) {
       console.error("[Chat API] Suggestions error:", err);
@@ -1554,8 +1716,12 @@ export function createWebServer() {
         return;
       }
 
-      if (!(await billingService.hasBalance(user.id))) {
-        res.status(402).json({ error: "Insufficient balance" });
+      const planUserData = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true, performanceTier: true } });
+      const planTierId = req.body.tierId || planUserData?.performanceTier || "tier_1";
+      const planTier = runtimeConfig.getPerformanceTier(planTierId);
+      const planCredits = planUserData?.credits ?? 0;
+      if (planCredits < planTier.pricing.plan) {
+        res.status(402).json({ error: "Insufficient credits" });
         return;
       }
 
@@ -1563,13 +1729,13 @@ export function createWebServer() {
 
       const assets = await projectService.getProjectAssets(projectId);
       const assetPaths = assets.map((a: any) => a.filePath).filter(Boolean) as string[];
-      const result = await claudeService.generatePlan(description.trim(), assetPaths, planLang, projectPrefs);
+      const result = await claudeService.generatePlan(description.trim(), assetPaths, planLang, projectPrefs, planTierId);
       await projectService.updateProjectPlan(projectId, result.plan);
 
       const usage = await billingService.recordUsage(
-        user.id, projectId, runtimeConfig.getModelConfig("plan").modelId,
+        user.id, projectId, runtimeConfig.getModelConfig("plan", planTierId).modelId,
         { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-        "plan"
+        "plan", planTierId,
       );
 
       chatService.addMessage(projectId, { role: "user", type: "text", content: description.trim() });
@@ -1603,9 +1769,12 @@ export function createWebServer() {
       if (!project.plan) { res.status(400).json({ error: "No plan to approve" }); return; }
       if (processingProjects.has(projectId)) { res.status(409).json({ error: "Already processing" }); return; }
 
-      const balance = await billingService.getUserBalance(user.id);
-      if (balance < 5) {
-        res.status(402).json({ error: t(buildLang, "insufficient_balance_amount", { balance: `$${balance.toFixed(2)}`, min: "$5.00" }) });
+      const buildUserData = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true, performanceTier: true } });
+      const buildTierId = req.body.tierId || buildUserData?.performanceTier || "tier_1";
+      const buildTier = runtimeConfig.getPerformanceTier(buildTierId);
+      const buildCredits = buildUserData?.credits ?? 0;
+      if (buildCredits < buildTier.pricing.create) {
+        res.status(402).json({ error: t(buildLang, "insufficient_balance_amount", { balance: `${buildCredits} cr`, min: `${buildTier.pricing.create} cr` }) });
         return;
       }
 
@@ -1664,13 +1833,13 @@ export function createWebServer() {
 
           const result = await agentService.buildApp(
             projectId, project.description || "", project.plan!,
-            onProgress, onAskUser, buildLang, balance,
+            onProgress, onAskUser, buildLang, buildCredits, buildTierId,
           );
 
           const usage = await billingService.recordUsage(
             user.id, projectId, result.model,
             { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: result.cacheWriteTokens, cache_read_input_tokens: result.cacheReadTokens },
-            "build",
+            "build", buildTierId,
           );
 
           await projectService.updateProjectStatus(projectId, "deployed");
@@ -1721,7 +1890,7 @@ export function createWebServer() {
             await billingService.recordUsage(
               user.id, projectId, err.model,
               { input_tokens: err.inputTokens, output_tokens: err.outputTokens, cache_creation_input_tokens: err.cacheWriteTokens, cache_read_input_tokens: err.cacheReadTokens },
-              "build",
+              "build", buildTierId,
             );
             await projectService.updateProjectStatus(projectId, project.generatedCode ? "deployed" : "created");
             processingProjects.delete(projectId);
@@ -1753,8 +1922,12 @@ export function createWebServer() {
       const { feedback } = req.body;
       if (!feedback?.trim()) { res.status(400).json({ error: "Feedback required" }); return; }
 
-      if (!(await billingService.hasBalance(user.id))) {
-        res.status(402).json({ error: "Insufficient balance" });
+      const editPlanUserData = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true, performanceTier: true } });
+      const editPlanTierId = req.body.tierId || editPlanUserData?.performanceTier || "tier_1";
+      const editPlanTier = runtimeConfig.getPerformanceTier(editPlanTierId);
+      const editPlanCredits = editPlanUserData?.credits ?? 0;
+      if (editPlanCredits < editPlanTier.pricing.plan) {
+        res.status(402).json({ error: "Insufficient credits" });
         return;
       }
 
@@ -1762,13 +1935,13 @@ export function createWebServer() {
 
       const updatedDescription = `${project.description}\n\nAdditional feedback: ${feedback.trim()}`;
       const editPrefs = parseProjectPreferences((project as any).preferences ?? null);
-      const result = await claudeService.generatePlan(updatedDescription, undefined, editPlanLang, editPrefs);
+      const result = await claudeService.generatePlan(updatedDescription, undefined, editPlanLang, editPrefs, editPlanTierId);
       await projectService.updateProjectPlan(projectId, result.plan);
 
       const usage = await billingService.recordUsage(
-        user.id, projectId, runtimeConfig.getModelConfig("plan").modelId,
+        user.id, projectId, runtimeConfig.getModelConfig("plan", editPlanTierId).modelId,
         { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-        "plan"
+        "plan", editPlanTierId,
       );
 
       chatService.addMessage(projectId, {
@@ -2317,24 +2490,25 @@ export function createWebServer() {
 
       const { getProjectFeatures, PAID_FEATURES, getBundleQuote } = await import("../services/features.service");
       const owned = await getProjectFeatures(projectId);
-      const balance = await billingService.getUserBalance(user.id);
+      const balance = await billingService.getUserCredits(user.id);
 
       const features = PAID_FEATURES.map(f => ({
         id: f.id,
         label: f.label,
         price: f.price,
+        creditsPrice: f.creditsPrice,
         description: f.description,
         owned: owned.includes(f.id),
       }));
 
-      // Bundle stays visible until ALL bundle features are owned. When some
-      // are already owned, the price covers only the still-missing ones at
-      // 50% off (getBundleQuote handles the math).
       const quote = getBundleQuote(owned);
       const bundle = {
         id: "bundle_all",
         price: quote.bundlePrice,
         fullPrice: quote.fullPrice,
+        creditsPrice: quote.bundleCreditsPrice,
+        fullCreditsPrice: quote.fullCreditsPrice,
+        saveCredits: quote.saveCredits,
         featureIds: quote.missingIds,
         available: quote.available,
       };
@@ -2355,14 +2529,14 @@ export function createWebServer() {
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
-      const { featureId } = req.body;
+      const { featureId, payWith = "credits" } = req.body;
       if (!featureId) { res.status(400).json({ error: "featureId required" }); return; }
 
       const { purchaseFeature, getFeatureById } = await import("../services/features.service");
       const feature = getFeatureById(featureId);
       if (!feature) { res.status(400).json({ error: "Unknown feature" }); return; }
 
-      const { newBalance } = await purchaseFeature(user.id, projectId, featureId);
+      const { newBalance, newCredits } = await purchaseFeature(user.id, projectId, featureId, payWith as "credits" | "balance");
 
       void trackEvent(auth.telegramId!, "purchase", {
         type: "feature",
@@ -2372,7 +2546,7 @@ export function createWebServer() {
         project_id: projectId,
       });
 
-      res.json({ success: true, newBalance, featureId });
+      res.json({ success: true, newBalance, newCredits, featureId });
     } catch (err: any) {
       console.error("[MiniApp API] Feature purchase error:", err);
       res.status(400).json({ error: err.message || "Purchase failed" });
@@ -2389,7 +2563,8 @@ export function createWebServer() {
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
       const { purchaseBundle } = await import("../services/features.service");
-      const { newBalance, granted, charged } = await purchaseBundle(user.id, projectId);
+      const { payWith = "credits" } = req.body;
+      const { newBalance, newCredits, granted, charged } = await purchaseBundle(user.id, projectId, payWith as "credits" | "balance");
 
       void trackEvent(auth.telegramId!, "purchase", {
         type: "bundle",
@@ -2400,7 +2575,7 @@ export function createWebServer() {
         project_id: projectId,
       });
 
-      res.json({ success: true, newBalance, granted, charged });
+      res.json({ success: true, newBalance, newCredits, granted, charged });
     } catch (err: any) {
       console.error("[MiniApp API] Bundle purchase error:", err);
       res.status(400).json({ error: err.message || "Purchase failed" });

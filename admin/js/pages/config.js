@@ -10,12 +10,12 @@
   // ── Schema ─────────────────────────────────────────────────────────────
   const SCHEMA = [
     {
-      title: "Pricing",
-      desc:  "Top-ups, markup, multipliers",
+      title: "Credits & Pricing",
+      desc:  "Credits-based billing",
       fields: [
         { key: "minTopup",          label: "Min top-up (USD)",        type: "number", step: "1",   help: "Minimum amount the user can deposit." },
-        { key: "markupMultiplier",  label: "Markup multiplier",       type: "number", step: "0.1", help: "Multiplier on top of raw provider rates." },
-        { key: "askMultiplier",     label: "Ask multiplier",          type: "number", step: "0.1", help: "Multiplier applied for ask-mode answers." },
+        { key: "creditsPerDollar",  label: "Credits per $1",          type: "number", step: "1",   help: "How many credits 1 USD buys (default 50)." },
+        { key: "slotPriceCredits",  label: "Slot price (credits)",    type: "number", step: "10",  help: "Credits deducted to buy one extra app slot." },
         { key: "bundlePriceUsd",    label: "Bundle price (USD)",      type: "number", step: "1",   help: "Get-everything bundle on Features page." },
         { key: "aiAvatarPriceUsd",  label: "AI avatar price (USD)",   type: "number", step: "1",   help: "Cost of generating an AI avatar." },
       ],
@@ -127,6 +127,7 @@
           <div class="cfg-footer">
             <button class="btn btn-primary" id="cfg-save">Save All</button>
           </div>
+          <p class="sub" style="margin-top:1.5rem;opacity:0.6">Performance Tier configuration has moved to the <b>Models</b> tab.</p>
         `;
 
         const onSave = async () => {
@@ -138,10 +139,8 @@
               let v;
               if (f.type === "bool") v = el.checked;
               else if (f.type === "select") v = el.value;
-              else if (f.type === "text") v = el.value;            // free-form string, may be empty
+              else if (f.type === "text") v = el.value;
               else v = el.value === "" ? null : Number(el.value);
-              // Skip null number fields (preserves existing value), but include
-              // empty strings for text fields so admins can clear an override.
               if (v !== null) setPath(payload, f.key, v);
             }
           }

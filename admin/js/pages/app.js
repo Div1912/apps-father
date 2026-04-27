@@ -64,7 +64,7 @@
         </div>
 
         <div class="kpi-grid">
-          <div class="kpi-card"><div class="label">Total Cost</div><div class="value warn">${Fmt.money(p.totalCost)}</div></div>
+          <div class="kpi-card"><div class="label">Total Cost (USD)</div><div class="value warn" style="font-size:13px">${Fmt.money(p.totalCost, 4)}</div></div>
           <div class="kpi-card"><div class="label">Created</div><div class="value" style="font-size:13px">${Fmt.escapeHtml(Fmt.relativeTime(p.createdAt))}</div></div>
           <div class="kpi-card"><div class="label">Last Update</div><div class="value" style="font-size:13px">${Fmt.escapeHtml(Fmt.relativeTime(p.updatedAt))}</div></div>
         </div>

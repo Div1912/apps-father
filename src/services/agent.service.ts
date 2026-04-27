@@ -471,7 +471,7 @@ const TOOLS_DEFS: Array<{ name: string; description: string; input_schema: Recor
   },
   {
     name: "set_bot_commands",
-    description: "Safely set the bot slash-command menu with Telegram setMyCommands. Use for Text Bots after configure_bot. Commands must all be handled in /bot-webhook.",
+    description: "Safely set the bot slash-command menu with Telegram setMyCommands. Use for Text Bots after configure_app. Commands must all be handled in /bot-webhook.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -521,21 +521,20 @@ const TOOLS_DEFS: Array<{ name: string; description: string; input_schema: Recor
       required: ["shortSummary", "summary"],
     },
   },
-  // CONSOLIDATED BOT CONFIG TOOL — replaces 3 sequential telegram_api calls
-  // (setMyDescription / setMyShortDescription / setChatMenuButton). The model used
-  // to split these across 3 iterations (~$0.20 wasted per first build).
+  // CONSOLIDATED APP CONFIG TOOL — stores app profile metadata in Apps Father
+  // first, then configures the linked Telegram bot when a token is available.
   {
-    name: "configure_bot",
-    description: "Atomically configure the bot's name, description, short description, and menu button — all in ONE call. ONLY use on FIRST build, never on updates. Use this INSTEAD of telegram_api(setMyName/setMyDescription) etc. The menu button URL is auto-generated from the project URL. The provided name is also saved as the app's name in Apps Father.",
+    name: "configure_app",
+    description: "Save the app's name, description, long description, and menu button text in Apps Father core DB, then configure the Telegram bot if it is already linked. ONLY use on FIRST build, never on updates. If no bot token is connected yet, the saved data will be applied automatically when the bot is later created and connected. Use this INSTEAD of telegram_api(setMyName/setMyDescription/setMyShortDescription/setChatMenuButton).",
     input_schema: {
       type: "object" as const,
       properties: {
-        name: { type: "string" as const, description: "Bot display name (up to 64 chars). Also becomes the app name in Apps Father." },
-        description: { type: "string" as const, description: "Bot description shown in profile (up to 512 chars)" },
-        shortDescription: { type: "string" as const, description: "Short bot description shown in chat list (up to 120 chars)" },
-        menuButtonText: { type: "string" as const, description: "Text for the menu button (e.g. 'Launch App'). Default: 'Launch App'" },
+        name: { type: "string" as const, description: "App and bot display name (up to 64 chars)" },
+        description: { type: "string" as const, description: "Short app/bot description shown in Telegram previews (up to 120 chars)" },
+        longDescription: { type: "string" as const, description: "Long bot profile description shown in Telegram profile (up to 512 chars)" },
+        menuButtonText: { type: "string" as const, description: "Text for the Mini App menu button (e.g. 'Launch App'). Use empty string for Text Bots." },
       },
-      required: ["name", "description", "shortDescription"],
+      required: ["name", "description", "longDescription"],
     },
   },
 ];
@@ -578,7 +577,8 @@ export type AgentEventType =
   | "step_end"
   | "narration_start"
   | "narration_chunk"
-  | "narration_end";
+  | "narration_end"
+  | "writing_chunk";    // tool-call arguments streaming (for UI live preview)
 
 export interface AgentProgress {
   action: string;
@@ -659,6 +659,30 @@ export class AgentService {
     return undefined;
   }
 
+  private validateFrontendMarkup(frontendText: string): string[] {
+    const errors: string[] = [];
+    if (!frontendText.trim()) return errors;
+
+    const badAttrExamples: string[] = [];
+    const identityAttrRe = /\b(?:id|class|for|name|aria-labelledby|aria-describedby|aria-controls)\s*=\s*(["'])([^"'<>]*(?:\\["']|&quot;|&#34;|&#39;)[^"'<>]*)\1/gi;
+    let attrMatch: RegExpExecArray | null;
+    while ((attrMatch = identityAttrRe.exec(frontendText)) && badAttrExamples.length < 3) {
+      badAttrExamples.push(attrMatch[0].slice(0, 80));
+    }
+    if (badAttrExamples.length > 0) {
+      errors.push(`Frontend HTML contains escaped/nested quotes inside identity attributes (${badAttrExamples.join(", ")}). Use plain values like id="game-canvas", not id="\\"game-canvas\\"".`);
+    }
+
+    if (/\bgetElementById\s*\(\s*(["'`])(?:\\["']|["'])/.test(frontendText)) {
+      errors.push(`Frontend JS queries a quoted/escaped id. Use document.getElementById("game-canvas"), not document.getElementById("\\"game-canvas\\"").`);
+    }
+    if (/\bquerySelector(?:All)?\s*\(\s*(["'`])[#.](?:\\["']|["'])/.test(frontendText)) {
+      errors.push(`Frontend JS queries a malformed quoted selector. Use document.querySelector("#game-canvas"), not document.querySelector("#\\"game-canvas\\"").`);
+    }
+
+    return errors;
+  }
+
   private validateBackendRoutes(
     projectDir: string,
     projectId: string,
@@ -678,6 +702,7 @@ export class AgentService {
     const routesText = fs.existsSync(routesPath) ? fs.readFileSync(routesPath, "utf-8") : "";
 
     const hasFrontendFiles = this.dirHasFiles(frontendDir);
+    errors.push(...this.validateFrontendMarkup(frontendText));
     if (/\bprocess\s*\.\s*env\b/.test(routesText + "\n" + frontendText)) {
       errors.push("Generated app code must not read process.env. Project code cannot access platform environment variables; if a feature needs an API key or credential, call ask_user before coding or use a public no-key API.");
     }
@@ -720,7 +745,8 @@ export class AgentService {
       errors.push(`backend/routes.js contains SQL-style comments (-- ...) which are a syntax error in JavaScript. Replace every -- comment with a // comment and redeploy.`);
     }
 
-    const hasPlatformExport = /module\.exports\s*=\s*function\s*\(\s*router\s*,\s*db\s*,\s*projectId\s*\)/.test(content);
+    // Allow optional extra parameters after the required three (e.g. env, config).
+    const hasPlatformExport = /module\.exports\s*=\s*function\s*\(\s*router\s*,\s*db\s*,\s*projectId\s*[,)]/.test(content);
     if (!hasPlatformExport) {
       errors.push(`backend/routes.js has invalid Apps Father format. It must export exactly: module.exports = function(router, db, projectId) { ... }. Do not export a route map/object.`);
     }
@@ -820,6 +846,7 @@ export class AgentService {
     deployed: boolean,
     testResults: Array<{ tool: string; ok: boolean; detail: string }> = [],
     wsCoverage: { types: Set<string>; scenarios: Set<string> } = { types: new Set(), scenarios: new Set() },
+    hasBotToken = false,
   ): string | null {
     const latestResult = (tool: string) => {
       const r = [...testResults].reverse().find(t => t.tool === tool);
@@ -831,11 +858,17 @@ export class AgentService {
     if (!deployed) {
       return "deploy_to_dev() must succeed before finish().";
     }
-    if (kind === "textBot" && !testsRun.telegram) {
-      return `Text Bot builds must pass simulate_telegram before finish().${latestResult("simulate_telegram")}`;
-    }
-    if (kind === "app" && Array.isArray(technicalPlan?.botBehavior) && technicalPlan.botBehavior.length > 0 && !testsRun.telegram) {
-      return `App builds with planned bot behavior must pass simulate_telegram before finish().${latestResult("simulate_telegram")}`;
+    // simulate_telegram is only required when a real bot token is already
+    // linked — without one the webhook exists in code but can't be invoked
+    // through Telegram and will be wired up automatically when the user
+    // creates and connects their bot later.
+    if (hasBotToken) {
+      if (kind === "textBot" && !testsRun.telegram) {
+        return `Text Bot builds must pass simulate_telegram before finish().${latestResult("simulate_telegram")}`;
+      }
+      if (kind === "app" && Array.isArray(technicalPlan?.botBehavior) && technicalPlan.botBehavior.length > 0 && !testsRun.telegram) {
+        return `App builds with planned bot behavior must pass simulate_telegram before finish().${latestResult("simulate_telegram")}`;
+      }
     }
     if (kind === "app" && this.plannedEndpoints(technicalPlan).length > 0 && !testsRun.api) {
       return `App builds with planned REST endpoints must pass simulate_api before finish().${latestResult("simulate_api")}`;
@@ -1000,6 +1033,7 @@ export class AgentService {
     opts: {
       onTextDelta?: (delta: string, full: string) => void;
       onReasoningDelta?: (delta: string, full: string) => void;
+      onToolArgsDelta?: (toolName: string, argsDelta: string, argsFull: string) => void;
     } = {},
   ): Promise<OpenAI.Chat.Completions.ChatCompletion> {
     const client = getOpenRouterClient();
@@ -1045,7 +1079,10 @@ export class AgentService {
           const acc = toolCallAcc.get(idx) || { name: "", args: "" };
           if (tc.id) acc.id = tc.id;
           if (tc.function?.name) acc.name = (acc.name || "") + tc.function.name;
-          if (tc.function?.arguments) acc.args += tc.function.arguments;
+          if (tc.function?.arguments) {
+            acc.args += tc.function.arguments;
+            try { opts.onToolArgsDelta?.(acc.name, tc.function.arguments, acc.args); } catch {}
+          }
           toolCallAcc.set(idx, acc);
         }
       }
@@ -1150,6 +1187,7 @@ export class AgentService {
     appDescription?: string,
     conversationHistory?: { role: "user" | "assistant"; content: string }[],
     lang?: string,
+    tierId?: string,
   ): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
     const project: any = await projectService.getProject(projectId);
     const context = this.loadLatestContext(projectId)
@@ -1187,7 +1225,8 @@ ${dbSummary ? `DB KEYS SUMMARY:\n${dbSummary}\n` : ""}`;
     }
     messages.push({ role: "user", content: question });
 
-    const modelCfg = runtimeConfig.getModelConfig("ask");
+    const modelCfg = runtimeConfig.getModelConfig("ask", tierId);
+    const askReasoningBudget = (modelCfg as any).reasoningBudget ?? 0;
     const client = getOpenRouterClient();
     const stream = await client.chat.completions.create({
       model: modelCfg.modelId,
@@ -1197,6 +1236,7 @@ ${dbSummary ? `DB KEYS SUMMARY:\n${dbSummary}\n` : ""}`;
         ...messages,
       ],
       ...(this.getProviderRouting(modelCfg.modelId, modelCfg.provider) ? { provider: this.getProviderRouting(modelCfg.modelId, modelCfg.provider) } : {}),
+      ...(askReasoningBudget > 0 ? { reasoning: { max_tokens: askReasoningBudget } } : {}),
       stream: true,
     } as any) as any;
 
@@ -1222,7 +1262,7 @@ ${dbSummary ? `DB KEYS SUMMARY:\n${dbSummary}\n` : ""}`;
     };
   }
 
-  async getSuggestions(projectId: string, lang?: string): Promise<{ title: string; description: string }[]> {
+  async getSuggestions(projectId: string, lang?: string, tierId?: string): Promise<{ title: string; description: string }[]> {
     const project: any = await projectService.getProject(projectId);
     const context = this.loadLatestContext(projectId)
       || project?.projectSummary
@@ -1256,13 +1296,15 @@ Focus on:
 
 Keep suggestions practical and specific to THIS app.${langInstruction}`;
 
-    const modelCfg = runtimeConfig.getModelConfig("suggestions");
+    const modelCfg = runtimeConfig.getModelConfig("suggestions", tierId);
+    const suggReasoningBudget = (modelCfg as any).reasoningBudget ?? 0;
     const client = getOpenRouterClient();
     const response = await client.chat.completions.create({
       model: modelCfg.modelId,
       max_tokens: modelCfg.maxTokens,
       messages: [{ role: "user", content: prompt }],
       ...(this.getProviderRouting(modelCfg.modelId, modelCfg.provider) ? { provider: this.getProviderRouting(modelCfg.modelId, modelCfg.provider) } : {}),
+      ...(suggReasoningBudget > 0 ? { reasoning: { max_tokens: suggReasoningBudget } } : {}),
     } as any);
 
     const text = response.choices[0]?.message?.content || "";
@@ -1540,6 +1582,7 @@ Keep suggestions practical and specific to THIS app.${langInstruction}`;
     onAskUser?: (question: string, options: string[]) => Promise<string>,
     lang?: string,
     userBalance?: number,
+    tierId?: string,
   ): Promise<AgentResult> {
     // Run the entire agent loop (and every transitive console.log inside
     // claude/builder/commit/ws-manager) under an ALS context tagged with
@@ -1569,16 +1612,21 @@ Plan:
 ${plan}
 ${featureGating}`;
 
+    const hasBotLinked = !!buildProject?.botUsername;
+    const simTelegramNote = hasBotLinked
+      ? ""
+      : "\nNOTE: No Telegram bot is linked yet — simulate_telegram is optional. You may call it to verify webhook logic but it is NOT required before finish(). The bot webhook will be testable once the user connects a bot.";
+
     const kindTask =
       buildKind === "textBot"
-        ? `Build a new Telegram Text Bot from scratch.\n\n${baseProjectInfo}\nCreate ONLY backend/routes.js. Do not create frontend files. The bot UX happens entirely in Telegram messages, keyboards, callbacks, and /bot-webhook. Use db.get/db.set for persistence, deploy_to_dev(), test with simulate_telegram/server_logs, then finish.${langInstruction}`
+        ? `Build a new Telegram Text Bot from scratch.\n\n${baseProjectInfo}\nCreate ONLY backend/routes.js. Do not create frontend files. The bot UX happens entirely in Telegram messages, keyboards, callbacks, and /bot-webhook. Use db.get/db.set for persistence, deploy_to_dev(), test with simulate_telegram/server_logs, then finish.${simTelegramNote}${langInstruction}`
       : buildKind === "game"
         ? `Build a new Telegram Mini App game from scratch.\n\n${baseProjectInfo}\nCreate a single-file Three.js game in frontend/index.html. Do not create frontend/app.js, frontend/styles.css, or backend/routes.js unless the game truly needs server-side multiplayer/shared persistence. Use deploy_to_dev(), then finish.${langInstruction}`
-      : `Build a complete Telegram Mini App from scratch.\n\n${baseProjectInfo}\nCreate all necessary files (frontend/index.html, frontend/styles.css, frontend/app.js, backend/routes.js) and configure the bot. Database is handled via db.get/db.set in routes.js — no schema setup needed. Make it beautiful and functional. Use deploy_to_dev() to deploy and test your code via the Dev URLs. In frontend code, use /api/${projectId}/ as the API base URL (this will be rewritten to /devapi/ in dev mode automatically).${langInstruction}`;
+      : `Build a complete Telegram Mini App from scratch.\n\n${baseProjectInfo}\nCreate all necessary files (frontend/index.html, frontend/styles.css, frontend/app.js, backend/routes.js) and configure the bot. Database is handled via db.get/db.set in routes.js — no schema setup needed. Make it beautiful and functional. Use deploy_to_dev() to deploy and test your code via the Dev URLs. In frontend code, use /api/${projectId}/ as the API base URL (this will be rewritten to /devapi/ in dev mode automatically).${simTelegramNote}${langInstruction}`;
 
     const prompt = `${prefsBlock}${kindTask}`;
 
-    return this.runAgent(projectId, prompt, onProgress, onAskUser, userBalance, undefined, "new", buildKind);
+    return this.runAgent(projectId, prompt, onProgress, onAskUser, userBalance, undefined, "new", buildKind, tierId);
     }); // end runWithProject
   }
 
@@ -1590,6 +1638,7 @@ ${featureGating}`;
     onAskUser?: (question: string, options: string[]) => Promise<string>,
     lang?: string,
     userBalance?: number,
+    tierId?: string,
   ): Promise<AgentResult> {
     // See note in `buildApp`: wrap the whole agent run in an ALS context so
     // every transitive log line (`[Agent]`, `[Builder]`, claude streams, …)
@@ -1640,14 +1689,19 @@ ${featureGating}`;
     const updateKind = normalizeProjectKind(updatePrefs?.kind);
     const updatePrefsBlock = `${buildPreferencesPrompt(updatePrefs)}\n\n`;
 
+    const updateHasBotLinked = !!project?.botUsername;
+    const updateSimTelegramNote = updateHasBotLinked
+      ? ""
+      : "\nNOTE: No Telegram bot is linked yet — simulate_telegram is optional. You may call it to verify webhook logic but it is NOT required before finish(). The bot webhook will be testable once the user connects a bot.";
+
     const updateProjectInfo = `Project ID: ${projectId}
 Development App URL: ${config.baseUrl}/dev/${projectId}/
 Development API URL: ${config.baseUrl}/devapi/${projectId}/
 Production App URL: ${config.baseUrl}/app/${projectId}/
 Production API URL: ${config.baseUrl}/api/${projectId}/
 
-Telegram Bot Link: https://t.me/${project.botUsername}
-Telegram Bot Deep Link Making: https://t.me/${project.botUsername}?start={some_param}
+Telegram Bot Link: ${project?.botUsername ? `https://t.me/${project.botUsername}` : "(bot not linked yet)"}
+Telegram Bot Deep Link Making: ${project?.botUsername ? `https://t.me/${project.botUsername}?start={some_param}` : "(bot not linked yet)"}
 Track Deep Link: in routes.js from /bot-webhook route track the as message of start param
 
 
@@ -1660,14 +1714,14 @@ ${featureGating}`;
 
     const updateTask =
       updateKind === "textBot"
-        ? `Update an existing Telegram Text Bot.\n\n${updateProjectInfo}\nUse targeted read_file on backend/routes.js only. Do not create frontend files. Use edit_file for targeted changes. Use deploy_to_dev(), simulate_telegram/server_logs for changed flows, then finish.${langInstruction}`
+        ? `Update an existing Telegram Text Bot.\n\n${updateProjectInfo}\nUse targeted read_file on backend/routes.js only. Do not create frontend files. Use edit_file for targeted changes. Use deploy_to_dev(), simulate_telegram/server_logs for changed flows, then finish.${updateSimTelegramNote}${langInstruction}`
       : updateKind === "game"
         ? `Update an existing Telegram game.\n\n${updateProjectInfo}\nThe game should normally be a single file in frontend/index.html. Do not create frontend/app.js, frontend/styles.css, or backend/routes.js unless the user explicitly asked for server-side functionality. Use deploy_to_dev(), then finish.${langInstruction}`
-      : `Update an existing Telegram Mini App.\n\n${updateProjectInfo}\nUse grep and read_file to verify current state before making changes. Use edit_file for targeted modifications. Use deploy_to_dev(), simulate_api/server_logs for changed backend behavior, simulate_ws for changed real-time behavior, then finish.${langInstruction}`;
+      : `Update an existing Telegram Mini App.\n\n${updateProjectInfo}\nUse grep and read_file to verify current state before making changes. Use edit_file for targeted modifications. Use deploy_to_dev(), simulate_api/server_logs for changed backend behavior, simulate_ws for changed real-time behavior, then finish.${updateSimTelegramNote}${langInstruction}`;
 
     const prompt = `${updatePrefsBlock}${updateTask}`;
 
-    return this.runAgent(projectId, prompt, onProgress, onAskUser, userBalance, attachments, "update", updateKind);
+    return this.runAgent(projectId, prompt, onProgress, onAskUser, userBalance, attachments, "update", updateKind, tierId);
     }); // end runWithProject
   }
 
@@ -1680,6 +1734,7 @@ ${featureGating}`;
     attachments?: { localPath: string; projectPath: string; originalName: string; caption?: string }[],
     mode: AgentMode = "update",
     kind?: string,
+    tierId?: string,
   ): Promise<AgentResult> {
     // Build the system prompt from agent_knowledge/instructions/ for THIS run.
     // Mode-gated files are filtered by manifest; kind-specific workflow file is selected here.
@@ -1766,6 +1821,18 @@ ${featureGating}`;
         percent: currentPercent,
       });
     };
+    const emitWritingChunk = async (stepId: string, toolName: string, argsDelta: string, argsFull: string) => {
+      await progress({
+        event: "writing_chunk",
+        stepId,
+        toolName,
+        delta: argsDelta,
+        text: argsFull,
+        action: "",
+        detail: "",
+        percent: currentPercent,
+      });
+    };
 
     // Fast lookup: tool name → step kind + human title + which arg holds the
     // primary "target" for the UI (file path / URL / DB key / skill name).
@@ -1783,7 +1850,7 @@ ${featureGating}`;
       load_skill:    { kind: "skill",      title: "Loading skill",   targetKey: "name", targetField: "key" },
       ask_user:      { kind: "ask",        title: "Waiting for your answer" },
       technical_plan:{ kind: "thinking",   title: "Technical plan",  targetKey: "kind", targetField: "key" },
-      configure_bot: { kind: "configuring",title: "Configuring bot" },
+      configure_app: { kind: "configuring",title: "Configuring app" },
       set_bot_commands: { kind: "configuring", title: "Setting bot commands" },
       set_progress:    { kind: "thinking",   title: "Updating progress" },
       done:            { kind: "done",       title: "Wrapping up" },
@@ -1818,7 +1885,7 @@ ${featureGating}`;
     const logger = new AgentLogger(projectId);
 
     let botToken = "";
-    // Load the project's preferences once so the configure_bot tool below can
+    // Load the project's preferences once so configure_app can
     // gate behaviour on `kind` (e.g. text-bot projects must NEVER ship a Mini
     // App menu button — see preferences.kind === "textBot" guard inside the
     // tool handler).
@@ -1834,9 +1901,14 @@ ${featureGating}`;
     const runKind = normalizeProjectKind(kind || runPrefs.kind);
     const setRuntimeMenuButton = async () => {
       if (!botToken) return;
+      let menuButtonText = "Launch App";
+      try {
+        const project = await projectService.getProject(projectId);
+        menuButtonText = ((project as any)?.appMenuButtonText || menuButtonText).toString().substring(0, 32);
+      } catch {}
       const menuButton = runKind === "textBot"
         ? { type: "default" as const }
-        : { type: "web_app" as const, text: "Launch App", web_app: { url: `${config.baseUrl}/app/${projectId}/` } };
+        : { type: "web_app" as const, text: menuButtonText, web_app: { url: `${config.baseUrl}/app/${projectId}/` } };
       await fetch(`https://api.telegram.org/bot${botToken}/setChatMenuButton`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1844,9 +1916,7 @@ ${featureGating}`;
       });
     };
 
-    // Project quality tiers are disabled. Builds and updates now use one
-    // runtime-configurable Code Gen model/limits profile.
-    const tierConfig = runtimeConfig.getModelConfig("codegen");
+    const tierConfig = runtimeConfig.getModelConfig("codegen", tierId);
 
     const finalPrompt = userPrompt;
 
@@ -1908,6 +1978,7 @@ ${featureGating}`;
     let wroteFiles = false;
     let deployed = false;
     let finished = false;
+    let configuredApp = false;
     const testsRun = { telegram: false, api: false, ws: false };
     const wsCoverage = { types: new Set<string>(), scenarios: new Set<string>() };
     const writeDetailedLog = (reason: string) => {
@@ -1970,9 +2041,11 @@ ${featureGating}`;
       }
       iterations++;
 
-      // Build OpenAI-format request. Thinking is passed via extra_body for
-      // Claude models on OpenRouter — non-Claude models ignore it gracefully.
-      const thinkingBudget = tierConfig.thinkingBudget ?? 0;
+      // Build OpenAI-format request.
+      // thinkingBudget → Claude extended thinking via extra_body (Claude models only).
+      // reasoningBudget → OpenRouter unified reasoning.max_tokens (Kimi, DeepSeek-R1, etc.).
+      const thinkingBudget  = tierConfig.thinkingBudget  ?? 0;
+      const reasoningBudget = (tierConfig as any).reasoningBudget ?? 0;
       const requestMessages = this.applyCacheBreakpoint(tierConfig.modelId, systemPrompt, messages);
       const requestPayload: any = {
         model: tierConfig.modelId,
@@ -1983,6 +2056,9 @@ ${featureGating}`;
         ...(this.getProviderRouting(tierConfig.modelId, tierConfig.provider) ? { provider: this.getProviderRouting(tierConfig.modelId, tierConfig.provider) } : {}),
         ...(thinkingBudget > 0 ? {
           extra_body: { thinking: { type: "enabled", budget_tokens: thinkingBudget } },
+        } : {}),
+        ...(reasoningBudget > 0 ? {
+          reasoning: { max_tokens: reasoningBudget },
         } : {}),
       };
       // Streaming is on by default; an action can opt out via runtime config
@@ -2010,6 +2086,9 @@ ${featureGating}`;
               onReasoningDelta: (delta) => {
                 narrationAccum += delta;
                 void emitNarrationChunk(iterStepId, delta, narrationAccum);
+              },
+              onToolArgsDelta: (toolName, argsDelta, argsFull) => {
+                void emitWritingChunk(iterStepId, toolName, argsDelta, argsFull);
               },
             });
             await emitNarrationEnd(iterStepId);
@@ -2077,13 +2156,11 @@ ${featureGating}`;
       totalCacheReadTokens += cached;
       // totalCacheWriteTokens stays 0 — OpenRouter handles cache writes transparently
 
-      const markupMultiplier = tierConfig.markupMultiplier ?? runtimeConfig.getMarkupMultiplier();
       liveCostUsd =
         (totalInputTokens * agentPricing.input +
         totalOutputTokens * agentPricing.output +
         totalCacheWriteTokens * agentPricing.cache_write +
-        totalCacheReadTokens * agentPricing.cache_read) *
-        markupMultiplier;
+        totalCacheReadTokens * agentPricing.cache_read);
 
       const assistantMsg = response.choices?.[0]?.message;
       const assistantToolCalls = assistantMsg?.tool_calls || [];
@@ -2557,7 +2634,7 @@ Pick one and proceed.`;
                 const routeError = this.validateBackendRoutes(projectDir, projectId, runKind, technicalPlan);
                 validatorResults.push({ stage: "deploy_to_dev", ok: !routeError, message: routeError || undefined });
                 if (routeError) {
-                  result = `Error: ${routeError} Fix backend/routes.js, then call deploy_to_dev() again.`;
+                  result = `Error: ${routeError} Fix the referenced project files, then call deploy_to_dev() again.`;
                   deployCount--;
                   break;
                 }
@@ -2766,7 +2843,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
 
               try { await setRuntimeMenuButton(); } catch {}
 
-              const readinessError = this.validateFinishReadiness(runKind, mode, technicalPlan, testsRun, deployed, testResults, wsCoverage);
+              const readinessError = this.validateFinishReadiness(runKind, mode, technicalPlan, testsRun, deployed, testResults, wsCoverage, !!botToken);
               if (readinessError) {
                 if (deployLocked) {
                   summary = `Build blocked after deploy limit was reached.\n\n${readinessError}\n\nNo further edits can be deployed or verified in this run. Start a fresh run after addressing the last failing test setup or code issue.`;
@@ -2829,7 +2906,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
 
               try { await setRuntimeMenuButton(); } catch {}
 
-              const readinessError = this.validateFinishReadiness(runKind, mode, technicalPlan, testsRun, deployed, testResults, wsCoverage);
+              const readinessError = this.validateFinishReadiness(runKind, mode, technicalPlan, testsRun, deployed, testResults, wsCoverage, !!botToken);
               if (readinessError) {
                 if (deployLocked) {
                   summary = `Build blocked after deploy limit was reached.\n\n${readinessError}\n\nNo further edits can be deployed or verified in this run. Start a fresh run after addressing the last failing test setup or code issue.\n\nAgent summary before blocking:\n${summary}`;
@@ -2878,68 +2955,46 @@ The user will visually verify. If this was your final action, in your NEXT turn 
               return { summary, shortSummary, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath2, commitNum, commitDir };
             }
 
-            case "configure_bot": {
-              // Atomic telegram_api calls. Replaces the model splitting them
-              // across 3-4 iterations (~$0.20 wasted on each first build).
-              // Also mirrors the chosen `name` into the project row so the
-              // mini-app's app list shows the meaningful name (e.g. "Crypto
-              // Wallet") instead of the placeholder used at project creation
-              // time ("New App").
-              if (!botToken) {
-                result = "Error: bot token not available for this project";
+            case "configure_app": {
+              if (mode !== "new") {
+                result = "Error: configure_app is first-build only. Do not call it during updates.";
                 break;
               }
-              await progress({ action: "🤖 Configuring bot", detail: "name + description + menu", percent: currentPercent });
+              if (configuredApp) {
+                result = "Error: configure_app was already called in this build. Continue with code/deploy/finish.";
+                break;
+              }
+              await progress({ action: "⚙️ Configuring app", detail: "name + descriptions + bot profile", percent: currentPercent });
               const name = (args.name || "").toString().trim().substring(0, 64);
-              const description = (args.description || "").toString().substring(0, 512);
-              const shortDescription = (args.shortDescription || "").toString().substring(0, 120);
-              // Text Bot projects must NEVER expose a Mini App menu button —
-              // there's no generated frontend deployed for them, so a `web_app` button
-              // would 404 (or hit the textBot fallback page). Force-clear the
-              // menu button instead, regardless of what the agent passed in.
-              // The textBot.md rules also tell the agent to send `""`, but the
-              // platform is the source of truth here.
-              const isTextBot = runPrefs.kind === "textBot";
-              const menuButtonText = (args.menuButtonText ?? "Launch App").toString().substring(0, 32);
-              const appUrl = `${config.baseUrl}/app/${projectId}/`;
-              const callApi = async (method: string, params: any) => {
-                const resp = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify(params),
-                });
-                return { method, status: resp.status, body: await resp.text() };
-              };
+              const description = (args.description || "").toString().substring(0, 120);
+              const longDescription = (args.longDescription || "").toString().substring(0, 512);
+              const menuButtonText = runPrefs.kind === "textBot"
+                ? ""
+                : (args.menuButtonText ?? "Launch App").toString().substring(0, 32);
               try {
-                const menuButtonPayload = isTextBot
-                  ? { menu_button: { type: "default" as const } }
-                  : { menu_button: { type: "web_app" as const, text: menuButtonText, web_app: { url: appUrl } } };
-                const calls: Array<Promise<{ method: string; status: number; body: string }>> = [
-                  callApi("setMyDescription", { description }),
-                  callApi("setMyShortDescription", { short_description: shortDescription }),
-                  callApi("setChatMenuButton", menuButtonPayload),
+                await projectService.updateProjectAppConfig(projectId, {
+                  name,
+                  description,
+                  longDescription,
+                  menuButtonText,
+                });
+                configuredApp = true;
+                const lines = [
+                  `db.project.name updated to "${name}"`,
+                  "db.project.appDescription saved",
+                  "db.project.appLongDescription saved",
+                  "db.project.appMenuButtonText saved",
                 ];
-                if (name) {
-                  calls.push(callApi("setMyName", { name }));
+                if (botToken) {
+                  const botResult = await projectService.configureProjectBotFromAppConfig(projectId, botToken);
+                  lines.push(...botResult.lines);
+                  result = `OK: App config saved to Apps Father DB and bot configured.\n${lines.join("\n")}`;
+                } else {
+                  lines.push("bot token not connected yet; saved config will be applied automatically when the bot is linked");
+                  result = `OK: App config saved to Apps Father DB.\n${lines.join("\n")}`;
                 }
-                const results = await Promise.all(calls);
-                const lines = results.map(r => `${r.method}: ${r.status} ${r.body.substring(0, 200)}`);
-
-                // Mirror name to Apps Father DB so the project list shows it.
-                // Failure here must not fail the whole tool — telegram side is
-                // authoritative for the bot, our DB is just a cached display.
-                if (name) {
-                  try {
-                    await projectService.updateProjectName(projectId, name);
-                    lines.push(`db.project.name updated to "${name}"`);
-                  } catch (dbErr: any) {
-                    lines.push(`db.project.name update failed: ${dbErr.message}`);
-                  }
-                }
-
-                result = `OK: Bot configured atomically.\n${lines.join("\n")}`;
               } catch (err: any) {
-                result = `Error configuring bot: ${err.message}`;
+                result = `Error configuring app: ${err.message}`;
               }
               break;
             }
@@ -3280,7 +3335,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
       case "set_progress": return `${args.percent}%`;
       case "ask_user": return (args.question || "").substring(0, 60);
       case "finish": return (args.shortSummary || "").split("\n")[0].substring(0, 80);
-      case "configure_bot": return `name=${args.name || "(none)"}, desc=${(args.description || "").substring(0, 30)}..., menu=${args.menuButtonText || "Launch App"}`;
+      case "configure_app": return `name=${args.name || "(none)"}, desc=${(args.description || "").substring(0, 30)}..., menu=${args.menuButtonText || "Launch App"}`;
       case "set_bot_commands": return `${(args.commands || []).length} command(s)`;
       case "done": return (args.summary || "").substring(0, 80);
       case "short_summary": return (args.text || "").substring(0, 80);
@@ -3512,7 +3567,10 @@ The user will visually verify. If this was your final action, in your NEXT turn 
     if (prevPassport) inputParts.push(`PREVIOUS PASSPORT (for reference — preserve style and key decisions, but update everything from actual code):\n${prevPassport.substring(0, 8000)}`);
     if (doneSummary) inputParts.push(`LATEST CHANGES (commit #${commitNum}):\n${doneSummary.substring(0, 3000)}`);
 
-    const passportCfg = runtimeConfig.getModelConfig("passport");
+    const passportTierId = (await prisma.project.findUnique({ where: { id: projectId }, select: { userId: true } })
+      .then(p => p ? prisma.user.findUnique({ where: { id: p.userId }, select: { performanceTier: true } }) : null)
+      .catch(() => null))?.performanceTier;
+    const passportCfg = runtimeConfig.getModelConfig("passport", passportTierId);
     const client = getOpenRouterClient();
     const response = await client.chat.completions.create({
       model: passportCfg.modelId,
@@ -3567,14 +3625,13 @@ What the app can do right now. What features are complete, what's partially done
     const usage = response.usage as any;
     const inTok = usage?.prompt_tokens || 0;
     const outTok = usage?.completion_tokens || 0;
-    const markupMul = passportCfg.markupMultiplier ?? runtimeConfig.getMarkupMultiplier();
     const livePricing = await getModelPricing(passportCfg.modelId);
     const staticPricing = MODEL_PRICING[passportCfg.modelId] || { input: 0, output: 0, cache_write: 0, cache_read: 0 };
     const p = {
       input: livePricing?.promptPerToken ?? staticPricing.input,
       output: livePricing?.completionPerToken ?? staticPricing.output,
     };
-    const costUsd = (inTok * p.input + outTok * p.output) * markupMul;
+    const costUsd = inTok * p.input + outTok * p.output;
 
     fs.writeFileSync(path.join(commitDir, "passport.md"), passportText, "utf-8");
 

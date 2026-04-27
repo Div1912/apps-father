@@ -11,6 +11,7 @@ import {
   listUsers,
   getUserDetail,
   setUserBalance,
+  setUserCredits,
   updateUserPartner,
   patchUser,
   setUserTags,
@@ -89,7 +90,7 @@ router.get("/api/stats", async (req: Request, res: Response) => {
     if (to)   createdAtFilter.lte = to;
     const dateWhere = (from || to) ? { createdAt: createdAtFilter } : {};
 
-    const [userCount, projectCount, totalSpent, totalTopups] = await Promise.all([
+    const [userCount, projectCount, totalSpent, totalTopups, paymentCount] = await Promise.all([
       prisma.user.count({ where: dateWhere }),
       prisma.project.count({ where: dateWhere }),
       prisma.usageLog.aggregate({ _sum: { costUsd: true }, where: dateWhere }),
@@ -97,6 +98,7 @@ router.get("/api/stats", async (req: Request, res: Response) => {
         _sum: { amountUsd: true },
         where: { status: "confirmed", ...dateWhere },
       }),
+      prisma.payment.count({ where: { status: "confirmed", ...dateWhere } }),
     ]);
 
     // Recent activity always shows the latest 20 — date range applies to KPIs
@@ -115,6 +117,7 @@ router.get("/api/stats", async (req: Request, res: Response) => {
       projectCount,
       totalSpent: Number(totalSpent._sum.costUsd || 0),
       totalTopups: Number(totalTopups._sum.amountUsd || 0),
+      paymentCount,
       recentUsage: recentUsage.map(u => ({
         id: u.id,
         username: u.user.username || u.user.firstName || `User ${u.userId}`,
@@ -181,6 +184,22 @@ router.post("/api/users/:id/balance", async (req: Request<{id: string}>, res: Re
       return;
     }
     const result = await setUserBalance(userId, action, amount);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post("/api/users/:id/credits", async (req: Request<{id: string}>, res: Response) => {
+  try {
+    const userId = parseInt(req.params.id, 10);
+    const action = req.body?.action;
+    const credits = parseFloat(req.body?.credits);
+    if (action !== "set" && action !== "add") {
+      res.status(400).json({ error: "action must be 'set' or 'add'" });
+      return;
+    }
+    const result = await setUserCredits(userId, action, credits);
     res.json(result);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -880,6 +899,81 @@ router.get("/api/stats/operations", async (req: Request, res: Response) => {
   }
 });
 
+// ── Tier stats and config ──
+
+router.get("/api/stats/tiers", async (req: Request, res: Response) => {
+  try {
+    const from = parseIsoQuery(req.query.from);
+    const to   = parseIsoQuery(req.query.to);
+
+    const where: any = {};
+    if (from || to) {
+      where.createdAt = {};
+      if (from) where.createdAt.gte = from;
+      if (to)   where.createdAt.lte = to;
+    }
+
+    const rows = await prisma.usageLog.groupBy({
+      by: ["tierId", "operation"],
+      where,
+      _count: { id: true },
+      _sum: { creditsCharged: true, costUsd: true },
+    });
+
+    const tierStats: Record<string, any> = {};
+    for (const row of rows) {
+      const tierId = row.tierId || "unknown";
+      if (!tierStats[tierId]) tierStats[tierId] = { tierId, operations: {} };
+      tierStats[tierId].operations[row.operation] = {
+        count: row._count.id,
+        creditsCharged: row._sum.creditsCharged || 0,
+        costUsd: Number(row._sum.costUsd || 0),
+      };
+    }
+
+    // Credit totals by user
+    const creditSummary = await prisma.user.aggregate({
+      _sum: { credits: true },
+    });
+
+    const usageSum = await prisma.usageLog.aggregate({
+      where,
+      _sum: { creditsCharged: true, costUsd: true },
+    });
+
+    res.json({
+      tiers: Object.values(tierStats),
+      totalCreditsOutstanding: creditSummary._sum.credits || 0,
+      totalCreditsSpent: usageSum._sum.creditsCharged || 0,
+      totalRealCostUsd: Number(usageSum._sum.costUsd || 0),
+      from: from?.toISOString() || null,
+      to: to?.toISOString() || null,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET current tier config
+router.get("/api/config/tiers", async (_req: Request, res: Response) => {
+  res.json({ tiers: runtimeConfig.getAllTiers() });
+});
+
+// POST update tier config (full replacement of performanceTiers array)
+router.post("/api/config/tiers", async (req: Request, res: Response) => {
+  try {
+    const { tiers } = req.body;
+    if (!Array.isArray(tiers)) {
+      res.status(400).json({ error: "tiers must be an array" });
+      return;
+    }
+    runtimeConfig.update({ performanceTiers: tiers });
+    res.json({ ok: true, tiers: runtimeConfig.getAllTiers() });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get("/api/stats/sources/users", async (req: Request, res: Response) => {
   try {
     const result = await listSourceUsers({
@@ -921,6 +1015,7 @@ router.get("/api/vouchers", async (_req: Request, res: Response) => {
       id: v.id,
       code: v.code,
       amountUsd: Number(v.amountUsd),
+      credits: v.credits,
       maxUses: v.maxUses,
       usedCount: v.usedCount,
       active: v.active,
@@ -934,17 +1029,18 @@ router.get("/api/vouchers", async (_req: Request, res: Response) => {
 
 router.post("/api/vouchers", async (req: Request, res: Response) => {
   try {
-    const { amount, maxUses } = req.body;
-    const val = parseFloat(amount);
+    const { credits, maxUses } = req.body;
+    const cr = parseInt(credits, 10);
     const uses = parseInt(maxUses, 10);
-    if (isNaN(val) || val <= 0) { res.status(400).json({ error: "Invalid amount" }); return; }
+    if (isNaN(cr) || cr <= 0) { res.status(400).json({ error: "Invalid credits" }); return; }
     if (isNaN(uses) || uses <= 0) { res.status(400).json({ error: "Invalid maxUses" }); return; }
 
     const code = "v_" + crypto.randomBytes(4).toString("hex");
     const voucher = await prisma.voucher.create({
       data: {
         code,
-        amountUsd: new Decimal(val.toFixed(4)),
+        amountUsd: new Decimal("0"),
+        credits: cr,
         maxUses: uses,
       },
     });
@@ -952,6 +1048,7 @@ router.post("/api/vouchers", async (req: Request, res: Response) => {
       id: voucher.id,
       code: voucher.code,
       amountUsd: Number(voucher.amountUsd),
+      credits: voucher.credits,
       maxUses: voucher.maxUses,
       usedCount: 0,
       active: true,
@@ -1050,6 +1147,105 @@ router.get("/api/openrouter/models/:author/:slug/endpoints", authMiddleware, asy
     res.json(data);
   } catch (err: any) {
     res.status(502).json({ error: `Failed to fetch endpoints: ${err.message}` });
+  }
+});
+
+// ── Bundles CRUD ─────────────────────────────────────────────────────────────
+
+router.get("/api/bundles", async (_req: Request, res: Response) => {
+  try {
+    const bundles = await prisma.bundle.findMany({ orderBy: { sortOrder: "asc" } });
+    res.json(bundles.map((b) => ({
+      id: b.id,
+      name: b.name,
+      credits: b.credits,
+      bonusCredits: b.bonusCredits,
+      priceUsd: Number(b.priceUsd),
+      discount: b.discount,
+      isLimited: b.isLimited,
+      limitTotal: b.limitTotal,
+      purchaseCount: b.purchaseCount,
+      isActive: b.isActive,
+      sortOrder: b.sortOrder,
+      createdAt: b.createdAt,
+    })));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/api/bundles", async (req: Request, res: Response) => {
+  try {
+    const { name, credits, bonusCredits, priceUsd, discount, isLimited, limitTotal, isActive, sortOrder } = req.body;
+    if (!name || !credits || !priceUsd) {
+      res.status(400).json({ error: "name, credits, and priceUsd are required" });
+      return;
+    }
+    const id = `bundle_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const bundle = await prisma.bundle.create({
+      data: {
+        id,
+        name: String(name),
+        credits: parseInt(credits, 10),
+        bonusCredits: parseInt(bonusCredits || 0, 10),
+        priceUsd: new Decimal(Number(priceUsd).toFixed(4)),
+        discount: parseInt(discount || 0, 10),
+        isLimited: Boolean(isLimited),
+        limitTotal: isLimited && limitTotal ? parseInt(limitTotal, 10) : null,
+        isActive: isActive !== false,
+        sortOrder: parseInt(sortOrder || 0, 10),
+      },
+    });
+    res.json(bundle);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put("/api/bundles/:id", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const { name, credits, bonusCredits, priceUsd, discount, isLimited, limitTotal, isActive, sortOrder } = req.body;
+    const bundle = await prisma.bundle.update({
+      where: { id: req.params.id },
+      data: {
+        ...(name !== undefined && { name: String(name) }),
+        ...(credits !== undefined && { credits: parseInt(credits, 10) }),
+        ...(bonusCredits !== undefined && { bonusCredits: parseInt(bonusCredits, 10) }),
+        ...(priceUsd !== undefined && { priceUsd: new Decimal(Number(priceUsd).toFixed(4)) }),
+        ...(discount !== undefined && { discount: parseInt(discount, 10) }),
+        ...(isLimited !== undefined && { isLimited: Boolean(isLimited) }),
+        ...(limitTotal !== undefined && { limitTotal: isLimited && limitTotal ? parseInt(limitTotal, 10) : null }),
+        ...(isActive !== undefined && { isActive: Boolean(isActive) }),
+        ...(sortOrder !== undefined && { sortOrder: parseInt(sortOrder, 10) }),
+      },
+    });
+    res.json(bundle);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete("/api/bundles/:id", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    await prisma.bundle.update({
+      where: { id: req.params.id },
+      data: { isActive: false },
+    });
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/api/bundles/:id/reset-count", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const bundle = await prisma.bundle.update({
+      where: { id: req.params.id },
+      data: { purchaseCount: 0 },
+    });
+    res.json({ ok: true, purchaseCount: bundle.purchaseCount });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 

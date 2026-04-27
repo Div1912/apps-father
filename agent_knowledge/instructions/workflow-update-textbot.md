@@ -20,4 +20,4 @@ WORKFLOW — UPDATE TEXT BOT (Kind = textBot, backend-only)
 
 7. Verify with simulate_telegram for the changed flow, then server_logs.
 
-8. Final turn: call finish(shortSummary, summary) — ONE atomic call. Do NOT call configure_bot during updates.
+8. Final turn: call finish(shortSummary, summary) — ONE atomic call. Do NOT call configure_app during updates.

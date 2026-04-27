@@ -9,7 +9,7 @@ The bot token is ALREADY linked at the moment you start planning (the user creat
 - BUILD only `backend/routes.js`. Do NOT create `frontend/index.html`, `frontend/app.js`, `frontend/styles.css`, or any HTML/CSS file. If you find yourself writing `<html>` you have misunderstood the project.
 - `routes.js` MUST export `router.post("/bot-webhook", async (req, res) => { ... })` — exact path string, no variants. The platform forwards every Telegram `update` to this route. See the bot-management skill for the full webhook contract.
 - `/start` is the entry point. Always answer it with a welcome message and the initial keyboard for the user's first state.
-- `configure_bot(name, description, shortDescription, menuButtonText)` — pass `menuButtonText: ""` (empty string) and DO NOT set `menuButtonUrl`. Text bots have no Mini App, so the chat menu button must stay on Telegram's default ("Menu" / commands list). The platform clears any stale menu button automatically when `kind === "textBot"`, but you should also pass `""` explicitly so the intent is in the prompt and the agent log.
+- `configure_app(name, description, longDescription, menuButtonText)` — pass `menuButtonText: ""` (empty string) and DO NOT set `menuButtonUrl`. Text bots have no Mini App, so the chat menu button must stay on Telegram's default ("Menu" / commands list). The platform clears any stale menu button automatically when `kind === "textBot"`, but you should also pass `""` explicitly so the intent is in the prompt and the agent log.
 - `set_bot_commands({ commands: [...] })` for the slash-command menu (`/start`, `/help`, plus whatever the bot does). Always include `/start` and `/help`.
 - Use `db.botToken` to call Telegram Bot API (`https://api.telegram.org/bot${db.botToken}/sendMessage` etc.) directly with `fetch`. Do NOT install a bot library — fetch is enough and it keeps the bundle tiny.
 
@@ -146,10 +146,10 @@ Always handle the deep-link parameter even if the bot doesn't use one yet — lo
 In step 8 of the workflow, call:
 
 ```
-configure_bot({
+configure_app({
   name: "Pizza Order Bot",                                  // user-facing display name
-  description: "Order pizza in two taps. Cash, card, Stars.", // shown in profile
-  shortDescription: "Pizza in two taps.",                    // shown in shared link previews
+  description: "Pizza in two taps.",                        // shown in shared link previews
+  longDescription: "Order pizza in two taps. Cash, card, Stars.", // shown in profile
   menuButtonText: ""                                          // explicit clear; platform also enforces
 })
 ```

@@ -84,7 +84,7 @@ There is NO Mini App, NO frontend, NO HTML. The ONLY file you produce is `backen
      const esc = (s) => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
      ```
 
-5. configure_bot(name, description, shortDescription, menuButtonText: "")
+5. configure_app(name, description, longDescription, menuButtonText: "")
    - menuButtonText MUST be "" (empty string). Text bots have no Mini App.
    - ONE atomic call. First build only.
 

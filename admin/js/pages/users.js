@@ -18,7 +18,7 @@
   const SORTS = [
     { id: "newest",       label: "Newest" },
     { id: "oldest",       label: "Oldest" },
-    { id: "balance_desc", label: "Highest balance" },
+    { id: "balance_desc", label: "Highest credits" },
     { id: "spent_desc",   label: "Highest spend" },
     { id: "apps_desc",    label: "Most apps" },
   ];
@@ -98,8 +98,8 @@
                   <th></th>
                   <th>Name</th>
                   <th>Telegram ID</th>
-                  <th style="text-align:right">Balance</th>
-                  <th style="text-align:right">Spent</th>
+                  <th style="text-align:right">Credits</th>
+                  <th style="text-align:right">Spent (cr)</th>
                   <th style="text-align:right">Apps</th>
                   <th>Tags</th>
                   <th>Joined</th>
@@ -119,8 +119,8 @@
                         </div>
                       </td>
                       <td><code style="color:var(--admin-muted)">${Fmt.escapeHtml(u.telegramId)}</code></td>
-                      <td style="text-align:right;${Number(u.balance) > 0 ? "color:var(--success-color)" : ""}">${Fmt.money(u.balance)}</td>
-                      <td style="text-align:right;color:var(--admin-muted)">${Fmt.money(u.totalSpent || 0)}</td>
+                      <td style="text-align:right">${Fmt.creditsHtml(u.credits, Number(u.credits) > 0 ? '#4ade80' : 'currentColor')}</td>
+                      <td style="text-align:right;color:var(--admin-muted)">${Fmt.creditsHtml(u.totalSpent || 0)}</td>
                       <td style="text-align:right">${u.projectCount}</td>
                       <td>${tags.length ? tags.map(t => `<span class="badge" style="margin-right:3px">${Fmt.escapeHtml(t)}</span>`).join("") : '<span style="color:var(--admin-muted)">—</span>'}</td>
                       <td style="color:var(--admin-muted)" title="${Fmt.escapeHtml(Fmt.date(u.createdAt))}">${Fmt.escapeHtml(Fmt.relativeTime(u.createdAt))}</td>

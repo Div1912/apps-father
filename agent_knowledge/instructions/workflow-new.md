@@ -24,8 +24,8 @@ Follow the standard App workflow below.
 
 6. shell("npm install <pkg>") if an external package is genuinely needed.
 
-7. configure_bot(name, description, shortDescription, menuButtonText)
-   — ONLY if db.botToken is non-empty. ONE atomic call. First build only.
+7. configure_app(name, description, longDescription, menuButtonText)
+   — ONE atomic call. First build only. Saves to Apps Father DB first and configures the bot now or when it is later linked.
 
 8. fetch_url to read docs only when you need to learn an unfamiliar external API.
 

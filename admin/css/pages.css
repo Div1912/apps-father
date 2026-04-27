@@ -1084,7 +1084,182 @@
   background: #1b5e20;
   color: #a5d6a7;
 }
+/* ── Performance Tier Editor ─────────────────────────────────────────────── */
+.tier-editor-card {
+  border-radius: 12px;
+    background: #f4f6fa;
+    overflow: hidden;
+    border: 1px solid #e2e8f0;
+}
+.tier-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: rgba(255,255,255,0.03);
+  border-bottom: 1px solid var(--admin-border);
+}
+.tier-id-badge {
+  font-size: 12px;
+  font-weight: 700;
+  font-family: monospace;
+  background: rgba(255,255,255,0.08);
+  border-radius: 6px;
+  padding: 3px 8px;
+  color: var(--admin-text);
+}
+.tier-section {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--admin-border);
+}
+.tier-section:last-child { border-bottom: none; }
+.tier-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--admin-text-muted);
+  margin-bottom: 10px;
+}
+/* Lang tabs */
+.lang-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.lang-tab {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--admin-border);
+  background: transparent;
+  color: var(--admin-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.lang-tab.active {
+  background: var(--admin-accent, #4f8ef7);
+  border-color: var(--admin-accent, #4f8ef7);
+  color: #fff;
+}
+.tier-i18n-fields { display: flex; flex-direction: column; gap: 0; }
+.i18n-group { display: flex; flex-direction: column; gap: 6px; }
+.tier-name-input, .tier-desc-input {
+  width: 100%;
+  font-size: 13px;
+  resize: vertical;
+}
+/* Stats row */
+.tier-stats-row {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+.tier-stat-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 160px;
+}
+.tier-stat-group label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--admin-text-muted);
+  width: 56px;
+  flex-shrink: 0;
+}
+.tier-stat-range {
+  flex: 1;
+  accent-color: var(--admin-accent, #4f8ef7);
+  cursor: pointer;
+}
+.tier-stat-val {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--admin-text);
+  width: 20px;
+  text-align: right;
+  flex-shrink: 0;
+}
+/* Models table inside tier card */
+.tier-models-wrap { overflow-x: auto; }
+.tier-models-table {
+  min-width: 900px;
+}
+/* Credit pricing grid */
+.tier-pricing-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+}
+.tier-pricing-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tier-pricing-item label {
+  font-size: 12px;
+  color: var(--admin-text-muted);
+  width: 72px;
+  text-transform: capitalize;
+}
+.tier-pricing-input {
+  width: 72px;
+  font-size: 13px;
+  text-align: right;
+}
+.pricing-unit {
+  font-size: 11px;
+  color: var(--admin-text-muted);
+}
+/* Remove button */
+.btn-danger-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+  background: rgba(220,38,38,0.12);
+  border: 1px solid rgba(220,38,38,0.3);
+  color: #f87171;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.btn-danger-sm:hover {
+  background: rgba(220,38,38,0.25);
+}
+
 .models-toast.error {
   background: #b71c1c;
   color: #ffcdd2;
 }
+
+/* ── Bundle admin styles ─────────────────────────────────────────────────── */
+.bundle-preview-card {
+  background: var(--surface-alt, rgba(255,255,255,0.05));
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
+  border-radius: 12px;
+  padding: 12px 14px;
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.bundle-preview-tag {
+  display: inline-block;
+  background: linear-gradient(90deg, #818cf8, #6366f1);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  width: fit-content;
+}
+.bundle-preview-name { font-weight: 700; font-size: 14px; }
+.bundle-preview-credits { font-size: 13px; }
+.bundle-preview-price { font-size: 13px; }
+.bundle-preview-limit { font-size: 11px; opacity: 0.5; }
+
+.row-inactive td { opacity: 0.5; }
+.table-actions { display: flex; gap: 6px; flex-wrap: wrap; }
