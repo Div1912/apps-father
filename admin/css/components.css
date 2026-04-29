@@ -195,11 +195,13 @@
   color: var(--admin-text);
   letter-spacing: 0.2px;
 }
-.badge.success, .badge.warn, .badge.danger, .badge.accent { border-color: transparent; }
-.badge.success { background: var(--success-bg-color); color: var(--success-color); }
-.badge.warn    { background: var(--warning-bg-color); color: var(--warning-text-color); }
-.badge.danger  { background: var(--danger-bg-color);  color: var(--danger-text-color); }
-.badge.accent  { background: var(--accent-bg-color);  color: var(--accent-color); }
+.badge.success, .badge.ok,   .badge.warn, .badge.danger, .badge.err,
+.badge.accent, .badge-info  { border-color: transparent; }
+.badge.success, .badge.ok   { background: var(--success-bg-color); color: var(--success-color); }
+.badge.warn                  { background: var(--warning-bg-color); color: var(--warning-text-color); }
+.badge.danger,  .badge.err  { background: var(--danger-bg-color);  color: var(--danger-text-color); }
+.badge.accent                { background: var(--accent-bg-color);  color: var(--accent-color); }
+.badge-info                  { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: rgba(99,156,255,0.12); color: #9ec5ff; }
 .badge .dot {
   width: 6px; height: 6px;
   border-radius: 50%;

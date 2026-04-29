@@ -28,6 +28,8 @@
         { key: "referralBonusPercent", label: "Referral bonus (%)",        type: "number", step: "1",   help: "% of purchased credits given to the referrer as credits (default 15)." },
         { key: "referralBonusUsd",     label: "Referral bonus USD (legacy)",type: "number", step: "0.5",help: "Legacy USD referral bonus — no longer used." },
         { key: "partnerDefaultPercent",label: "Partner default %",         type: "number", step: "1",   help: "Default revenue share for new partners (% of deposit USD)." },
+        { key: "cashbackEnabled",      label: "Enable cashback system",     type: "bool",               help: "Master switch. When off, the rating button is hidden in the mini-app and the /feedback endpoint is disabled." },
+        { key: "cashbackPercent",      label: "Feedback cashback (%)",     type: "number", step: "1",   help: "% of credits charged refunded to the user when they submit a feedback rating in the mini-app (0–100, default 50)." },
       ],
     },
     {
@@ -68,7 +70,44 @@
         { key: "filesBrowserProjectsRoot", label: "Projects root", type: "text", help: "Server path the browser exposes, e.g. /opt/apps-father/projects" },
       ],
     },
+    {
+      title: "OpenRouter — Production",
+      desc:  "Main key used by the user-facing agent",
+      fields: [
+        { key: "openrouterApiKey", label: "OpenRouter API key", type: "password", help: "Used by all production agent runs (plan / codegen / ask)." },
+      ],
+    },
+    {
+      title: "Agent Training",
+      desc:  "Dedicated key + model used ONLY by the Agent Feedback → Run Analysis pipeline. Required — analysis will refuse to run without it (no silent fallback to the production key).",
+      fields: [
+        { key: "trainingOpenrouterApiKey", label: "Training OpenRouter API key", type: "password",        help: "REQUIRED for Run Analysis. Use a separate OpenRouter key so training spend is isolated from production user runs." },
+        { key: "trainingModel",            label: "Training model",              type: "model-picker",   help: "OpenRouter model id used for the analyzer. Empty = default (anthropic/claude-sonnet-4-5). Tool-calling capable models recommended (Claude Sonnet/Opus, GPT-4.x/5.x)." },
+        { key: "trainingProvider",         label: "Training provider routing",   type: "provider-picker", help: "Force OpenRouter to route the analyzer to a specific provider (e.g. \"Anthropic\"). Empty = Auto." },
+      ],
+    },
   ];
+
+  // Common providers shown in the provider-picker datalist. Mirrors the list
+  // used on the Models page. Users can still type any custom provider name.
+  const PROVIDER_OPTIONS = [
+    "Anthropic","OpenAI","Google","Meta","Mistral","DeepSeek","xAI","Qwen",
+    "Together","Fireworks","DeepInfra","Novita","Groq","Minimax",
+  ];
+
+  // Cached OR model list (loaded once per page render).
+  let orModelsCache = null;
+  async function loadOrModels() {
+    if (orModelsCache) return orModelsCache;
+    try {
+      const data = await Api.request("/openrouter/models");
+      orModelsCache = (data?.data || []).map(m => ({ id: m.id, name: m.name || m.id }));
+    } catch (err) {
+      console.warn("[config] OR models fetch failed:", err.message);
+      orModelsCache = [];
+    }
+    return orModelsCache;
+  }
 
   function getPath(obj, path) {
     return path.split(".").reduce((o, k) => (o == null ? o : o[k]), obj);
@@ -140,7 +179,10 @@
               let v;
               if (f.type === "bool") v = el.checked;
               else if (f.type === "select") v = el.value;
-              else if (f.type === "text") v = el.value;
+              else if (
+                f.type === "text" || f.type === "password" ||
+                f.type === "model-picker" || f.type === "provider-picker"
+              ) v = el.value;
               else v = el.value === "" ? null : Number(el.value);
               if (v !== null) setPath(payload, f.key, v);
             }
@@ -154,6 +196,17 @@
 
         host.querySelector("#cfg-save").addEventListener("click", onSave);
         host.querySelector("#cfg-save-top").addEventListener("click", onSave);
+
+        // Hydrate any model-picker datalists that need the live OR catalog.
+        const modelPickers = host.querySelectorAll('datalist[data-or-models="1"]');
+        if (modelPickers.length) {
+          loadOrModels().then(models => {
+            const html = models.map(m =>
+              `<option value="${Fmt.escapeHtml(m.id)}">${Fmt.escapeHtml(m.name)}</option>`
+            ).join("");
+            modelPickers.forEach(dl => { dl.innerHTML = html; });
+          });
+        }
       }
 
       host.querySelector("#cfg-reload").addEventListener("click", load);
@@ -179,6 +232,24 @@
     } else if (f.type === "text") {
       const v = value ?? "";
       inputHtml = `<input class="input" id="${id}" data-cfg-key="${safeKey}" type="text" value="${Fmt.escapeHtml(String(v))}" placeholder="${Fmt.escapeHtml(f.placeholder || "")}"/>`;
+    } else if (f.type === "password") {
+      const v = value ?? "";
+      inputHtml = `<input class="input" id="${id}" data-cfg-key="${safeKey}" type="password" value="${Fmt.escapeHtml(String(v))}" placeholder="${Fmt.escapeHtml(f.placeholder || "Paste API key…")}" autocomplete="new-password" spellcheck="false"/>`;
+    } else if (f.type === "model-picker") {
+      const v = value ?? "";
+      const dlId = `dl-${id}`;
+      inputHtml = `<input class="input" id="${id}" data-cfg-key="${safeKey}" list="${dlId}" type="text"
+        value="${Fmt.escapeHtml(String(v))}" placeholder="anthropic/claude-sonnet-4-5"
+        autocomplete="off" spellcheck="false"/>
+        <datalist id="${dlId}" data-or-models="1"></datalist>`;
+    } else if (f.type === "provider-picker") {
+      const v = value ?? "";
+      const dlId = `dl-${id}`;
+      const opts = '<option value="">Auto</option>' +
+        PROVIDER_OPTIONS.map(p => `<option value="${Fmt.escapeHtml(p)}"></option>`).join("");
+      inputHtml = `<input class="input" id="${id}" data-cfg-key="${safeKey}" list="${dlId}" type="text"
+        value="${Fmt.escapeHtml(String(v))}" placeholder="Auto" autocomplete="off" spellcheck="false"/>
+        <datalist id="${dlId}">${opts}</datalist>`;
     } else {
       const v = value ?? "";
       inputHtml = `<input class="input" id="${id}" data-cfg-key="${safeKey}" type="number" step="${Fmt.escapeHtml(f.step || "1")}" value="${Fmt.escapeHtml(String(v))}"/>`;

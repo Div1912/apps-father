@@ -9,24 +9,16 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS performance_tier TEXT NOT NULL DEFAUL
 ALTER TABLE users ALTER COLUMN credits SET DEFAULT 100;
 ALTER TABLE users ALTER COLUMN performance_tier SET DEFAULT 'tier_0';
 
--- 3. Convert existing USD balance → credits (50 credits per $1),
---    then ensure every user has at least 100 credits.
---    Guard with a marker table so this block runs exactly once.
---    (Drop and recreate the guard if a previous run left it behind in a
---    partially-applied state — safe because all statements are idempotent.)
-DROP TABLE IF EXISTS _welcome_credits_v1_done;
-
+-- 3. (One-time) Convert existing USD balance → credits (50 credits per $1).
+--    Guarded by a marker table so this block runs exactly once across all deploys.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = '_welcome_credits_v1_done') THEN
 
-    -- Convert USD balance to credits and merge with any existing credits,
-    -- then floor to the nearest integer. Guarantee at least 100 credits.
+    -- Convert USD balance to credits (merge with any existing credits).
     UPDATE users
-    SET credits = GREATEST(
-      100,
-      credits + GREATEST(0, FLOOR((balance)::numeric * 50)::int)
-    );
+    SET credits = credits + GREATEST(0, FLOOR((balance)::numeric * 50)::int)
+    WHERE balance > 0;
 
     -- Reset USD balance to 0 (already converted to credits).
     UPDATE users SET balance = 0 WHERE balance > 0;

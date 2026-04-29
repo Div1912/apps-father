@@ -15,7 +15,7 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <link href="bootstrap.min.css" rel="stylesheet">
   <link href="bootstrap-extra.css" rel="stylesheet">
-  <link href="styles.css?r=300" rel="stylesheet">
+  <link href="styles.css?r=310" rel="stylesheet">
   <script>
     window.op=window.op||function(){var n=[];return new Proxy(function(){arguments.length&&n.push([].slice.call(arguments))},{get:function(t,r){return"q"===r?n:function(){n.push([r].concat([].slice.call(arguments)))}} ,has:function(t,r){return"q"===r}}) }();
     window.op('init', {
@@ -293,6 +293,68 @@
       </div>
 
       <button class="pm-purchase-btn" id="pm-purchase-btn" data-i18n="pm_purchase_btn">Purchase</button>
+    </div>
+  </div>
+
+  <!-- ═══ AGENT RATING MODAL ═══ -->
+  <!-- ═══ RATING MODAL (tier-modal style) ═══ -->
+  <div id="rating-modal" class="rating-modal hidden" aria-hidden="true">
+    <div class="rating-modal-backdrop" id="rating-modal-backdrop"></div>
+    <div class="rating-modal-sheet" role="dialog" aria-labelledby="rating-modal-title">
+
+      <header class="rating-modal-header">
+        <button class="rating-modal-back" id="rating-modal-close" type="button" aria-label="Close">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+        </button>
+        <div class="rating-modal-header-text">
+          <h3 class="rating-modal-title" id="rating-modal-title" data-i18n="rating_title">Rate agent work</h3>
+          <p class="rating-modal-subtitle" data-i18n="rating_subtitle">Help us improve the agent</p>
+        </div>
+      </header>
+
+      <div class="rating-modal-body">
+
+        <div class="rating-attention" id="rating-attention" data-i18n="rating_attention">Please answer honestly. Your feedback helps us train the agent — fake "No" answers will be reviewed manually.</div>
+
+        <div class="rating-field-group">
+          <div class="rating-field-label" data-i18n="rating_q_correct">Did the agent complete your request correctly?</div>
+          <div class="rating-yn-row">
+            <button class="rating-yn-btn" id="rating-yes" data-i18n="rating_correct_yes">Yes</button>
+            <button class="rating-yn-btn" id="rating-no" data-i18n="rating_correct_no">No</button>
+          </div>
+        </div>
+
+        <div class="rating-field-group">
+          <div class="rating-field-label" data-i18n="rating_q_quality">Quality</div>
+          <div class="rating-score-row">
+            <input type="range" class="rating-score-input" id="rating-quality" min="0" max="10" value="8" />
+            <div class="rating-score-value" id="rating-quality-val">8</div>
+          </div>
+        </div>
+
+        <div class="rating-field-group">
+          <div class="rating-field-label" data-i18n="rating_q_speed">Speed</div>
+          <div class="rating-score-row">
+            <input type="range" class="rating-score-input" id="rating-speed" min="0" max="10" value="8" />
+            <div class="rating-score-value" id="rating-speed-val">8</div>
+          </div>
+        </div>
+
+        <div class="rating-desc-wrap hidden" id="rating-desc-wrap">
+          <div class="rating-field-group">
+            <div class="rating-field-label" data-i18n="rating_desc_label">What went wrong?</div>
+            <textarea class="rating-desc" id="rating-desc" rows="4" minlength="100" maxlength="2000" data-i18n-placeholder="rating_desc_placeholder" placeholder="Minimum 100 characters. Be specific so we can improve the agent."></textarea>
+            <div class="rating-desc-counter" id="rating-desc-counter">0 / 100</div>
+          </div>
+        </div>
+
+        <div class="rating-cashback-preview" id="rating-cashback-preview"></div>
+
+        <button class="rating-submit-btn" id="rating-submit-btn" disabled>
+          <span data-i18n="rating_submit">Submit rating</span>
+        </button>
+
+      </div>
     </div>
   </div>
 
@@ -1098,8 +1160,8 @@
     </div>
   </div>
 
-  <script src="i18n.js?r=300" defer></script>
-  <script src="app.js?r=300" defer></script>
+  <script src="i18n.js?r=310" defer></script>
+  <script src="app.js?r=310" defer></script>
   <script>
       function initAnalytics() {
         window.telegramAnalytics.init({

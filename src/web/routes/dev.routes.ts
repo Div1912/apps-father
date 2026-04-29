@@ -19,6 +19,31 @@ function rewriteApiPaths(content: string, projectId: string): string {
   return content;
 }
 
+// ── Dev Tools: Visual Editor + Bug Reporter ──────────────────────────────────
+// Logic lives in af-devtools.js. tsc doesn't copy .js assets, so deploy-full.ps1
+// manually copies src/web/routes/af-devtools.js → dist/web/routes/af-devtools.js.
+// We try __dirname first (compiled), then fall back to src/ for ts-node local dev.
+function resolveDevtoolsPath(): string {
+  const fromDist = path.join(__dirname, "af-devtools.js");
+  if (fs.existsSync(fromDist)) return fromDist;
+  // ts-node: __dirname is already src/web/routes, but check src explicitly too
+  const fromSrc = path.join(process.cwd(), "src", "web", "routes", "af-devtools.js");
+  if (fs.existsSync(fromSrc)) return fromSrc;
+  return fromDist; // will throw a readable error on readFileSync if missing
+}
+const DEVTOOLS_JS_PATH = resolveDevtoolsPath();
+
+function buildDevToolsScript(projectId: string): string {
+  const safeId = projectId.replace(/[^a-zA-Z0-9_-]/g, "");
+  try {
+    const js = fs.readFileSync(DEVTOOLS_JS_PATH, "utf-8").replace(/__AFPID__/g, safeId);
+    return `<script id="_af_dt">\n${js}\n</script>`;
+  } catch (e) {
+    console.error("[DevTools] Could not load af-devtools.js from", DEVTOOLS_JS_PATH, e);
+    return ""; // degrade gracefully — app still loads, just without the editor
+  }
+}
+
 router.get("/:projectId/{*filePath}", async (req: Request, res: Response) => {
   const projectId = String(req.params.projectId);
   const rawParam = req.params.filePath;
@@ -38,7 +63,7 @@ router.get("/:projectId/{*filePath}", async (req: Request, res: Response) => {
     if (isIndex || !rawPath) {
       const indexPath = path.join(PROJECTS_DIR, projectId, "development", "frontend", "index.html");
       if (fs.existsSync(indexPath)) {
-        const html = await injectSplash(projectId, indexPath);
+        const html = await injectDevTools(projectId, indexPath);
         res.type("html").send(rewriteApiPaths(html, projectId));
         return;
       }
@@ -48,7 +73,7 @@ router.get("/:projectId/{*filePath}", async (req: Request, res: Response) => {
   }
 
   if (isIndex) {
-    const html = await injectSplash(projectId, fullPath);
+    const html = await injectDevTools(projectId, fullPath);
     res.type("html").send(rewriteApiPaths(html, projectId));
     return;
   }
@@ -62,18 +87,23 @@ router.get("/:projectId/{*filePath}", async (req: Request, res: Response) => {
   res.sendFile(fullPath);
 });
 
-async function injectSplash(projectId: string, htmlPath: string): Promise<string> {
+async function injectDevTools(projectId: string, htmlPath: string): Promise<string> {
   let html = fs.readFileSync(htmlPath, "utf-8");
 
+  const devTools = buildDevToolsScript(projectId);
+
+  let splash = SPLASH_HTML;
   try {
     const splashDisabled = await hasFeature(projectId, "disable_splash");
-    if (splashDisabled) return html;
+    if (splashDisabled) splash = "";
   } catch {}
 
+  const inject = (splash ? splash + "\n" : "") + devTools;
+
   if (html.includes("</body>")) {
-    html = html.replace("</body>", SPLASH_HTML + "\n</body>");
+    html = html.replace("</body>", inject + "\n</body>");
   } else {
-    html += SPLASH_HTML;
+    html += inject;
   }
   return html;
 }

@@ -9,6 +9,7 @@ import { config } from "../config";
 import appRoutes from "./routes/app.routes";
 import apiRoutes, { invalidateProjectDbCache } from "./routes/api.routes";
 import devRoutes from "./routes/dev.routes";
+import bucketRoutes from "./routes/bucket.routes";
 import devApiRoutes from "./routes/devapi.routes";
 import webhookRoutes from "./routes/webhook.routes";
 import adminRoutes from "./routes/admin.routes";
@@ -552,6 +553,7 @@ export function createWebServer() {
           totalCostUsd: p.totalCostUsd ? Number(p.totalCostUsd) : 0,
           features: p.features || "[]",
           releaseCommit: p.releaseCommit || null,
+          lastTaskId: (p as any).lastTaskId || null,
           avatarUrl,
         };
       }));
@@ -903,6 +905,8 @@ export function createWebServer() {
       const tier = runtimeConfig.getPerformanceTier(tierId);
       const allTiers = runtimeConfig.getAllTiers();
       const slotPriceCredits = runtimeConfig.get().slotPriceCredits || 30;
+      const cashbackPercent = Math.max(0, Math.min(100, runtimeConfig.get().cashbackPercent ?? 50));
+      const cashbackEnabled = runtimeConfig.get().cashbackEnabled !== false;
       res.json({
         balance: credits,         // credits is the main UI balance
         credits,
@@ -914,6 +918,8 @@ export function createWebServer() {
         firstDepositBonusPercent,
         creditsPerDollar,
         slotPriceCredits,
+        cashbackPercent,
+        cashbackEnabled,
         minTopupUsd: 2,
       });
     } catch (err) {
@@ -1258,6 +1264,13 @@ export function createWebServer() {
           progressMsgId = progressMsg.id;
           broadcastToProject(projectId, { type: "message", message: progressMsg });
 
+          // Announce the new task session ID so the mini app can show it immediately
+          const runningProject = await projectService.getProject(projectId);
+          const pendingTaskId = (runningProject as any)?.lastTaskId;
+          if (pendingTaskId) {
+            broadcastToProject(projectId, { type: "task_started", taskId: pendingTaskId });
+          }
+
           try {
             await projectService.updateProjectStatus(projectId, "building");
 
@@ -1318,10 +1331,12 @@ export function createWebServer() {
               onAskUser, lang, userCredits, userTierId,
             );
 
+            const project = await projectService.getProject(projectId);
+            const completedTaskId = (project as any)?.lastTaskId || undefined;
             const usage = await billingService.recordUsage(
               user.id, projectId, result.model,
               { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: result.cacheWriteTokens, cache_read_input_tokens: result.cacheReadTokens },
-              "update", userTierId, preCharge.creditsCharged > 0,
+              "update", userTierId, preCharge.creditsCharged > 0, completedTaskId,
             );
 
             await projectService.updateProjectStatus(projectId, "deployed");
@@ -1332,13 +1347,14 @@ export function createWebServer() {
 
             const history = chatService.getHistory(projectId, undefined, 1000);
             const updateNum = history.filter(m => m.type === "result").length + 1;
-            const project = await projectService.getProject(projectId);
             const appName = project?.name || "App";
 
             // Publish telegraph (fast) before showing result
             const changelogUrl = await publishReport(`${appName} — Update #${updateNum}`, result.summary, `Cost: $${usage.costUsd.toFixed(4)}`).catch(() => null);
 
             // Show result immediately with short summary + changelog
+            const cashbackEnabled = runtimeConfig.get().cashbackEnabled !== false;
+            const cashbackAvail = cashbackEnabled && (usage.creditsCharged ?? 0) > 0;
             if (progressMsgId) {
               chatService.updateMessage(projectId, progressMsgId, {
                 type: "result",
@@ -1346,6 +1362,10 @@ export function createWebServer() {
                 percent: 100,
                 costUsd: usage.costUsd,
                 balance: usage.newBalance,
+                creditsCharged: usage.creditsCharged,
+                commitNum: result.commitNum,
+                cashbackAvailable: cashbackAvail,
+                cashbackClaimed: false,
                 checklist: items,
                 metadata: { changelogUrl },
               });
@@ -1358,6 +1378,9 @@ export function createWebServer() {
               changelogUrl,
               costUsd: usage.costUsd,
               balance: usage.newBalance,
+              creditsCharged: usage.creditsCharged,
+              commitNum: result.commitNum,
+              cashbackAvailable: cashbackAvail,
             });
 
             notifyProcessDone(auth.telegramId!, appName, result.shortSummary, "update", lang);
@@ -1386,10 +1409,12 @@ export function createWebServer() {
           } catch (err: any) {
             if (err instanceof AgentAbortedError) {
               console.log(`[Chat API] Agent aborted for ${projectId}, billing partial usage`);
+              const abortedProj = await projectService.getProject(projectId).catch(() => null);
+              const abortedTaskId = (abortedProj as any)?.lastTaskId || undefined;
               await billingService.recordUsage(
                 user.id, projectId, err.model,
                 { input_tokens: err.inputTokens, output_tokens: err.outputTokens, cache_creation_input_tokens: err.cacheWriteTokens, cache_read_input_tokens: err.cacheReadTokens },
-                "update", userTierId,
+                "update", userTierId, false, abortedTaskId,
               );
               await projectService.updateProjectStatus(projectId, "deployed");
               processingProjects.delete(projectId);
@@ -1525,20 +1550,42 @@ export function createWebServer() {
       }
       errorReportRateLimit.set(projectId, now);
 
-      const { message, stack, url } = req.body || {};
+      const { message, stack, url, type: reportType } = req.body || {};
       if (!message) { res.status(400).json({ error: "No message" }); return; }
 
       const project = await projectService.getProject(projectId);
       if (!project) { res.status(404).json({ error: "Project not found" }); return; }
 
-      const shortStack = (stack || "").toString().split("\n").slice(0, 8).join("\n");
-      const errorText = `🐛 Error detected in the app:\n\`\`\`\n${message}${shortStack ? "\n" + shortStack : ""}\n\`\`\`\nPlease fix this error.`;
+      // Extract devtools tag prefix [Tag Name] from the raw message before any wrapping
+      const rawMsg = String(message);
+      const tagMatch = rawMsg.match(/^\[([^\]]+)\]/);
+      const devtoolsTag = tagMatch ? tagMatch[1] : null;
+
+      let errorText: string;
+      if (reportType === "design") {
+        // Design changes from visual editor — send as plain update request (tag already at start)
+        errorText = rawMsg;
+      } else {
+        const shortStack = (stack || "").toString().split("\n").slice(0, 8).join("\n");
+        const body = `${rawMsg}${shortStack ? "\n" + shortStack : ""}`;
+        if (devtoolsTag) {
+          // Tag already at start; wrap the content after the tag line so tag stays first
+          const afterTag = rawMsg.replace(/^\[[^\]]+\]\s*\n?/, "");
+          const bodyAfterTag = `${afterTag}${shortStack ? "\n" + shortStack : ""}`;
+          errorText = `[${devtoolsTag}]\n\`\`\`\n${bodyAfterTag}\n\`\`\`\nPlease investigate and fix this issue.`;
+        } else {
+          errorText = `🐛 Error detected in the app:\n\`\`\`\n${body}\n\`\`\`\nPlease fix this error.`;
+        }
+      }
+
+      const msgType = devtoolsTag ? "devtools_request" : "update_request";
 
       // Add as user message so agent treats it as an update request
       const userMsg = chatService.addMessage(projectId, {
         role: "user",
-        type: "update_request",
+        type: msgType,
         content: errorText,
+        ...(devtoolsTag ? { metadata: { tag: devtoolsTag } } : {}),
       });
       broadcastToProject(projectId, { type: "message", message: userMsg });
 
@@ -1588,10 +1635,12 @@ export function createWebServer() {
 
           const result = await agentService.updateApp(projectId, errorText, onProgress, [], undefined, ownerLang, ownerCredits, ownerTierId);
 
+          const fixedProject = await projectService.getProject(projectId).catch(() => null);
+          const fixTaskId = (fixedProject as any)?.lastTaskId || undefined;
           const usage = await billingService.recordUsage(
             owner.id, projectId, result.model,
             { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: result.cacheWriteTokens, cache_read_input_tokens: result.cacheReadTokens },
-            "update", ownerTierId,
+            "update", ownerTierId, false, fixTaskId,
           );
 
           await projectService.updateProjectStatus(projectId, "deployed");
@@ -1602,10 +1651,12 @@ export function createWebServer() {
           const appName = project?.name || "App";
           const changelogUrl = await publishReport(`${appName} — Fix #${updateNum}`, result.summary, `Cost: $${usage.costUsd.toFixed(4)}`).catch(() => null);
 
+          const cashbackEnabledFix = runtimeConfig.get().cashbackEnabled !== false;
+          const cashbackAvailFix = cashbackEnabledFix && (usage.creditsCharged ?? 0) > 0;
           if (progressMsgId) {
-            chatService.updateMessage(projectId, progressMsgId, { type: "result", content: result.shortSummary, percent: 100, costUsd: usage.costUsd, balance: usage.newBalance, checklist: items, metadata: { changelogUrl } });
+            chatService.updateMessage(projectId, progressMsgId, { type: "result", content: result.shortSummary, percent: 100, costUsd: usage.costUsd, balance: usage.newBalance, creditsCharged: usage.creditsCharged, commitNum: result.commitNum, cashbackAvailable: cashbackAvailFix, cashbackClaimed: false, checklist: items, metadata: { changelogUrl } });
           }
-          broadcastToProject(projectId, { type: "status", projectId, status: "done", messageId: progressMsgId, summary: result.shortSummary, changelogUrl, costUsd: usage.costUsd, balance: usage.newBalance });
+          broadcastToProject(projectId, { type: "status", projectId, status: "done", messageId: progressMsgId, summary: result.shortSummary, changelogUrl, costUsd: usage.costUsd, balance: usage.newBalance, creditsCharged: usage.creditsCharged, commitNum: result.commitNum, cashbackAvailable: cashbackAvailFix });
 
           notifyProcessDone(Number(owner.telegramId), appName, result.shortSummary, "fix", ownerLang);
 
@@ -1891,10 +1942,16 @@ export function createWebServer() {
           const appName = project.name || "App";
           const changelogUrl = await publishReport(`${appName} — Created`, result.summary, `Cost: $${usage.costUsd.toFixed(4)}`).catch(() => null);
 
+          const cashbackEnabledCreate = runtimeConfig.get().cashbackEnabled !== false;
+          const cashbackAvailCreate = cashbackEnabledCreate && (usage.creditsCharged ?? 0) > 0;
           if (progressMsgId) {
             chatService.updateMessage(projectId, progressMsgId, {
               type: "result", content: result.shortSummary,
               percent: 100, costUsd: usage.costUsd, balance: usage.newBalance,
+              creditsCharged: usage.creditsCharged,
+              commitNum: result.commitNum,
+              cashbackAvailable: cashbackAvailCreate,
+              cashbackClaimed: false,
               metadata: { changelogUrl },
             });
             broadcastToProject(projectId, {
@@ -1902,6 +1959,9 @@ export function createWebServer() {
               status: "done", summary: result.shortSummary,
               changelogUrl,
               costUsd: usage.costUsd, balance: usage.newBalance,
+              creditsCharged: usage.creditsCharged,
+              commitNum: result.commitNum,
+              cashbackAvailable: cashbackAvailCreate,
             });
           }
 
@@ -2165,6 +2225,175 @@ export function createWebServer() {
     } catch (err) {
       console.error("[Tasks] complete error:", err);
       res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // ── Agent Feedback (cashback issue) ──
+  // The mini app calls this after a build/update completes when the user clicks
+  // "Get cashback & rate agent" in the result bubble. We store the feedback,
+  // refund 50% of credits charged, and return the new balance. The case can
+  // later be analyzed by an admin (Admin → Agent Feedback → Run Analysis).
+  app.get("/telegram-mini-app/api/feedback/check", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const projectId = String(req.query.projectId || "");
+      const commitNumRaw = req.query.commitNum;
+      const commitNum = typeof commitNumRaw === "string" ? parseInt(commitNumRaw, 10) : NaN;
+      if (!projectId || !Number.isFinite(commitNum)) {
+        res.status(400).json({ error: "projectId and commitNum required" });
+        return;
+      }
+      const fb = await prisma.agentFeedback.findUnique({
+        where: {
+          userId_projectId_commitNumAfter: {
+            userId: user.id,
+            projectId,
+            commitNumAfter: commitNum,
+          },
+        },
+      });
+      res.json({ rated: !!fb, cashbackCredits: fb?.cashbackCredits || 0 });
+    } catch (err) {
+      console.error("[Feedback] check error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.post("/telegram-mini-app/api/feedback", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+
+      const projectId = String(req.body?.projectId || "");
+      const commitNum = Number(req.body?.commitNum);
+      const isCorrect = !!req.body?.isCorrect;
+      const qualityScore = Math.max(0, Math.min(10, Math.round(Number(req.body?.qualityScore) || 0)));
+      const speedScore = Math.max(0, Math.min(10, Math.round(Number(req.body?.speedScore) || 0)));
+      const description = String(req.body?.description || "").trim();
+
+      if (!projectId || !Number.isFinite(commitNum)) {
+        res.status(400).json({ error: "projectId and commitNum required" });
+        return;
+      }
+
+      if (runtimeConfig.get().cashbackEnabled === false) {
+        res.status(403).json({ error: "Feedback cashback is currently disabled." });
+        return;
+      }
+
+      // When user marks NOT correct we require a description (anti-gaming —
+      // forces them to actually explain what went wrong before refund).
+      if (!isCorrect && description.length < 100) {
+        res.status(400).json({ error: "description_too_short", minLength: 100 });
+        return;
+      }
+
+      const project = await projectService.getProject(projectId);
+      if (!project || project.userId !== user.id) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      // Refuse double-cashback for the same run.
+      const existing = await prisma.agentFeedback.findUnique({
+        where: {
+          userId_projectId_commitNumAfter: {
+            userId: user.id,
+            projectId,
+            commitNumAfter: commitNum,
+          },
+        },
+      });
+      if (existing) {
+        res.status(409).json({ error: "already_rated", cashbackCredits: existing.cashbackCredits });
+        return;
+      }
+
+      // Look up the matching UsageLog row for this run to determine credits
+      // charged + the original user prompt (reconstructed from chat history).
+      const usageRow = await prisma.usageLog.findFirst({
+        where: { userId: user.id, projectId },
+        orderBy: { createdAt: "desc" },
+        take: 1,
+      });
+      const creditsCharged = usageRow?.creditsCharged ?? 0;
+      const performanceTier = usageRow?.tierId ?? null;
+      const cashbackPercent = Math.max(0, Math.min(100, runtimeConfig.get().cashbackPercent ?? 50));
+      const cashbackCredits = Math.max(0, Math.floor(creditsCharged * (cashbackPercent / 100)));
+
+      // Try to recover the user prompt that triggered this run.
+      let userPrompt = "";
+      try {
+        const history = chatService.getHistory(projectId, undefined, 200);
+        const lastUserMsg = [...history].reverse().find(
+          (m) => m.role === "user" && (m.type === "text" || m.type === "update_request" || m.type === "answer"),
+        );
+        userPrompt = lastUserMsg?.content?.slice(0, 4000) || "";
+      } catch {}
+
+      // Find the previous commit number from the project versions (best effort).
+      let commitNumBefore: number | null = null;
+      try {
+        const commits = await commitService.getCommits(projectId);
+        const idx = commits.findIndex((c) => parseInt(c.version, 10) === commitNum);
+        if (idx > 0) commitNumBefore = parseInt(commits[idx - 1].version, 10);
+      } catch {}
+
+      const result = await prisma.$transaction(async (tx) => {
+        const fb = await tx.agentFeedback.create({
+          data: {
+            projectId,
+            userId: user.id,
+            userPrompt: userPrompt || "(prompt unavailable)",
+            commitNumBefore,
+            commitNumAfter: commitNum,
+            creditsCharged,
+            isCorrect,
+            qualityScore,
+            speedScore,
+            userDescription: description || null,
+            performanceTier,
+            cashbackCredits,
+            cashbackPaidAt: cashbackCredits > 0 ? new Date() : null,
+            analysisStatus: "pending",
+          },
+        });
+        let newBalance = user.credits;
+        if (cashbackCredits > 0) {
+          const updated = await tx.user.update({
+            where: { id: user.id },
+            data: { credits: { increment: cashbackCredits } },
+            select: { credits: true },
+          });
+          newBalance = updated.credits;
+        }
+        return { feedback: fb, newBalance };
+      });
+
+      // Mark the result bubble as claimed so re-entry shows a "Rated ✓" pill.
+      try {
+        const history = chatService.getHistory(projectId, undefined, 200);
+        const resultMsg = [...history].reverse().find(
+          (m) => m.type === "result" && m.commitNum === commitNum,
+        );
+        if (resultMsg) {
+          chatService.updateMessage(projectId, resultMsg.id, { cashbackClaimed: true });
+        }
+      } catch {}
+
+      res.json({
+        ok: true,
+        cashbackCredits,
+        newCredits: result.newBalance,
+        newBalance: result.newBalance,
+        feedbackId: result.feedback.id,
+      });
+    } catch (err: any) {
+      console.error("[Feedback] submit error:", err);
+      res.status(500).json({ error: err?.message || "Internal server error" });
     }
   });
 
@@ -3485,6 +3714,7 @@ export function createWebServer() {
   app.use("/telegram-mini-app", express.static(path.join(__dirname, "..", "..", "mini_app")));
 
   app.use("/app", appRoutes);
+  app.use("/bucket", bucketRoutes);
   app.use("/dev", devRoutes);
   app.use("/api", apiRoutes);
   app.use("/devapi", devApiRoutes);

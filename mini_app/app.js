@@ -1097,6 +1097,8 @@ async function loadTopupBalance() {
       userTierData = data.tier || null;
       if (data.allTiers?.length) allTiers = data.allTiers;
       if (data.creditsPerDollar) creditsPerDollar = data.creditsPerDollar;
+      if (typeof data.cashbackPercent === 'number') cashbackPercent = data.cashbackPercent;
+      if (typeof data.cashbackEnabled === 'boolean') cashbackEnabled = data.cashbackEnabled;
       if (data.slotPriceCredits) slotPriceCredits = data.slotPriceCredits;
       userPaymentCount = data.paymentCount ?? 0;
       firstDepositBonusEligible = !!data.firstDepositBonusEligible;
@@ -1228,6 +1230,304 @@ function closePurchaseModal() {
     document.body.style.overflow = '';
     selectedBundle = null;
   }, 280);
+}
+
+// ─── Agent Feedback / Cashback rating modal ────────────────────────────────
+//
+// After every successful build/update the result bubble shows a "Get cashback
+// & rate agent" button. The user opens a modal, answers Yes/No + scores +
+// (when No) a description, and on submit gets 50% of the credits refunded
+// and the case is filed for admin analysis.
+
+let ratingCtx = null; // { projectId, commitNum, creditsCharged, cashback }
+const ratedRuns = new Set(); // "{projectId}:{commitNum}" — already rated this session
+let ratingSubmitting = false;
+
+// Configured server-side via runtimeConfig.cashbackPercent / cashbackEnabled
+// and surfaced through the /balance endpoint.
+let cashbackPercent = 50;
+let cashbackEnabled = true;  // default true; updated from /balance
+
+function cashbackAmount(creditsCharged) {
+  const c = Number(creditsCharged) || 0;
+  const pct = Math.max(0, Math.min(100, Number(cashbackPercent) || 0));
+  return Math.max(0, Math.floor(c * (pct / 100)));
+}
+
+function ratedKey(projectId, commitNum) { return `${projectId}:${commitNum}`; }
+
+/**
+ * Renders the "Rate the update" button on result bubbles.
+ *
+ * @param {string}  projectId
+ * @param {number}  commitNum
+ * @param {number}  creditsCharged
+ * @param {boolean} [available]  - if explicitly false, don't render (old msgs without field)
+ * @param {boolean} [claimed]    - if true, show "Rated ✓" pill
+ */
+function cashbackBtnHtml(projectId, commitNum, creditsCharged, available, claimed) {
+  // available===undefined → field missing from old message → hide button
+  if (available === false || available === undefined) return '';
+  if (!projectId || !commitNum) return '';
+
+  const safeId = String(projectId).replace(/'/g, '');
+  const cashback = cashbackEnabled ? cashbackAmount(creditsCharged) : 0;
+  const isRated = claimed || ratedRuns.has(ratedKey(projectId, commitNum));
+
+  if (isRated) {
+    const pill = cashback > 0
+      ? `${t('rating_already_rated_short') || 'Rated'} ✓  +${cashback} ${coinSvg(12, 9, '#fbbf24')}`
+      : `${t('rating_already_rated_short') || 'Rated'} ✓`;
+    return `<button class="chat-rate-btn chat-rate-btn--done" disabled>${pill}</button>`;
+  }
+
+  // Badge for cashback amount (shown only when cashback > 0 and enabled)
+  const cashbackBadge = cashback > 0
+    ? `<span class="chat-rate-btn__badge">Cashback +${cashback} ${coinSvg(11, 8, '#fbbf24')}</span>`
+    : '';
+
+  return `<button class="chat-rate-btn" data-project="${safeId}" data-commit="${commitNum}" data-credits="${creditsCharged}" onclick="openRatingModal('${safeId}', ${commitNum}, ${creditsCharged})">
+    <span class="chat-rate-btn__icon">★</span>
+    <span class="chat-rate-btn__label">${t('rating_rate_btn') || 'Rate the update'}</span>
+    ${cashbackBadge}
+  </button>`;
+}
+
+async function openRatingModal(projectId, commitNum, creditsCharged) {
+  if (!projectId || !commitNum) return;
+  const key = ratedKey(projectId, commitNum);
+  if (ratedRuns.has(key)) {
+    showToast(t('rating_already_rated') || 'Already rated', 'info');
+    return;
+  }
+  // Best-effort server check (handles cross-device / page-reload cases).
+  try {
+    const r = await fetch(`${API_BASE}/feedback/check?projectId=${encodeURIComponent(projectId)}&commitNum=${commitNum}`, { headers: apiHeaders() });
+    if (r.ok) {
+      const j = await r.json();
+      if (j.rated) {
+        ratedRuns.add(key);
+        refreshCashbackButtons(projectId, commitNum);
+        showToast(t('rating_already_rated') || 'Already rated', 'info');
+        return;
+      }
+    }
+  } catch {}
+
+  const cashback = cashbackAmount(creditsCharged);
+  ratingCtx = { projectId, commitNum, creditsCharged, cashback };
+
+  const modal = document.getElementById('rating-modal');
+  if (!modal) return;
+
+  // Reset form state.
+  document.getElementById('rating-yes')?.classList.remove('active');
+  document.getElementById('rating-no')?.classList.remove('active');
+  const desc = document.getElementById('rating-desc');
+  if (desc) desc.value = '';
+  const counter = document.getElementById('rating-desc-counter');
+  if (counter) counter.textContent = `0 / 100`;
+  document.getElementById('rating-desc-wrap')?.classList.add('hidden');
+
+  const qSlider = document.getElementById('rating-quality');
+  const sSlider = document.getElementById('rating-speed');
+  const qVal = document.getElementById('rating-quality-val');
+  const sVal = document.getElementById('rating-speed-val');
+  if (qSlider) qSlider.value = '8';
+  if (sSlider) sSlider.value = '8';
+  if (qVal) qVal.textContent = '8';
+  if (sVal) sVal.textContent = '8';
+
+  const preview = document.getElementById('rating-cashback-preview');
+  if (preview) {
+    preview.innerHTML = `${t('rating_cashback_info') || 'You will receive'} <span class="rating-cashback-amt">+${cashback} ${coinSvg(13, 9, '#fbbf24')}</span>`;
+  }
+
+  const submitBtn = document.getElementById('rating-submit-btn');
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.classList.remove('rating-submit-btn--ready');
+  }
+
+  modal.classList.remove('hidden');
+  modal.removeAttribute('aria-hidden');
+}
+
+function closeRatingModal() {
+  const modal = document.getElementById('rating-modal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  modal.setAttribute('aria-hidden', 'true');
+  ratingCtx = null;
+}
+
+function refreshCashbackButtons(projectId, commitNum) {
+  const sel = `.chat-rate-btn[data-project="${projectId}"][data-commit="${commitNum}"]`;
+  document.querySelectorAll(sel).forEach((btn) => {
+    const credits = Number(btn.dataset.credits) || 0;
+    const cashback = cashbackEnabled ? cashbackAmount(credits) : 0;
+    const replacement = document.createElement('button');
+    replacement.className = 'chat-rate-btn chat-rate-btn--done';
+    replacement.disabled = true;
+    const pill = cashback > 0
+      ? `${t('rating_already_rated_short') || 'Rated'} ✓  +${cashback} ${coinSvg(12, 9, '#fbbf24')}`
+      : `${t('rating_already_rated_short') || 'Rated'} ✓`;
+    replacement.innerHTML = pill;
+    btn.replaceWith(replacement);
+  });
+}
+
+function ratingFormValid() {
+  if (!ratingCtx) return false;
+  const yes = document.getElementById('rating-yes')?.classList.contains('active');
+  const no = document.getElementById('rating-no')?.classList.contains('active');
+  if (!yes && !no) return false;
+  if (no) {
+    const desc = (document.getElementById('rating-desc')?.value || '').trim();
+    if (desc.length < 100) return false;
+  }
+  return true;
+}
+
+function syncRatingSubmitState() {
+  const btn = document.getElementById('rating-submit-btn');
+  if (!btn) return;
+  const ok = ratingFormValid();
+  btn.disabled = !ok;
+  btn.classList.toggle('rating-submit-btn--ready', ok);
+}
+
+async function submitRating() {
+  if (ratingSubmitting || !ratingCtx) return;
+  if (!ratingFormValid()) return;
+  const yes = document.getElementById('rating-yes')?.classList.contains('active');
+  const isCorrect = !!yes;
+  const qualityScore = parseInt(document.getElementById('rating-quality')?.value || '0', 10) || 0;
+  const speedScore = parseInt(document.getElementById('rating-speed')?.value || '0', 10) || 0;
+  const description = isCorrect ? '' : (document.getElementById('rating-desc')?.value || '').trim();
+
+  ratingSubmitting = true;
+  const btn = document.getElementById('rating-submit-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.dataset.origText = btn.innerHTML;
+    btn.innerHTML = `<span>${t('rating_submitting') || 'Submitting…'}</span>`;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/feedback`, {
+      method: 'POST',
+      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        projectId: ratingCtx.projectId,
+        commitNum: ratingCtx.commitNum,
+        isCorrect,
+        qualityScore,
+        speedScore,
+        description,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      const err = data.error || 'rating_failed';
+      if (err === 'already_rated') {
+        ratedRuns.add(ratedKey(ratingCtx.projectId, ratingCtx.commitNum));
+        refreshCashbackButtons(ratingCtx.projectId, ratingCtx.commitNum);
+        showToast(t('rating_already_rated') || 'Already rated', 'info');
+        closeRatingModal();
+        return;
+      }
+      if (err === 'description_too_short') {
+        showToast(t('rating_desc_too_short') || 'Description must be at least 100 characters', 'error');
+      } else {
+        showToast(err, 'error');
+      }
+      return;
+    }
+    const cashback = Number(data.cashbackCredits || 0);
+    const newBal = Number(data.newBalance ?? data.newCredits ?? 0);
+    if (cashback > 0) {
+      showToast(`${t('rating_success') || 'Thanks! Cashback received'} +${cashback}`, 'success');
+    } else {
+      showToast(t('rating_success') || 'Thanks for the feedback', 'success');
+    }
+    if (typeof tg?.HapticFeedback?.notificationOccurred === 'function') {
+      try { tg.HapticFeedback.notificationOccurred('success'); } catch {}
+    }
+    if (Number.isFinite(newBal)) {
+      try {
+        userCredits = newBal;
+        const homeEl = document.getElementById('home-balance-badge');
+        if (homeEl) homeEl.innerHTML = fmtBalance(userCredits);
+        const balanceEl = document.getElementById('balance-amount');
+        if (balanceEl) balanceEl.textContent = `${userCredits} cr`;
+        const tasksBalance = document.getElementById('tasks-balance');
+        if (tasksBalance) tasksBalance.innerHTML = fmtBalance(userCredits);
+      } catch {}
+    }
+    ratedRuns.add(ratedKey(ratingCtx.projectId, ratingCtx.commitNum));
+    refreshCashbackButtons(ratingCtx.projectId, ratingCtx.commitNum);
+    closeRatingModal();
+  } catch (err) {
+    console.error('[rating] submit failed', err);
+    showToast(t('rating_failed') || 'Could not submit rating', 'error');
+  } finally {
+    ratingSubmitting = false;
+    if (btn) {
+      btn.disabled = false;
+      if (btn.dataset.origText) {
+        btn.innerHTML = btn.dataset.origText;
+        delete btn.dataset.origText;
+      }
+    }
+  }
+}
+
+function bindRatingModal() {
+  const yesBtn = document.getElementById('rating-yes');
+  const noBtn = document.getElementById('rating-no');
+  const descWrap = document.getElementById('rating-desc-wrap');
+  const desc = document.getElementById('rating-desc');
+  const counter = document.getElementById('rating-desc-counter');
+  const qSlider = document.getElementById('rating-quality');
+  const sSlider = document.getElementById('rating-speed');
+  const qVal = document.getElementById('rating-quality-val');
+  const sVal = document.getElementById('rating-speed-val');
+  const submitBtn = document.getElementById('rating-submit-btn');
+  const backdrop = document.getElementById('rating-modal-backdrop');
+
+  if (yesBtn) yesBtn.onclick = () => {
+    yesBtn.classList.add('active');
+    noBtn?.classList.remove('active');
+    descWrap?.classList.add('hidden');
+    syncRatingSubmitState();
+  };
+  if (noBtn) noBtn.onclick = () => {
+    noBtn.classList.add('active');
+    yesBtn?.classList.remove('active');
+    descWrap?.classList.remove('hidden');
+    desc?.focus();
+    syncRatingSubmitState();
+  };
+  if (desc && counter) {
+    desc.addEventListener('input', () => {
+      const len = (desc.value || '').trim().length;
+      counter.textContent = `${len} / 100`;
+      counter.classList.toggle('rating-desc-counter--ok', len >= 100);
+      syncRatingSubmitState();
+    });
+  }
+  if (qSlider && qVal) qSlider.addEventListener('input', () => { qVal.textContent = qSlider.value; });
+  if (sSlider && sVal) sSlider.addEventListener('input', () => { sVal.textContent = sSlider.value; });
+  if (submitBtn) submitBtn.onclick = submitRating;
+  if (backdrop) backdrop.onclick = closeRatingModal;
+  const closeBtn = document.getElementById('rating-modal-close');
+  if (closeBtn) closeBtn.onclick = closeRatingModal;
+}
+
+document.addEventListener('DOMContentLoaded', bindRatingModal);
+// Also try to bind immediately in case the DOM is already ready.
+if (document.readyState !== 'loading') {
+  try { bindRatingModal(); } catch {}
 }
 
 async function submitTopup() {
@@ -2142,6 +2442,13 @@ function handleWSMessage(data) {
     return;
   }
 
+  if (data.type === 'task_started') {
+    if (currentProject && data.taskId) {
+      currentProject.lastTaskId = data.taskId;
+    }
+    return;
+  }
+
   if (data.type === 'status_change') {
     if (currentProject) {
       currentProject.status = data.status;
@@ -2180,6 +2487,7 @@ function handleWSMessage(data) {
         if (typeof data.costUsd === 'number') {
           html += `<div class="chat-progress-cost">${t('chat_cost')}: $${data.costUsd.toFixed(4)}${typeof data.balance === 'number' ? ` · ${t('chat_balance')}: ${Math.floor(data.balance)}` : ''}</div>`;
         }
+        html += cashbackBtnHtml(chatProjectId, data.commitNum, data.creditsCharged, data.cashbackAvailable, false);
         html += linkBotCardHtml(chatProjectId);
         el.innerHTML = html;
         scrollToBottom();
@@ -2339,6 +2647,23 @@ function appendMessage(msg, animate = true) {
   el.id = `msg-${msg.id}`;
 
   if (msg.role === 'user') {
+    // ── Dev-tools service messages (visual editor / bug reporter) ──
+    if (msg.type === 'devtools_request') {
+      const TAG_MAP = {
+        'Restyle App': { icon: '🎨', cls: 'restyle', label: 'Restyle App Request' },
+        'Bug Report':  { icon: '🐛', cls: 'bug',     label: 'Bug Report'          },
+        'Bug Fixing':  { icon: '🐛', cls: 'bug',     label: 'Bug Report'          },
+      };
+      const tag   = (msg.metadata && msg.metadata.tag) ? String(msg.metadata.tag) : 'Request';
+      const info  = TAG_MAP[tag] || { icon: '⚙️', cls: 'default', label: tag };
+      el.className = `chat-bubble chat-devtools-svc chat-devtools-svc--${info.cls}`;
+      el.innerHTML = `<div class="chat-devtools-pill">
+        <span class="chat-devtools-icon">${info.icon}</span>
+        <span class="chat-devtools-label">${esc(info.label)}</span>
+        <span class="chat-devtools-dot"></span>
+      </div>`;
+    } else {
+    // ── Normal user message ──
     el.className = 'chat-bubble chat-bubble--user';
     let html = '';
     if (msg.attachments && msg.attachments.length > 0) {
@@ -2350,6 +2675,7 @@ function appendMessage(msg, animate = true) {
     }
     html += `<div class="chat-bubble-content">${esc(msg.content)}</div>`;
     el.innerHTML = html;
+    }
   } else if (msg.type === 'balance_error') {
     el.className = 'chat-bubble';
     const bal = Number(msg.metadata?.credits ?? msg.metadata?.balance ?? userCredits ?? 0);
@@ -2374,6 +2700,8 @@ function appendMessage(msg, animate = true) {
         if (d.tier) userTierData = d.tier;
         if (d.allTiers?.length) allTiers = d.allTiers;
         if (d.creditsPerDollar) creditsPerDollar = d.creditsPerDollar;
+        if (typeof d.cashbackPercent === 'number') cashbackPercent = d.cashbackPercent;
+        if (typeof d.cashbackEnabled === 'boolean') cashbackEnabled = d.cashbackEnabled;
         userPaymentCount = d.paymentCount ?? 0;
         firstDepositBonusEligible = !!d.firstDepositBonusEligible;
         if (typeof d.firstDepositBonusPercent === 'number') {
@@ -2471,6 +2799,7 @@ function appendMessage(msg, animate = true) {
     if (typeof msg.costUsd === 'number') {
       html += `<div class="chat-progress-cost">Cost: $${msg.costUsd.toFixed(4)}${typeof msg.balance === 'number' ? ` · Balance: ${Math.floor(msg.balance)}` : ''}</div>`;
     }
+    html += cashbackBtnHtml(msg.metadata?.projectId || chatProjectId, msg.commitNum, msg.creditsCharged, msg.cashbackAvailable, msg.cashbackClaimed);
     html += linkBotCardHtml(msg.metadata?.projectId || chatProjectId);
     html += `<div class="chat-bubble-time">${timeStr(msg.timestamp)}</div>`;
     el.innerHTML = html;
@@ -2504,7 +2833,7 @@ function appendMessage(msg, animate = true) {
   if (!animate) el.style.animation = 'none';
   inner.appendChild(el);
 
-  if (msg.type !== 'result' && msg.type !== 'question' && msg.type !== 'balance_error' && msg.type !== 'error' && msg.type !== 'progress') {
+  if (msg.type !== 'result' && msg.type !== 'question' && msg.type !== 'balance_error' && msg.type !== 'error' && msg.type !== 'progress' && msg.type !== 'devtools_request') {
     requestAnimationFrame(() => {
       const collapsible = el.querySelector('.chat-bubble-content') || el.querySelector('.chat-plan-content');
       if (!collapsible) return;
@@ -5064,30 +5393,14 @@ async function releaseLatest() {
 }
 
 function openTestPreview(projectId) {
-  const hash = location.hash || '';
-  const tgData = hash.includes('tgWebAppData') ? hash : '';
-  const devUrl = `${location.origin}/dev/${projectId}/${tgData}`;
-
-  let overlay = document.getElementById('test-preview-overlay');
-  if (overlay) { overlay.remove(); }
-
-  overlay = document.createElement('div');
-  overlay.id = 'test-preview-overlay';
-  overlay.className = 'test-preview-overlay';
-  overlay.innerHTML = `
-    <div class="test-preview-header">
-      <button class="test-preview-back" onclick="closeTestPreview()">← Back</button>
-      <span class="test-preview-title">Dev Preview</span>
-      <span class="test-preview-badge">DEV</span>
-    </div>
-    <iframe class="test-preview-iframe" src="${devUrl}"></iframe>
-  `;
-  document.body.appendChild(overlay);
+  const isDev = location.hostname === 'dev.apps-father.com';
+  const env = isDev ? 'dev' : 'prod';
+  const startapp = `${env}-${projectId}`;
+  tg?.openTelegramLink(`https://t.me/apps_father_player_bot/player?startapp=${startapp}`);
 }
 
 function closeTestPreview() {
-  const overlay = document.getElementById('test-preview-overlay');
-  if (overlay) overlay.remove();
+  // no-op: kept for any residual onclick references
 }
 
 /** Full-screen log viewer inside WebApp (iframe + #initData for API auth). */
@@ -5213,8 +5526,24 @@ async function openDetail(id) {
 
   const version = p.currentVersion || 0;
   const cost = p.totalCostUsd ? `$${Number(p.totalCostUsd).toFixed(2)}` : '$0.00';
+  const taskIdLine = p.lastTaskId
+    ? `<br><span class="detail-copy-id" data-copy="${esc(p.lastTaskId)}" title="Tap to copy task ID">Task ID: <b>${esc(p.lastTaskId)}</b></span>`
+    : '';
   document.getElementById('detail-info').innerHTML =
-    `Version: <b>${version}</b> · Total cost: <b>${cost}</b><br>Project ID: <b>${p.id}</b>`;
+    `Version: <b>${version}</b> · Total cost: <b>${cost}</b><br>`
+    + `<span class="detail-copy-id" data-copy="${esc(p.id)}" title="Tap to copy project ID">Project ID: <b>${esc(p.id)}</b></span>`
+    + taskIdLine;
+
+  document.getElementById('detail-info').querySelectorAll('.detail-copy-id').forEach(el => {
+    el.addEventListener('click', function() {
+      const val = this.getAttribute('data-copy');
+      navigator.clipboard.writeText(val).then(() => {
+        const orig = this.innerHTML;
+        this.innerHTML = '<b>Copied!</b>';
+        setTimeout(() => { this.innerHTML = orig; }, 1200);
+      }).catch(() => {});
+    });
+  });
 
   const isLive = ['deployed', 'released'].includes(p.status);
   const baseUrl = location.origin;
@@ -5238,9 +5567,12 @@ async function openDetail(id) {
   tokenSection.style.display = 'none';
   fetchToken(p.id);
 
+  const isTextBot = p?.preferences?.kind === 'textBot';
   let appRows = '';
   if (isLive) {
-    appRows += menuRowAction(t('detail_test_app'), 'af-icon-test', 'open-test-preview');
+    if (!isTextBot) {
+      appRows += menuRowAction(t('detail_test_app'), 'af-icon-test', 'open-test-preview');
+    }
     if (p.botUsername) {
       appRows += menuRowAction(t('detail_open_bot'), 'af-icon-open', 'open-bot');
     }
@@ -5380,6 +5712,8 @@ async function loadBalance() {
     userTierData = data.tier || userTierData;
     if (data.allTiers) allTiers = data.allTiers;
     if (data.creditsPerDollar) creditsPerDollar = data.creditsPerDollar;
+    if (typeof data.cashbackPercent === 'number') cashbackPercent = data.cashbackPercent;
+    if (typeof data.cashbackEnabled === 'boolean') cashbackEnabled = data.cashbackEnabled;
     const balEl = document.getElementById('balance-amount');
     if (balEl) balEl.textContent = `${t('balance_label') || 'Balance'}: ${Math.max(0, userCredits).toLocaleString()}`;
     renderTierChip();

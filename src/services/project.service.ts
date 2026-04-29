@@ -306,6 +306,13 @@ export class ProjectService {
     });
   }
 
+  async updateProjectLastTaskId(projectId: string, taskId: string) {
+    return prisma.project.update({
+      where: { id: projectId },
+      data: { lastTaskId: taskId },
+    });
+  }
+
   async setTonWallet(projectId: string, wallet: string) {
     return prisma.project.update({
       where: { id: projectId },

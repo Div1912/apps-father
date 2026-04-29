@@ -62,6 +62,14 @@ export interface RuntimeConfig {
   referralBonusUsd: number;     // legacy USD bonus (no longer used)
   partnerDefaultPercent: number;
 
+  // % of credits charged refunded as cashback when the user submits a
+  // feedback rating (0-100). Default 50.
+  cashbackPercent: number;
+
+  // Master switch: set to false to hide the rating button and disable the
+  // cashback endpoint globally (without changing cashbackPercent).
+  cashbackEnabled: boolean;
+
   // Feature pricing (USD, admin-side)
   aiAvatarPriceUsd: number;
   bundlePriceUsd: number;
@@ -83,8 +91,22 @@ export interface RuntimeConfig {
   filesBrowserBaseUrl: string;
   filesBrowserProjectsRoot: string;
 
-  // OpenRouter
+  // OpenRouter — main key used by the user-facing agent
   openrouterApiKey: string;
+
+  // OpenRouter — separate key used ONLY by the agent-feedback analysis
+  // pipeline ("Run Analysis" in admin). Falls back to openrouterApiKey
+  // when empty. Lets you bill / rate-limit training calls separately
+  // from production user runs.
+  trainingOpenrouterApiKey: string;
+
+  // Optional override for the model used by the analysis pipeline. When
+  // empty the service picks a sensible default in code.
+  trainingModel: string;
+
+  // Optional OpenRouter provider routing for the training model
+  // ("Anthropic" / "OpenAI" / "Google" / etc.). Empty = OpenRouter "Auto".
+  trainingProvider: string;
 
   // Performance tiers (array index = tier number)
   performanceTiers: PerformanceTier[];
@@ -153,6 +175,8 @@ const DEFAULTS: RuntimeConfig = {
   referralBonusPercent: 15,
   referralBonusUsd: 0,
   partnerDefaultPercent: 10,
+  cashbackPercent: 50,
+  cashbackEnabled: true,
 
   aiAvatarPriceUsd: 10,
   bundlePriceUsd: 50,
@@ -175,6 +199,9 @@ const DEFAULTS: RuntimeConfig = {
     : "/opt/apps-father/projects",
 
   openrouterApiKey: "",
+  trainingOpenrouterApiKey: "",
+  trainingModel: "",
+  trainingProvider: "",
 
   performanceTiers: DEFAULT_PERFORMANCE_TIERS,
 };
@@ -261,6 +288,22 @@ class RuntimeConfigService {
   getMinTopup(): number { return this.config.minTopup; }
   getMaxAgentIterations(): number { return this.config.maxAgentIterations; }
   getOpenRouterApiKey(): string { return this.config.openrouterApiKey || ""; }
+  /**
+   * DEDICATED key for the agent-feedback analysis pipeline.
+   * Returns ONLY trainingOpenrouterApiKey (no fallback to the main key) so
+   * training/analysis spend is always isolated from production user runs.
+   * Empty string means "not configured" — analyzeCase() will refuse to run.
+   */
+  getTrainingApiKey(): string {
+    return this.config.trainingOpenrouterApiKey || "";
+  }
+  getTrainingModel(): string {
+    return this.config.trainingModel || "anthropic/claude-sonnet-4-5";
+  }
+  /** Optional OpenRouter provider name (e.g. "Anthropic"). Empty = Auto. */
+  getTrainingProvider(): string {
+    return this.config.trainingProvider || "";
+  }
   isServiceMode(): boolean { return !!this.config.serviceMode; }
   getCreditsPerDollar(): number { return this.config.creditsPerDollar || 50; }
 

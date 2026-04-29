@@ -20,6 +20,7 @@ import { parseProjectPreferences, buildPreferencesPrompt, DEFAULT_PREFERENCES } 
 import { forceReloadProjectWs } from "../web/ws-manager";
 import { runWithProject } from "./console-tagger.service";
 import { botRunnerService } from "./bot-runner.service";
+import { getEnabledLessonsBlock as getAgentLessonsBlock } from "./agent-lessons.service";
 import { prisma } from "../db";
 
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
@@ -69,6 +70,7 @@ const INSTRUCTION_MANIFEST: Array<{ file: string; modes?: AgentMode[]; kinds?: P
   { file: "ask-user.md" },
   { file: "skills-index.md" },
   { file: "frontend-design.md", kinds: ["app"] }, // last — the always-loaded design skill block
+  { file: "server-tools.md" }, // OpenRouter server tools reference (always loaded)
 ];
 
 // Cache file contents in memory so we don't hit the disk on every build.
@@ -133,7 +135,7 @@ function workflowFileFor(mode: AgentMode, kind?: string | null): string {
     : UPDATE_WORKFLOW_BY_KIND[normalized];
 }
 
-function buildSystemPrompt(mode: AgentMode, kind?: string): string {
+async function buildSystemPrompt(mode: AgentMode, kind?: string): Promise<string> {
   const parts: string[] = [];
   const missing: string[] = [];
   const vars = buildTemplateVars();
@@ -156,6 +158,19 @@ function buildSystemPrompt(mode: AgentMode, kind?: string): string {
     if (content) parts.push(renderTemplate(content, vars));
     else missing.push(file);
   }
+
+  // Append learned rules (AgentLesson rows where enabled=true). Cached in
+  // memory by the service and invalidated on every lesson mutation, so
+  // changes from the Admin CRM take effect on the next agent run with no
+  // process restart. Failures are logged and ignored — the lesson layer
+  // must NEVER block the core agent.
+  try {
+    const lessonsBlock = await getAgentLessonsBlock();
+    if (lessonsBlock) parts.push(lessonsBlock);
+  } catch (err: any) {
+    console.warn(`[Agent] failed to load learned lessons: ${err?.message || err}`);
+  }
+
   const prompt = parts.join("\n----------------------\n");
   // Fail fast with a clear error instead of sending empty system to Anthropic
   // (which returns "cache_control cannot be set for empty text blocks").
@@ -542,6 +557,15 @@ const TOOLS_DEFS: Array<{ name: string; description: string; input_schema: Recor
 // Pre-converted OpenAI-format tools (computed once at startup).
 const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = TOOLS_DEFS.map(toOpenAITool);
 
+// OpenRouter server tools — executed transparently by OpenRouter before returning
+// the response to the client. The model can call these; OpenRouter resolves them.
+const SERVER_TOOLS: any[] = [
+  { type: "openrouter:datetime" },
+  { type: "openrouter:web_search", parameters: { max_results: 5, max_total_results: 15 } },
+  { type: "openrouter:web_fetch" },
+  { type: "openrouter:image_generation" },
+];
+
 // Commands that must never run
 const BLOCKED_COMMANDS = [
   "rm -rf /", "shutdown", "reboot", "mkfs", "dd if=",
@@ -659,7 +683,7 @@ export class AgentService {
     return undefined;
   }
 
-  private validateFrontendMarkup(frontendText: string): string[] {
+  private validateFrontendMarkup(frontendText: string, projectDir?: string, kind?: string): string[] {
     const errors: string[] = [];
     if (!frontendText.trim()) return errors;
 
@@ -678,6 +702,41 @@ export class AgentService {
     }
     if (/\bquerySelector(?:All)?\s*\(\s*(["'`])[#.](?:\\["']|["'])/.test(frontendText)) {
       errors.push(`Frontend JS queries a malformed quoted selector. Use document.querySelector("#game-canvas"), not document.querySelector("#\\"game-canvas\\"").`);
+    }
+
+    // Validate that index.html references app.js and styles.css.
+    // Use plain substring checks (not regex) so cache-busting query strings
+    // like app.js?r=234 or attribute order variations don't trip false positives.
+    if (kind !== "textBot" && projectDir) {
+      const frontendDir = path.join(projectDir, "frontend");
+      const indexPath = path.join(frontendDir, "index.html");
+      if (fs.existsSync(indexPath)) {
+        const indexHtml = fs.readFileSync(indexPath, "utf-8");
+        if (!indexHtml.includes("app.js")) {
+          errors.push('frontend/index.html does not reference app.js. All apps must load app.js (e.g. <script src="app.js"></script>).');
+        }
+        if (!indexHtml.includes("styles.css")) {
+          errors.push('frontend/index.html does not reference styles.css. All apps must load styles.css (e.g. <link rel="stylesheet" href="styles.css">).');
+        }
+      }
+    }
+
+    // Syntax check app.js
+    if (projectDir) {
+      const appJsPath = path.join(projectDir, "frontend", "app.js");
+      if (fs.existsSync(appJsPath)) {
+        const appJsContent = fs.readFileSync(appJsPath, "utf-8");
+        try {
+          new Function(appJsContent);
+        } catch (err: any) {
+          errors.push(`frontend/app.js has a JavaScript syntax error: ${err.message}.`);
+        }
+        // Detect Cyrillic text in single-quoted strings with unescaped apostrophe
+        // Pattern: '...CyrillicChars...'...CyrillicChars...' — inner apostrophe breaks string
+        if (/'[^'\\\n]*[\u0400-\u04FF][^'\\\n]*'[^'\\\n]*[\u0400-\u04FF][^'\\\n]*'/.test(appJsContent)) {
+          errors.push("frontend/app.js may have a broken string: a single-quoted JS string appears to contain an apostrophe inside Cyrillic text (e.g. зв'язок terminates the string early). Use double quotes or template literals: \"Це зв'язок\" or `Це зв'язок`.");
+        }
+      }
     }
 
     return errors;
@@ -702,7 +761,7 @@ export class AgentService {
     const routesText = fs.existsSync(routesPath) ? fs.readFileSync(routesPath, "utf-8") : "";
 
     const hasFrontendFiles = this.dirHasFiles(frontendDir);
-    errors.push(...this.validateFrontendMarkup(frontendText));
+    errors.push(...this.validateFrontendMarkup(frontendText, projectDir, kind));
     if (/\bprocess\s*\.\s*env\b/.test(routesText + "\n" + frontendText)) {
       errors.push("Generated app code must not read process.env. Project code cannot access platform environment variables; if a feature needs an API key or credential, call ask_user before coding or use a public no-key API.");
     }
@@ -711,9 +770,14 @@ export class AgentService {
       errors.push("Text Bot builds must not contain frontend files. Delete frontend/ files and keep only backend/routes.js.");
     }
     if (kind === "game") {
-      if (fs.existsSync(frontendApp) || fs.existsSync(frontendStyles)) {
-        errors.push("Game builds must be single-file: frontend/index.html only. Remove frontend/app.js and frontend/styles.css.");
+      // Games must have all three frontend files (index.html + styles.css + app.js)
+      if (!fs.existsSync(frontendApp)) {
+        errors.push("Game builds require frontend/app.js. Move game logic out of index.html into app.js.");
       }
+      if (!fs.existsSync(frontendStyles)) {
+        errors.push("Game builds require frontend/styles.css. Move inline styles out of index.html into styles.css.");
+      }
+      // routes.js is optional for games — only error if present without planned endpoints
       if (fs.existsSync(routesPath)) {
         const gameBackend = routesText.trim();
         const gameNeedsBackend = this.plannedEndpoints(technicalPlan).length > 0 || this.plannedWsTypes(technicalPlan).length > 0;
@@ -752,6 +816,15 @@ export class AgentService {
     }
     if (/module\.exports\s*=\s*routes\b/.test(content) || /^\s*const\s+routes\s*=\s*\{/m.test(content)) {
       errors.push(`backend/routes.js uses object-style routes. Rewrite with Express router calls inside module.exports = function(router, db, projectId) { router.get('/path', ...); }.`);
+    }
+    const missingSlashRoutes: string[] = [];
+    const routePathRe = /router\.(get|post|put|patch|delete|all)\s*\(\s*["']([^/"'][^"']*)["']/g;
+    let routePathMatch: RegExpExecArray | null;
+    while ((routePathMatch = routePathRe.exec(content)) && missingSlashRoutes.length < 5) {
+      missingSlashRoutes.push(`router.${routePathMatch[1]}("${routePathMatch[2]}")`);
+    }
+    if (missingSlashRoutes.length > 0) {
+      errors.push(`backend/routes.js has route paths missing a leading slash (${missingSlashRoutes.join(", ")}). Use router.get('/words', ...) not router.get('words', ...).`);
     }
     if (/['"`]\s*(GET|POST|PUT|PATCH|DELETE)\s+\/api\//i.test(content)) {
       errors.push(`backend/routes.js contains object-style API route keys like "GET /api/...". Use router.get('/path', ...) and never include /api/{projectId} in backend route paths.`);
@@ -1227,6 +1300,12 @@ ${dbSummary ? `DB KEYS SUMMARY:\n${dbSummary}\n` : ""}`;
 
     const modelCfg = runtimeConfig.getModelConfig("ask", tierId);
     const askReasoningBudget = (modelCfg as any).reasoningBudget ?? 0;
+    const askSessionId = crypto.randomUUID();
+    const askProject = await projectService.getProject(projectId);
+    const askOwner = (askProject as any)?.userId
+      ? await prisma.user.findUnique({ where: { id: (askProject as any).userId }, select: { telegramId: true } })
+      : null;
+    const askTelegramId = askOwner?.telegramId ? String(askOwner.telegramId) : undefined;
     const client = getOpenRouterClient();
     const stream = await client.chat.completions.create({
       model: modelCfg.modelId,
@@ -1235,6 +1314,8 @@ ${dbSummary ? `DB KEYS SUMMARY:\n${dbSummary}\n` : ""}`;
         { role: "system", content: systemPrompt },
         ...messages,
       ],
+      ...(askTelegramId ? { user: askTelegramId } : {}),
+      extra_body: { session_id: askSessionId },
       ...(this.getProviderRouting(modelCfg.modelId, modelCfg.provider) ? { provider: this.getProviderRouting(modelCfg.modelId, modelCfg.provider) } : {}),
       ...(askReasoningBudget > 0 ? { reasoning: { max_tokens: askReasoningBudget } } : {}),
       stream: true,
@@ -1298,11 +1379,18 @@ Keep suggestions practical and specific to THIS app.${langInstruction}`;
 
     const modelCfg = runtimeConfig.getModelConfig("suggestions", tierId);
     const suggReasoningBudget = (modelCfg as any).reasoningBudget ?? 0;
+    const suggSessionId = crypto.randomUUID();
+    const suggOwner = (project as any)?.userId
+      ? await prisma.user.findUnique({ where: { id: (project as any).userId }, select: { telegramId: true } })
+      : null;
+    const suggTelegramId = suggOwner?.telegramId ? String(suggOwner.telegramId) : undefined;
     const client = getOpenRouterClient();
     const response = await client.chat.completions.create({
       model: modelCfg.modelId,
       max_tokens: modelCfg.maxTokens,
       messages: [{ role: "user", content: prompt }],
+      ...(suggTelegramId ? { user: suggTelegramId } : {}),
+      session_id: suggSessionId,
       ...(this.getProviderRouting(modelCfg.modelId, modelCfg.provider) ? { provider: this.getProviderRouting(modelCfg.modelId, modelCfg.provider) } : {}),
       ...(suggReasoningBudget > 0 ? { reasoning: { max_tokens: suggReasoningBudget } } : {}),
     } as any);
@@ -1738,9 +1826,20 @@ ${featureGating}`;
   ): Promise<AgentResult> {
     // Build the system prompt from agent_knowledge/instructions/ for THIS run.
     // Mode-gated files are filtered by manifest; kind-specific workflow file is selected here.
-    const systemPrompt = buildSystemPrompt(mode, kind);
+    // Async: also pulls enabled AgentLesson rows from the DB (cached).
+    const systemPrompt = await buildSystemPrompt(mode, kind);
     const promptKind = normalizeProjectKind(kind);
-    console.log(`[Agent] system prompt built (mode=${mode}, kind=${promptKind}, workflow=${workflowFileFor(mode, promptKind)}, ${systemPrompt.length} chars)`);
+    // Generate a unique session ID for this agent run for tracing in OpenRouter dashboard
+    const taskId = crypto.randomUUID();
+    // Resolve Telegram userId for OpenRouter user-tracking field
+    const agentProject = await projectService.getProject(projectId);
+    const agentOwner = (agentProject as any)?.userId
+      ? await prisma.user.findUnique({ where: { id: (agentProject as any).userId }, select: { telegramId: true } })
+      : null;
+    const agentTelegramId = agentOwner?.telegramId ? String(agentOwner.telegramId) : undefined;
+    console.log(`[Agent] task_id=${taskId} user=${agentTelegramId ?? "?"} (mode=${mode}, kind=${promptKind}, workflow=${workflowFileFor(mode, promptKind)}, ${systemPrompt.length} chars)`);
+    // Persist immediately so the mini app can display it
+    projectService.updateProjectLastTaskId(projectId, taskId).catch(() => {});
     let liveCostUsd = 0;
     const startBalance = userBalance ?? 0;
     const rawProgress = onProgress || (async () => {});
@@ -2051,12 +2150,17 @@ ${featureGating}`;
         model: tierConfig.modelId,
         max_tokens: tierConfig.maxTokens,
         messages: requestMessages,
-        tools: TOOLS,
+        tools: [...TOOLS, ...SERVER_TOOLS],
         tool_choice: "auto" as const,
+        // user: stable per-user string for OpenRouter user tracking (Telegram userId)
+        ...(agentTelegramId ? { user: agentTelegramId } : {}),
+        // extra_body carries OpenRouter-specific fields the OpenAI SDK would otherwise strip.
+        // session_id is top-level per OpenRouter spec (not nested in metadata).
+        extra_body: {
+          session_id: taskId,
+          ...(thinkingBudget > 0 ? { thinking: { type: "enabled", budget_tokens: thinkingBudget } } : {}),
+        },
         ...(this.getProviderRouting(tierConfig.modelId, tierConfig.provider) ? { provider: this.getProviderRouting(tierConfig.modelId, tierConfig.provider) } : {}),
-        ...(thinkingBudget > 0 ? {
-          extra_body: { thinking: { type: "enabled", budget_tokens: thinkingBudget } },
-        } : {}),
         ...(reasoningBudget > 0 ? {
           reasoning: { max_tokens: reasoningBudget },
         } : {}),
@@ -2249,6 +2353,15 @@ ${featureGating}`;
             name = "load_skill";
             args = { ...args, name: inlineArg };
           }
+        }
+
+        // OpenRouter server tools (openrouter:*) are executed transparently on
+        // the OpenRouter side before the response reaches the client. If the model
+        // somehow includes one in the tool_calls array, skip it gracefully so the
+        // agent loop doesn't stall waiting for a result we can't produce.
+        if (name && name.startsWith("openrouter:")) {
+          messages.push({ role: "tool", tool_call_id: id, content: `OK: server tool ${name} handled by OpenRouter.` } as any);
+          continue;
         }
 
         let result = "";
@@ -2507,10 +2620,15 @@ Pick one and proceed.`;
             case "fetch_url": {
               await progress({ action: "🔗 Fetching data...", detail: "", percent: currentPercent });
               try {
+                const targetUrl = String(args.url || "");
+                if (/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\/(?:devapi|api|dev|app)\//i.test(targetUrl)) {
+                  result = "Error: Do not test Apps Father project endpoints with fetch_url or localhost URLs. Use deploy_to_dev(), then simulate_api/simulate_ws/simulate_telegram for project testing.";
+                  break;
+                }
                 const controller = new AbortController();
                 const timeout = setTimeout(() => controller.abort(), 15000);
 
-                const resp = await fetch(args.url, {
+                const resp = await fetch(targetUrl, {
                   headers: { "User-Agent": "Mozilla/5.0 (compatible; AppsBot/1.0)" },
                   signal: controller.signal,
                 });
@@ -2737,7 +2855,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
               const apiPath = String(args.path || "").replace(/^\//, "");
               const fakeUser = buildFakeTelegramUser(args);
               const fakeInitData = fakeInitDataFor(fakeUser);
-              const apiUrl = `http://localhost:${config.port}/devapi/${projectId}/${apiPath}`;
+              const apiUrl = `${config.baseUrl.replace(/\/+$/, "")}/devapi/${projectId}/${apiPath}`;
               try {
                 const resp = await fetch(apiUrl, {
                   method: apiMethod,

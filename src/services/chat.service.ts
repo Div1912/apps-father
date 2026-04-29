@@ -7,13 +7,26 @@ const PROJECTS_DIR = path.join(process.cwd(), "projects");
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
-  type: "text" | "update_request" | "question" | "answer" | "result" | "progress" | "error" | "plan" | "balance_error";
+  type: "text" | "update_request" | "devtools_request" | "question" | "answer" | "result" | "progress" | "error" | "plan" | "balance_error";
   content: string;
   attachments?: { name: string; path: string; type: string }[];
   checklist?: { id: number; text: string; done: boolean }[];
   percent?: number;
   costUsd?: number;
   balance?: number;
+  /** Credits actually deducted for this run (mirrors UsageLog.creditsCharged).
+   *  Used by the mini app to render the "Get cashback & rate agent" button on
+   *  result bubbles, including after page reload. */
+  creditsCharged?: number;
+  /** Commit number produced by this run, for linking the cashback feedback
+   *  back to the agent log on disk (commits/{commitNum}/agent.log). */
+  commitNum?: number;
+  /** Whether the cashback/rating button should be shown for this result.
+   *  Absent (or false) = never show the button even if cashbackEnabled later. */
+  cashbackAvailable?: boolean;
+  /** Set to true (and the button replaced with a "Rated ✓" pill) once the
+   *  user has submitted a rating for this run. Persisted so reload is correct. */
+  cashbackClaimed?: boolean;
   timestamp: number;
   /** ISO 8601 UTC string (e.g. "2026-04-14T09:33:00.123Z"). Used by the
    *  frontend to drive the dynamic progress curve y = 1 - e^(-Δsec/100). */

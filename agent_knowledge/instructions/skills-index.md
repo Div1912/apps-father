@@ -7,3 +7,4 @@ AVAILABLE SKILLS (load via load_skill tool when relevant):
 - telegram-stars — Telegram Stars (XTR) in-app payment flow: createInvoiceLink, openInvoice, pre_checkout/successful_payment  [load if the app sells anything for Stars]
 - referrals — referral / invite system: share link, /start param attribution, dual mini-app + bot path tracking, bonuses  [load if the app has invites/referrals]
 - ton-payments — TON blockchain payment flow  [load ONLY if TON feature is unlocked]
+- telegram-miniapp-api — full Telegram.WebApp API reference: MainButton, BackButton, HapticFeedback, CloudStorage, events, safe-area  [load when you need specific Telegram API details beyond the basics in frontend-rules.md]

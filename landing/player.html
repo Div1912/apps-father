@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Apps Father – Player</title>
+</head>
+
+<body>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>
+    (function () {
+      var start_param = (Telegram.WebApp.initDataUnsafe || {}).start_param || '';
+
+      if (!start_param) {
+        document.body.innerHTML = '<p style="font-family:sans-serif;padding:24px">No app specified.</p>';
+        return;
+      }
+
+      // start_param format: "{env}-{project_id}"  e.g. "prod-c3a7616b-a83b-4f9d-9117-c6aeed6e5b71"
+      var dashIdx = start_param.indexOf('-');
+      var env = start_param.slice(0, dashIdx);          // "prod" | "dev"
+      var project_id = start_param.slice(dashIdx + 1); // UUID
+
+      // Raw URL fragment contains all tgWebApp* fields Telegram injected
+      var fragment = window.location.href.split('#')[1] || '';
+
+      // Strip the start_param value from the fragment so the target app
+      // doesn't see it (both raw and percent-encoded forms).
+      var encodedParam = encodeURIComponent(start_param);
+      fragment = fragment
+        .replace(new RegExp('(tgWebAppStartParam=)' + encodedParam.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&'), 'g'), '$1')
+        .replace(new RegExp('(tgWebAppStartParam=)' + start_param.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&'), 'g'), '$1')
+        // Also remove it from inside the tgWebAppData value (URL-encoded JSON-like string)
+        .replace(new RegExp('start_param%3D' + encodedParam.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&'), 'g'), 'start_param%3D')
+        .replace(new RegExp('start_param%3D' + start_param.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&'), 'g'), 'start_param%3D');
+
+      var base = env === 'dev'
+        ? 'https://dev.apps-father.com'
+        : 'https://apps-father.com';
+
+      var target = base + '/dev/' + project_id + '/#' + fragment;
+
+      window.location.replace(target);
+    })();
+  </script>
+</body>
+</html>

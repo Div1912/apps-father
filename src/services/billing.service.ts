@@ -217,6 +217,7 @@ export class BillingService {
     operation: string,
     tierId?: string,
     preCharged = false,
+    taskId?: string,
   ): Promise<UsageResult> {
     const costUsd = await this.calculateCostAsync(model, usage);
 
@@ -238,6 +239,7 @@ export class BillingService {
           operation,
           creditsCharged,
           tierId: resolvedTierId,
+          taskId: taskId || null,
         },
       });
 

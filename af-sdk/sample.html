@@ -1,0 +1,1007 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <title>FluxPay — Apps Father SDK Demo</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="./app-ui.js"></script>
+  <style>
+    body {
+      padding-top: env(safe-area-inset-top, 0);
+      padding-bottom: 100px; /* room for floating tab bar */
+    }
+
+    /* ── App shell ── */
+    .app-shell {
+      max-width: 480px;
+      margin: 0 auto;
+      padding: 0 16px;
+    }
+
+    /* ── Inline icon ── */
+    .ic {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      flex-shrink: 0;
+      color: currentColor;
+    }
+    .ic svg {
+      width: 100%;
+      height: 100%;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+    }
+
+    /* ── Top app bar ── */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      padding: 12px 16px 14px;
+      max-width: 480px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: linear-gradient(180deg,
+        color-mix(in srgb, var(--af-bg-1) 92%, transparent) 0%,
+        color-mix(in srgb, var(--af-bg-1) 65%, transparent) 80%,
+        transparent 100%);
+      backdrop-filter: blur(20px) saturate(180%);
+      -webkit-backdrop-filter: blur(20px) saturate(180%);
+    }
+    .topbar-title {
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      flex: 1;
+      line-height: 1.2;
+    }
+    .topbar-title small {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--af-text-2);
+      letter-spacing: 0;
+    }
+    .topbar-avatar {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      color: white;
+      font-size: 14px;
+      flex-shrink: 0;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(99,102,241,0.32);
+    }
+    .topbar-icon {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      background: var(--af-card-bg);
+      border: 1px solid var(--af-card-border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      flex-shrink: 0;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      color: var(--af-text);
+      position: relative;
+    }
+    .topbar-icon::after {
+      content: "";
+      position: absolute;
+      top: 8px; right: 9px;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #ef4444;
+      border: 2px solid color-mix(in srgb, var(--af-bg-1) 80%, transparent);
+    }
+
+    /* ── Hero balance card ── */
+    .hero {
+      position: relative;
+      border-radius: 28px;
+      padding: 22px 22px 20px;
+      color: white;
+      background:
+        radial-gradient(120% 80% at 100% 0%, rgba(255,255,255,0.18) 0%, transparent 60%),
+        linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #ec4899 100%);
+      box-shadow:
+        0 20px 40px rgba(99,102,241,0.34),
+        0 1px 0 rgba(255,255,255,0.2) inset;
+      overflow: hidden;
+    }
+    .hero::before {
+      content: "";
+      position: absolute;
+      top: -40px; right: -40px;
+      width: 160px; height: 160px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.08);
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      bottom: -60px; left: -30px;
+      width: 200px; height: 200px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.06);
+    }
+    .hero-label {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      opacity: 0.85;
+      position: relative;
+    }
+    .hero-amount {
+      font-size: 40px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      margin: 6px 0 12px;
+      position: relative;
+      font-variant-numeric: tabular-nums;
+    }
+    .hero-amount .currency {
+      font-size: 22px;
+      opacity: 0.7;
+      vertical-align: top;
+      margin-right: 4px;
+    }
+    .hero-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      position: relative;
+    }
+    .hero-meta-pill {
+      background: rgba(255,255,255,0.18);
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-weight: 600;
+      backdrop-filter: blur(10px);
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .hero-meta-pill .ic { width: 12px; height: 12px; }
+
+    .hero-actions {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-top: 18px;
+    }
+    .hero-action {
+      background: rgba(255,255,255,0.18);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 0;
+      border-radius: 16px;
+      padding: 12px 4px 10px;
+      color: white;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      transition: transform .15s, background .2s;
+    }
+    .hero-action:hover { background: rgba(255,255,255,0.26); }
+    .hero-action:active { transform: scale(0.95); }
+    .hero-action-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 11px;
+      background: rgba(255,255,255,0.22);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+    }
+    .hero-action-icon .ic { width: 18px; height: 18px; }
+    .hero-action-icon .ic svg { stroke-width: 2; }
+
+    /* ── Quick stats ── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .stat-card {
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: var(--af-card-bg);
+      border: 1px solid var(--af-card-border);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+    }
+    .stat-card-label {
+      font-size: 12px;
+      color: var(--af-text-2);
+      font-weight: 600;
+    }
+    .stat-card-value {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-top: 4px;
+      font-variant-numeric: tabular-nums;
+    }
+    .stat-card-trend {
+      font-size: 12px;
+      font-weight: 600;
+      margin-top: 4px;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .stat-card-trend .ic { width: 12px; height: 12px; }
+    .stat-card-trend.up { color: var(--af-success); }
+    .stat-card-trend.down { color: var(--af-error); }
+
+    /* ── Section header ── */
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 24px 4px 10px;
+    }
+    .section-head h2 {
+      font-size: 17px;
+      font-weight: 700;
+      margin: 0;
+      letter-spacing: -0.01em;
+    }
+    .section-head .link {
+      font-size: 14px;
+      color: var(--af-accent);
+      font-weight: 600;
+      cursor: pointer;
+      background: none;
+      border: 0;
+      padding: 4px 6px;
+    }
+
+    /* ── Transactions ── */
+    .tx-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      cursor: pointer;
+    }
+    .tx-row:not(:last-child) {
+      border-bottom: 1px solid var(--af-card-border);
+    }
+    .tx-icon {
+      width: 40px; height: 40px;
+      border-radius: 12px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .tx-icon .ic { width: 20px; height: 20px; }
+    .tx-icon.in    { background: rgba(16,185,129,0.16); color: #10b981; }
+    .tx-icon.out   { background: rgba(244,63,94,0.16);  color: #f43f5e; }
+    .tx-icon.swap  { background: rgba(99,102,241,0.16); color: #6366f1; }
+    .tx-icon.cash  { background: rgba(245,158,11,0.16); color: #f59e0b; }
+    .tx-icon.work  { background: rgba(20,184,166,0.16); color: #14b8a6; }
+    .tx-icon.travel{ background: rgba(56,189,248,0.16); color: #38bdf8; }
+    .tx-content { flex: 1; min-width: 0; }
+    .tx-title {
+      font-weight: 600;
+      font-size: 15px;
+      letter-spacing: -0.005em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .tx-subtitle {
+      font-size: 13px;
+      color: var(--af-text-2);
+      margin-top: 2px;
+    }
+    .tx-amount {
+      font-size: 15px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.01em;
+      flex-shrink: 0;
+    }
+    .tx-amount.in  { color: var(--af-success); }
+    .tx-amount.out { color: var(--af-text); }
+
+    /* ── Cards page ── */
+    .credit-card {
+      position: relative;
+      border-radius: 22px;
+      padding: 22px;
+      color: white;
+      aspect-ratio: 1.586/1;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.32);
+      overflow: hidden;
+    }
+    .credit-card.indigo {
+      background: linear-gradient(135deg, #312e81 0%, #6366f1 50%, #a855f7 100%);
+    }
+    .credit-card.rose {
+      background: linear-gradient(135deg, #831843 0%, #ec4899 50%, #f97316 100%);
+    }
+    .credit-card.emerald {
+      background: linear-gradient(135deg, #064e3b 0%, #10b981 50%, #06b6d4 100%);
+    }
+    .credit-card::before {
+      content: "";
+      position: absolute;
+      top: 50%; left: -20%;
+      width: 140%;
+      height: 200%;
+      background: radial-gradient(closest-side, rgba(255,255,255,0.16), transparent 70%);
+      transform: translateY(-50%) rotate(-12deg);
+      pointer-events: none;
+    }
+    .cc-top { display: flex; justify-content: space-between; align-items: center; position: relative; }
+    .cc-brand {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      opacity: 0.9;
+    }
+    .cc-chip {
+      width: 36px; height: 26px;
+      border-radius: 6px;
+      background: linear-gradient(135deg, #facc15, #f59e0b);
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+      position: relative;
+    }
+    .cc-chip::after {
+      content: "";
+      position: absolute;
+      inset: 4px 6px;
+      border: 1px solid rgba(0,0,0,0.18);
+      border-radius: 3px;
+    }
+    .cc-number {
+      font-family: "SF Mono", ui-monospace, monospace;
+      font-size: 18px;
+      letter-spacing: 0.18em;
+      position: relative;
+      margin-top: 12px;
+    }
+    .cc-bottom {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      position: relative;
+    }
+    .cc-name {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .cc-exp {
+      font-size: 11px;
+      opacity: 0.85;
+    }
+    .cc-logo {
+      font-size: 22px;
+      font-weight: 800;
+      font-style: italic;
+      letter-spacing: -0.02em;
+    }
+
+    /* ── Profile page ── */
+    .profile-hero {
+      text-align: center;
+      padding: 24px 16px 8px;
+    }
+    .profile-avatar {
+      width: 88px; height: 88px;
+      border-radius: 50%;
+      margin: 0 auto 12px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      font-weight: 700;
+      color: white;
+      box-shadow: 0 12px 32px rgba(99,102,241,0.4);
+    }
+    .profile-name {
+      font-size: 22px;
+      font-weight: 700;
+      margin: 0;
+      letter-spacing: -0.01em;
+    }
+    .profile-handle {
+      font-size: 14px;
+      color: var(--af-text-2);
+      margin-top: 4px;
+    }
+    .profile-stats {
+      display: flex;
+      justify-content: center;
+      gap: 32px;
+      padding: 20px 0;
+      border-top: 1px solid var(--af-card-border);
+      border-bottom: 1px solid var(--af-card-border);
+      margin-top: 16px;
+    }
+    .profile-stat {
+      text-align: center;
+    }
+    .profile-stat-value {
+      font-size: 20px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .profile-stat-label {
+      font-size: 12px;
+      color: var(--af-text-2);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-top: 2px;
+    }
+
+    /* ── Tab bar ── */
+    .tabbar {
+      position: fixed;
+      bottom: 12px;
+      left: 12px;
+      right: 12px;
+      max-width: 460px;
+      margin: 0 auto;
+      padding: 8px;
+      background: color-mix(in srgb, var(--af-bg-2) 75%, transparent);
+      backdrop-filter: blur(28px) saturate(180%);
+      -webkit-backdrop-filter: blur(28px) saturate(180%);
+      border: 1px solid var(--af-card-border);
+      border-radius: 24px;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.32);
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 4px;
+      z-index: 100;
+    }
+    .tab {
+      background: transparent;
+      border: 0;
+      padding: 8px 4px;
+      border-radius: 16px;
+      color: var(--af-text-2);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      transition: color .2s var(--af-ease), background .2s var(--af-ease), transform .15s;
+    }
+    .tab .ic { width: 22px; height: 22px; }
+    .tab .ic svg { stroke-width: 1.8; transition: stroke-width .2s; }
+    .tab.active {
+      color: var(--af-accent);
+      background: color-mix(in srgb, var(--af-accent) 14%, transparent);
+    }
+    .tab.active .ic svg { stroke-width: 2.2; }
+    .tab:active { transform: scale(0.94); }
+
+    /* ── Settings ── */
+    .settings-group {
+      margin-bottom: 16px;
+    }
+    .settings-group-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--af-text-2);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin: 0 4px 8px;
+    }
+
+    /* ── Misc ── */
+    h1, h2, h3, p { margin: 0; }
+    .page-padding { padding-top: 4px; }
+
+    /* Override list-item icon — we want neutral background per row */
+    .af-list-item-icon {
+      background: var(--af-card-bg);
+      border: 1px solid var(--af-card-border);
+      color: var(--af-text);
+      width: 36px;
+      height: 36px;
+      border-radius: 11px;
+    }
+    .af-list-item-icon .ic { width: 18px; height: 18px; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-avatar" data-action="goProfile">JD</div>
+    <div class="topbar-title" id="topbar-title">
+      Hello, Jamie
+      <small id="topbar-sub">Welcome back</small>
+    </div>
+    <button class="topbar-icon" data-action="showNotifications" aria-label="Notifications">
+      <span class="ic" id="ic-bell"></span>
+    </button>
+  </div>
+
+  <main id="app" class="app-shell"></main>
+
+  <nav class="tabbar" id="tabbar">
+    <button class="tab active" data-tab="home"     data-action="goHome"><span class="ic" data-icon="home"></span><span>Home</span></button>
+    <button class="tab"        data-tab="cards"    data-action="goCards"><span class="ic" data-icon="card"></span><span>Cards</span></button>
+    <button class="tab"        data-tab="activity" data-action="goActivity"><span class="ic" data-icon="chart"></span><span>Activity</span></button>
+    <button class="tab"        data-tab="profile"  data-action="goProfile"><span class="ic" data-icon="user"></span><span>Profile</span></button>
+  </nav>
+
+  <script>
+    /* ─── ICON LIBRARY (Lucide-style line icons) ─── */
+    const ICONS = {
+      bell:        '<svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>',
+      home:        '<svg viewBox="0 0 24 24"><path d="m3 12 9-9 9 9"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg>',
+      card:        '<svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M2 10h20"/><path d="M6 15h4"/></svg>',
+      chart:       '<svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14v4"/><path d="M11 9v9"/><path d="M15 12v6"/><path d="M19 6v12"/></svg>',
+      user:        '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-7 8-7s8 3 8 7"/></svg>',
+      arrowUp:     '<svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>',
+      arrowDown:   '<svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>',
+      arrowUpRight:'<svg viewBox="0 0 24 24"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>',
+      arrowDownLeft:'<svg viewBox="0 0 24 24"><path d="M17 7 7 17"/><path d="M16 17H7V8"/></svg>',
+      swap:        '<svg viewBox="0 0 24 24"><path d="M3 16h14l-3-3"/><path d="M21 8H7l3 3"/></svg>',
+      plus:        '<svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>',
+      lock:        '<svg viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4"/></svg>',
+      shield:      '<svg viewBox="0 0 24 24"><path d="M12 2 4 6v6c0 5 4 9 8 10 4-1 8-5 8-10V6Z"/><path d="m9 12 2 2 4-4"/></svg>',
+      pin:         '<svg viewBox="0 0 24 24"><path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>',
+      repeat:      '<svg viewBox="0 0 24 24"><path d="M17 2 21 6l-4 4"/><path d="M3 12V8a4 4 0 0 1 4-4h14"/><path d="M7 22 3 18l4-4"/><path d="M21 12v4a4 4 0 0 1-4 4H3"/></svg>',
+      moon:        '<svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg>',
+      fingerprint: '<svg viewBox="0 0 24 24"><path d="M12 11v3a3 3 0 0 0 6 0"/><path d="M5 13a8 8 0 0 1 14-5"/><path d="M3 8a10 10 0 0 1 17 0"/><path d="M8 17a4 4 0 0 0 8 0"/><path d="M9 21c1-2 1-5 1-7"/></svg>',
+      message:     '<svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-12 7l-5 1 1-4a8 8 0 1 1 16-4Z"/></svg>',
+      info:        '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M11 12h1v5h1"/></svg>',
+      link:        '<svg viewBox="0 0 24 24"><path d="M9 17H7a5 5 0 1 1 0-10h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><path d="M8 12h8"/></svg>',
+      briefcase:   '<svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>',
+      utensils:    '<svg viewBox="0 0 24 24"><path d="M3 2v7a3 3 0 0 0 3 3v9"/><path d="M9 2v20"/><path d="M15 14V2c-3 0-3 4-3 6s0 6 3 6Z"/><path d="M15 14v8"/></svg>',
+      plane:       '<svg viewBox="0 0 24 24"><path d="M17.8 19.2 16 11l3.5-3.5a3 3 0 0 0-4-4L12 7 3.8 5.2 2 7l8 4-3 3-3-1-1 2 4 2 2 4 2-1-1-3 3-3 4 8 1.8-1.8Z"/></svg>',
+      bitcoin:     '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 8h4.5a2 2 0 0 1 0 4h-4.5z"/><path d="M9.5 12h5a2 2 0 0 1 0 4h-5z"/><path d="M11 6v2M13 6v2M11 16v2M13 16v2"/></svg>',
+      person:      '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-7 8-7s8 3 8 7"/></svg>',
+    };
+
+    function ic(name, size) {
+      const svg = ICONS[name] || '';
+      return size
+        ? `<span class="ic" style="width:${size}px;height:${size}px">${svg}</span>`
+        : `<span class="ic">${svg}</span>`;
+    }
+
+    /* Initial bell + tabbar icon mount */
+    document.getElementById("ic-bell").innerHTML = ICONS.bell;
+    document.querySelectorAll("[data-icon]").forEach(el => {
+      el.innerHTML = ICONS[el.getAttribute("data-icon")] || "";
+    });
+
+    /* ─── App ─── */
+    const app = AFApp.create({
+      root: "#app",
+      initialPage: "home",
+      transition: "slide",
+      accent: "#6366f1",
+    });
+
+    const demoState = {
+      user: { name: "Jamie", handle: "@jdoe", initials: "JD" },
+      balance: 12480.36,
+      currency: "USD",
+      change: { value: 2.4, since: "this month" },
+      stats: { income: 4820.00, spending: 2310.50 },
+      transactions: [
+        { id: 1, kind: "in",     ic: "arrowDownLeft", title: "Salary — Acme Inc.",   subtitle: "Direct deposit · Today",   amount: "+$5,200.00" },
+        { id: 2, kind: "out",    ic: "utensils",      title: "Burger Bros.",          subtitle: "Food · 18:42",             amount: "−$24.80" },
+        { id: 3, kind: "swap",   ic: "swap",          title: "USD → EUR",             subtitle: "Exchange · Yesterday",     amount: "−$500.00" },
+        { id: 4, kind: "cash",   ic: "bitcoin",       title: "Bitcoin",               subtitle: "Crypto · Yesterday",       amount: "+0.00214 BTC" },
+        { id: 5, kind: "travel", ic: "plane",         title: "Lufthansa",             subtitle: "Travel · Apr 22",          amount: "−$348.20" },
+        { id: 6, kind: "work",   ic: "briefcase",     title: "Freelance — Studio X",  subtitle: "Wire transfer · Apr 18",   amount: "+$1,250.00" },
+      ],
+      cards: [
+        { id: 1, kind: "indigo",  brand: "Platinum", number: "•••• •••• •••• 4521", name: "JAMIE DOE", exp: "12/28" },
+        { id: 2, kind: "rose",    brand: "Travel",   number: "•••• •••• •••• 8830", name: "JAMIE DOE", exp: "06/27" },
+        { id: 3, kind: "emerald", brand: "Business", number: "•••• •••• •••• 1192", name: "ACME LLC",  exp: "09/29" },
+      ],
+      preferences: {
+        notifications: true,
+        biometrics: true,
+        darkMode: true,
+        dailyReport: false,
+      },
+    };
+
+    /* ─── PAGES ─── */
+
+    app.page("home", ({ state }) => {
+      const formatted = state.balance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const txItems = state.transactions.slice(0, 4).map(tx => `
+        <div class="tx-row" data-action="openTx" data-id="${tx.id}">
+          <div class="tx-icon ${tx.kind}">${ic(tx.ic)}</div>
+          <div class="tx-content">
+            <div class="tx-title">${tx.title}</div>
+            <div class="tx-subtitle">${tx.subtitle}</div>
+          </div>
+          <div class="tx-amount ${tx.kind === 'in' || tx.kind === 'work' ? 'in' : 'out'}">${tx.amount}</div>
+        </div>
+      `).join("");
+
+      return `
+        <div class="page-padding">
+          <section class="hero">
+            <div class="hero-label">Total balance</div>
+            <div class="hero-amount"><span class="currency">$</span>${formatted}</div>
+            <div class="hero-meta">
+              <span class="hero-meta-pill">${ic("arrowUp")} ${state.change.value}%</span>
+              <span style="opacity:.85">${state.change.since}</span>
+            </div>
+            <div class="hero-actions">
+              <button class="hero-action" data-action="send">
+                <span class="hero-action-icon">${ic("arrowUpRight")}</span><span>Send</span>
+              </button>
+              <button class="hero-action" data-action="request">
+                <span class="hero-action-icon">${ic("arrowDownLeft")}</span><span>Receive</span>
+              </button>
+              <button class="hero-action" data-action="swap">
+                <span class="hero-action-icon">${ic("swap")}</span><span>Swap</span>
+              </button>
+              <button class="hero-action" data-action="topup">
+                <span class="hero-action-icon">${ic("plus")}</span><span>Top up</span>
+              </button>
+            </div>
+          </section>
+
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-card-label">Income</div>
+              <div class="stat-card-value">$${state.stats.income.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+              <div class="stat-card-trend up">${ic("arrowUp")} 12.4%</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-card-label">Spending</div>
+              <div class="stat-card-value">$${state.stats.spending.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+              <div class="stat-card-trend down">${ic("arrowDown")} 4.1%</div>
+            </div>
+          </div>
+
+          <div class="section-head">
+            <h2>Recent activity</h2>
+            <button class="link" data-action="goActivity">See all</button>
+          </div>
+
+          <section class="af-card" style="padding:0">
+            ${txItems}
+          </section>
+        </div>
+      `;
+    });
+
+    app.page("cards", ({ state }) => {
+      const cards = state.cards.map(card => `
+        <div class="credit-card ${card.kind}">
+          <div class="cc-top">
+            <span class="cc-brand">${card.brand}</span>
+            <div class="cc-chip"></div>
+          </div>
+          <div class="cc-number">${card.number}</div>
+          <div class="cc-bottom">
+            <div>
+              <div class="cc-name">${card.name}</div>
+              <div class="cc-exp">EXP ${card.exp}</div>
+            </div>
+            <div class="cc-logo">flux</div>
+          </div>
+        </div>
+      `).join("");
+
+      return `
+        <div class="page-padding">
+          <div class="section-head">
+            <h2>Your cards</h2>
+            <button class="link" data-action="addCard">+ Add</button>
+          </div>
+          <div style="display:grid;gap:14px">
+            ${cards}
+          </div>
+
+          <h2 class="af-section-title">Card features</h2>
+          ${AFApp.Components.List([
+            { icon: ic("lock"),    title: "Freeze card",  subtitle: "Disable instantly",   action: "freezeCard" },
+            { icon: ic("pin"),     title: "Location",     subtitle: "Verified merchants",  action: "cardLocation" },
+            { icon: ic("shield"),  title: "Card limits",  subtitle: "Daily $5,000",        action: "cardLimits" },
+            { icon: ic("repeat"),  title: "Apple Pay",    subtitle: "Connected",           action: "applePay" },
+          ])}
+        </div>
+      `;
+    });
+
+    app.page("activity", ({ state }) => {
+      const months = [
+        { label: "Apr", value: 78 },
+        { label: "May", value: 92 },
+        { label: "Jun", value: 64 },
+        { label: "Jul", value: 88 },
+        { label: "Aug", value: 71 },
+        { label: "Sep", value: 95 },
+      ];
+      const max = Math.max(...months.map(m => m.value));
+      const bars = months.map(m => `
+        <div style="display:flex;flex-direction:column;align-items:center;gap:6px;flex:1">
+          <div style="width:100%;height:120px;display:flex;align-items:flex-end">
+            <div style="
+              width:100%;
+              border-radius:8px 8px 4px 4px;
+              height:${(m.value / max) * 100}%;
+              background: linear-gradient(180deg, var(--af-accent) 0%, var(--af-accent-2) 100%);
+              box-shadow: 0 4px 12px color-mix(in srgb, var(--af-accent) 35%, transparent);
+            "></div>
+          </div>
+          <div style="font-size:11px;color:var(--af-text-2);font-weight:600">${m.label}</div>
+        </div>
+      `).join("");
+
+      const txItems = state.transactions.map(tx => `
+        <div class="tx-row" data-action="openTx" data-id="${tx.id}">
+          <div class="tx-icon ${tx.kind}">${ic(tx.ic)}</div>
+          <div class="tx-content">
+            <div class="tx-title">${tx.title}</div>
+            <div class="tx-subtitle">${tx.subtitle}</div>
+          </div>
+          <div class="tx-amount ${tx.kind === 'in' || tx.kind === 'work' ? 'in' : 'out'}">${tx.amount}</div>
+        </div>
+      `).join("");
+
+      return `
+        <div class="page-padding">
+          <div class="section-head"><h2>Spending overview</h2></div>
+
+          <section class="af-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+              <div>
+                <div style="font-size:13px;color:var(--af-text-2);font-weight:600">Last 6 months</div>
+                <div style="font-size:24px;font-weight:700;letter-spacing:-0.02em;font-variant-numeric:tabular-nums">$13,842.19</div>
+              </div>
+              <span class="af-pill success" style="display:inline-flex;align-items:center;gap:3px">${ic("arrowUp", 12)} 18.2%</span>
+            </div>
+            <div style="display:flex;align-items:flex-end;gap:8px;margin-top:14px;height:140px">
+              ${bars}
+            </div>
+          </section>
+
+          <div class="section-head"><h2>All transactions</h2></div>
+          <section class="af-card" style="padding:0">${txItems}</section>
+        </div>
+      `;
+    });
+
+    app.page("profile", ({ state }) => {
+      const p = state.preferences;
+      return `
+        <div class="profile-hero">
+          <div class="profile-avatar">${state.user.initials}</div>
+          <h2 class="profile-name">${state.user.name} Doe</h2>
+          <div class="profile-handle">${state.user.handle}</div>
+          <div class="profile-stats">
+            <div class="profile-stat">
+              <div class="profile-stat-value">28</div>
+              <div class="profile-stat-label">Sent</div>
+            </div>
+            <div class="profile-stat">
+              <div class="profile-stat-value">142</div>
+              <div class="profile-stat-label">Received</div>
+            </div>
+            <div class="profile-stat">
+              <div class="profile-stat-value">$12.4k</div>
+              <div class="profile-stat-label">Saved</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="page-padding">
+          <div class="settings-group">
+            <h3 class="settings-group-title">Account</h3>
+            ${AFApp.Components.List([
+              { icon: ic("person"),    title: "Personal info",   subtitle: "Name, email, phone",      action: "editProfile" },
+              { icon: ic("shield"),    title: "Security",         subtitle: "Passcode, biometrics",   action: "openSecurity" },
+              { icon: ic("link"),      title: "Linked accounts",  subtitle: "2 accounts connected",   action: "openLinked" },
+            ])}
+          </div>
+
+          <div class="settings-group">
+            <h3 class="settings-group-title">Preferences</h3>
+            <div class="af-list">
+              <div class="af-list-item">
+                <div class="af-list-item-icon">${ic("bell")}</div>
+                <div class="af-list-item-content">
+                  <div class="af-list-item-title">Notifications</div>
+                  <div class="af-list-item-subtitle">Push, email, in-app</div>
+                </div>
+                <div class="af-switch ${p.notifications ? "on" : ""}" data-action="togglePref" data-key="notifications"></div>
+              </div>
+              <div class="af-list-item">
+                <div class="af-list-item-icon">${ic("fingerprint")}</div>
+                <div class="af-list-item-content">
+                  <div class="af-list-item-title">Biometrics</div>
+                  <div class="af-list-item-subtitle">Face ID enabled</div>
+                </div>
+                <div class="af-switch ${p.biometrics ? "on" : ""}" data-action="togglePref" data-key="biometrics"></div>
+              </div>
+              <div class="af-list-item">
+                <div class="af-list-item-icon">${ic("moon")}</div>
+                <div class="af-list-item-content">
+                  <div class="af-list-item-title">Dark mode</div>
+                  <div class="af-list-item-subtitle">System default</div>
+                </div>
+                <div class="af-switch ${p.darkMode ? "on" : ""}" data-action="togglePref" data-key="darkMode"></div>
+              </div>
+              <div class="af-list-item">
+                <div class="af-list-item-icon">${ic("chart")}</div>
+                <div class="af-list-item-content">
+                  <div class="af-list-item-title">Daily report</div>
+                  <div class="af-list-item-subtitle">Summary at 9 PM</div>
+                </div>
+                <div class="af-switch ${p.dailyReport ? "on" : ""}" data-action="togglePref" data-key="dailyReport"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <h3 class="settings-group-title">More</h3>
+            ${AFApp.Components.List([
+              { icon: ic("message"), title: "Help & support", subtitle: "FAQ, chat with us",  action: "openHelp" },
+              { icon: ic("info"),    title: "About",          subtitle: "Version 4.2.0",      action: "openAbout" },
+            ])}
+          </div>
+
+          <button class="af-btn danger" data-action="signOut" style="margin-top:8px">Sign out</button>
+        </div>
+      `;
+    });
+
+    /* ─── ACTIONS ─── */
+
+    function setActiveTab(name) {
+      document.querySelectorAll(".tab").forEach(el => {
+        el.classList.toggle("active", el.dataset.tab === name);
+      });
+    }
+
+    const TITLES = {
+      home:     { title: "Hello, Jamie",  sub: "Welcome back" },
+      cards:    { title: "Your cards",    sub: "3 active" },
+      activity: { title: "Activity",      sub: "Last 30 days" },
+      profile:  { title: "Profile",       sub: "@jdoe" },
+    };
+    function setTopbar(name) {
+      const t = TITLES[name] || { title: "FluxPay", sub: "" };
+      document.getElementById("topbar-title").firstChild.textContent = t.title + " ";
+      document.getElementById("topbar-sub").textContent = t.sub;
+    }
+
+    app.on("after:navigate", ({ page }) => {
+      setActiveTab(page);
+      setTopbar(page);
+      AFApp.haptic("selection");
+    });
+
+    app.action("goHome",     ({ app }) => app.navigate("home"));
+    app.action("goCards",    ({ app }) => app.navigate("cards"));
+    app.action("goActivity", ({ app }) => app.navigate("activity"));
+    app.action("goProfile",  ({ app }) => app.navigate("profile"));
+
+    app.action("send",     ({ app }) => app.toast("Send money — opening recipient picker", "info"));
+    app.action("request",  ({ app }) => app.toast("Generated a payment link", "success"));
+    app.action("swap",     ({ app }) => app.toast("Swap rate refreshed", "info"));
+    app.action("topup",    ({ app }) => app.toast("Top up via Apple Pay", "info"));
+
+    app.action("addCard",  ({ app }) => app.modal({
+      title: "Order a new card",
+      body:  "Choose the card type and shipping address. Cards arrive in 5–7 business days and are activated automatically.",
+      cancelText: "Not now",
+      confirmText: "Continue",
+    }).then(ok => ok && app.toast("Card request submitted", "success")));
+
+    app.action("freezeCard",   ({ app }) => app.toast("Card frozen — tap again to unfreeze", "warning"));
+    app.action("cardLocation", ({ app }) => app.toast("18 verified merchants nearby", "info"));
+    app.action("cardLimits",   ({ app }) => app.toast("Limits page coming soon", "info"));
+    app.action("applePay",     ({ app }) => app.toast("Already in Apple Wallet", "success"));
+
+    app.action("openTx", ({ app, params }) => {
+      const tx = app.state.transactions.find(t => String(t.id) === params.id);
+      if (!tx) return;
+      app.modal({
+        title: tx.title,
+        html: `
+          <div style="font-size:32px;font-weight:800;letter-spacing:-0.02em;margin-bottom:6px">${tx.amount}</div>
+          <div style="color:var(--af-text-2);margin-bottom:14px">${tx.subtitle}</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <span class="af-pill ${tx.kind === 'in' || tx.kind === 'work' ? 'success' : 'muted'}">${tx.kind === 'in' || tx.kind === 'work' ? 'Incoming' : tx.kind.charAt(0).toUpperCase() + tx.kind.slice(1)}</span>
+            <span class="af-pill muted">Reference #FX${tx.id}1042</span>
+          </div>
+        `,
+        cancelText: "Close",
+      });
+    });
+
+    app.action("togglePref", ({ app, params }) => {
+      const next = Object.assign({}, app.state.preferences);
+      next[params.key] = !next[params.key];
+      app.setState({ preferences: next });
+      AFApp.haptic("selection");
+    });
+
+    app.action("editProfile",  ({ app }) => app.toast("Edit profile soon", "info"));
+    app.action("openSecurity", ({ app }) => app.toast("Security center", "info"));
+    app.action("openLinked",   ({ app }) => app.toast("2 accounts linked", "info"));
+    app.action("openHelp",     ({ app }) => app.toast("Live chat is online", "success"));
+    app.action("openAbout",    ({ app }) => app.toast("FluxPay v4.2.0", "info"));
+
+    app.action("showNotifications", ({ app }) => app.modal({
+      title: "Notifications",
+      html: `
+        <div style="display:grid;gap:10px">
+          <div style="display:flex;gap:10px;align-items:center;padding:10px;border-radius:14px;background:var(--af-card-bg);border:1px solid var(--af-card-border)">
+            <div style="width:36px;height:36px;border-radius:10px;background:rgba(16,185,129,0.18);color:#10b981;display:flex;align-items:center;justify-content:center">${ic("arrowDownLeft")}</div>
+            <div style="flex:1">
+              <div style="font-weight:600;font-size:14px">Salary received</div>
+              <div style="font-size:12px;color:var(--af-text-2)">+$5,200.00 from Acme Inc.</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;padding:10px;border-radius:14px;background:var(--af-card-bg);border:1px solid var(--af-card-border)">
+            <div style="width:36px;height:36px;border-radius:10px;background:rgba(99,102,241,0.18);color:#6366f1;display:flex;align-items:center;justify-content:center">${ic("swap")}</div>
+            <div style="flex:1">
+              <div style="font-weight:600;font-size:14px">Exchange completed</div>
+              <div style="font-size:12px;color:var(--af-text-2)">USD → EUR at 0.928</div>
+            </div>
+          </div>
+        </div>
+      `,
+      cancelText: "Got it",
+    }));
+
+    app.action("signOut", ({ app }) => app.modal({
+      title: "Sign out?",
+      body: "You will need to log in again next time you open the app.",
+      cancelText: "Cancel",
+      confirmText: "Sign out",
+      danger: true,
+    }).then(ok => ok && app.toast("Signed out", "info")));
+
+    app.start(demoState);
+  </script>
+</body>
+</html>

@@ -46,6 +46,7 @@ model User {
   retentionPushes RetentionPush[]
   adminNotes      AdminUserNote[]
   taskCompletions TaskCompletion[]
+  agentFeedback   AgentFeedback[]
 
   @@map("users")
 }
@@ -102,6 +103,7 @@ model Project {
   tonWallet     String?        @map("ton_wallet")
   qualityTier   Int            @default(1) @map("quality_tier")
   releaseCommit Int?           @map("release_commit")
+  lastTaskId    String?        @map("last_task_id")
 
   user          User           @relation(fields: [userId], references: [id])
   versions      Version[]
@@ -109,6 +111,7 @@ model Project {
   conversations Conversation[]
   usageLogs     UsageLog[]
   appLogs       AppLog[]
+  agentFeedback AgentFeedback[]
 
   @@map("projects")
 }
@@ -246,6 +249,7 @@ model UsageLog {
   operation       String
   creditsCharged  Int?     @map("credits_charged")
   tierId          String?  @map("tier_id")
+  taskId          String?  @map("task_id")
   createdAt       DateTime @default(now()) @map("created_at")
 
   user    User     @relation(fields: [userId], references: [id])
@@ -314,4 +318,105 @@ model TaskCompletion {
 
   @@unique([taskId, userId])
   @@map("task_completions")
+}
+
+// Agent training: short text rules learned from user feedback.
+// `enabled=true` rules are injected into buildSystemPrompt() at runtime.
+// Per-env state (enabled, timestamps, importedFrom, sourceCaseId) is NOT exported.
+model AgentLesson {
+  id           String    @id                              // stable cuid for cross-env match
+  rule         String                                      // text injected into system prompt
+  context      String?                                     // when this rule applies
+  tags         String[]  @default([])                      // ["forms", "validation", "ui"]
+  enabled      Boolean   @default(false)                   // PER-ENV state, NOT exported
+  notes        String?                                     // admin commentary, IS exported
+  sourceCaseId String?   @map("source_case_id")            // FK to future AgentFeedback
+  contentHash  String    @map("content_hash")              // sha256(rule+context+tags)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt      @map("updated_at")
+  enabledAt    DateTime? @map("enabled_at")
+  disabledAt   DateTime? @map("disabled_at")
+  importedFrom String?   @map("imported_from")             // "prod" / "dev" / null
+
+  @@index([enabled])
+  @@map("agent_lessons")
+}
+
+// User feedback case ("cashback issue") collected after each agent run.
+// Stores the user's rating + the context needed to analyze what went wrong:
+// the prompt, the credits charged, before/after commit numbers (the agent.log
+// is loaded lazily from disk at commits/{commitNumAfter}/agent.log).
+//
+// analysisStatus lifecycle:
+//   pending      — created on submit; nothing analyzed yet
+//   learning     — admin clicked "Run Analysis"; LLM running in background
+//   result_ready — LLM returned suggestedLessons/Patches; awaiting admin review
+//   applied      — admin clicked "Apply"; appliedLessonIds/PatchIds populated
+//   skipped      — admin marked as no-op
+model AgentFeedback {
+  id               String    @id @default(cuid())
+  projectId        String    @map("project_id")
+  userId           Int       @map("user_id")
+  userPrompt       String    @map("user_prompt")
+  commitNumBefore  Int?      @map("commit_num_before")
+  commitNumAfter   Int?      @map("commit_num_after")
+  creditsCharged   Int       @default(0) @map("credits_charged")
+
+  isCorrect        Boolean   @map("is_correct")
+  qualityScore     Int       @map("quality_score")
+  speedScore       Int       @map("speed_score")
+  userDescription  String?   @map("user_description")
+
+  // Performance tier the run actually used (looked up from UsageLog.tierId
+  // at submit time). Helps the admin spot tier-related quality issues.
+  performanceTier  String?   @map("performance_tier")
+
+  cashbackCredits  Int       @default(0) @map("cashback_credits")
+  cashbackPaidAt   DateTime? @map("cashback_paid_at")
+
+  analysisStatus   String    @default("pending") @map("analysis_status")
+  analysisResult   Json?     @map("analysis_result")
+  analysisModel    String?   @map("analysis_model")
+  analysisError    String?   @map("analysis_error")
+  appliedAt        DateTime? @map("applied_at")
+  appliedLessonIds String[]  @default([]) @map("applied_lesson_ids")
+  appliedPatchIds  String[]  @default([]) @map("applied_patch_ids")
+
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt      @map("updated_at")
+
+  project Project @relation(fields: [projectId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@unique([userId, projectId, commitNumAfter])
+  @@index([analysisStatus])
+  @@index([userId])
+  @@index([projectId])
+  @@map("agent_feedback")
+}
+
+// Agent training: text suggestions for editing the agent's own source/instructions.
+// NEVER auto-applied — admin reviews, copies cursorPrompt to IDE, applies manually.
+// Status: proposed → applied / rejected. Per-env status NOT exported.
+model AgentCodePatch {
+  id            String    @id                              // stable cuid for cross-env match
+  title         String                                     // short label
+  problem       String                                     // what's broken in agent behavior
+  targetFiles   String[]  @default([]) @map("target_files") // paths to touch
+  suggestion    String                                     // free-form description of change
+  cursorPrompt  String    @map("cursor_prompt")            // ready-to-paste prompt for IDE
+  tags          String[]  @default([])
+  status        String    @default("proposed")             // proposed | applied | rejected
+  notes         String?                                    // admin commentary, IS exported
+  sourceCaseId  String?   @map("source_case_id")
+  contentHash   String    @map("content_hash")             // sha256 of exported fields
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt      @map("updated_at")
+  appliedAt     DateTime? @map("applied_at")
+  rejectedAt    DateTime? @map("rejected_at")
+  appliedCommit String?   @map("applied_commit")           // optional git SHA
+  importedFrom  String?   @map("imported_from")
+
+  @@index([status])
+  @@map("agent_code_patches")
 }

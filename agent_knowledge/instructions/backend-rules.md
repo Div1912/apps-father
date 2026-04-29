@@ -25,3 +25,12 @@ RULES FOR BACKEND (routes.js):
       SOME_SECRET=abc123
     Never hardcode secrets directly in routes.js.
 15. You CAN require npm packages — install them first with shell("npm install <pkg>")
+16. API_BASE in frontend ends with "/". Backend route paths must NOT start with "/api/{projectId}/".
+    Frontend fetch(API_BASE + 'users') → hits router.get('/users', ...) — correct.
+    If you see a double-slash in a URL (e.g. /api/id//users), the frontend endpoint starts with "/" — fix it there.
+17. EVERY Express route path in routes.js MUST start with "/".
+    WRONG:  router.get("words", ...)
+    WRONG:  router.post("bot-webhook", ...)
+    CORRECT: router.get("/words", ...)
+    CORRECT: router.post("/bot-webhook", ...)
+    Reason: the platform forwards /api/{projectId}/words to the project router as /words.

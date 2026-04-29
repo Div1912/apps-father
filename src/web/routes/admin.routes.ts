@@ -954,6 +954,94 @@ router.get("/api/stats/tiers", async (req: Request, res: Response) => {
   }
 });
 
+// ── Agent Sessions ────────────────────────────────────────────────────────────
+// Returns usage_logs grouped by task_id so the admin can see per-run cost/revenue.
+// Rows with task_id = NULL are skipped (non-agent operations like avatar_generation).
+router.get("/api/sessions", async (req: Request, res: Response) => {
+  try {
+    const page  = Math.max(1, parseInt(String(req.query.page  || "1"), 10));
+    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || "50"), 10)));
+    const skip  = (page - 1) * limit;
+    const projectIdFilter = typeof req.query.projectId === "string" ? req.query.projectId : undefined;
+    const userIdFilter    = typeof req.query.userId    === "string" ? parseInt(req.query.userId, 10) : undefined;
+
+    // Raw query: aggregate per task_id
+    const whereClauses: string[] = ["ul.task_id IS NOT NULL"];
+    if (projectIdFilter) whereClauses.push(`ul.project_id = '${projectIdFilter.replace(/'/g, "''")}'`);
+    if (userIdFilter)    whereClauses.push(`ul.user_id = ${userIdFilter}`);
+    const whereStr = whereClauses.join(" AND ");
+
+    const rows: any[] = await prisma.$queryRawUnsafe(`
+      SELECT
+        ul.task_id          AS "taskId",
+        ul.project_id       AS "projectId",
+        ul.user_id          AS "userId",
+        p.name              AS "projectName",
+        MIN(ul.created_at)  AS "startedAt",
+        SUM(ul.input_tokens)    AS "inputTokens",
+        SUM(ul.output_tokens)   AS "outputTokens",
+        SUM(ul.cost_usd)        AS "costUsd",
+        SUM(ul.credits_charged) AS "creditsCharged",
+        COUNT(*)                AS "callCount"
+      FROM usage_logs ul
+      LEFT JOIN projects p ON p.id = ul.project_id
+      WHERE ${whereStr}
+      GROUP BY ul.task_id, ul.project_id, ul.user_id, p.name
+      ORDER BY MIN(ul.created_at) DESC
+      LIMIT ${limit} OFFSET ${skip}
+    `);
+
+    const countResult: any[] = await prisma.$queryRawUnsafe(`
+      SELECT COUNT(DISTINCT ul.task_id) AS total FROM usage_logs ul WHERE ${whereStr}
+    `);
+    const total = Number(countResult[0]?.total || 0);
+
+    // Credits-to-dollar rate from runtime config (default 50 credits = $1).
+    // Revenue in USD = credits / creditsPerDollar.
+    const creditsPerDollar = runtimeConfig.getCreditsPerDollar() || 50;
+    const sessions = rows.map((r: any) => {
+      const costUsd      = Number(r.costUsd || 0);
+      const credits      = Number(r.creditsCharged || 0);
+      const revenueUsd   = credits / creditsPerDollar;
+      const marginUsd    = revenueUsd - costUsd;
+      return {
+        taskId:       r.taskId,
+        projectId:    r.projectId,
+        projectName:  r.projectName || "Unknown",
+        userId:       r.userId,
+        startedAt:    r.startedAt,
+        inputTokens:  Number(r.inputTokens || 0),
+        outputTokens: Number(r.outputTokens || 0),
+        costUsd:      parseFloat(costUsd.toFixed(6)),
+        creditsCharged: credits,
+        revenueUsd:   parseFloat(revenueUsd.toFixed(4)),
+        marginUsd:    parseFloat(marginUsd.toFixed(4)),
+        callCount:    Number(r.callCount || 0),
+      };
+    });
+
+    res.json({ sessions, total, page, limit, creditsPerDollar });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE all usage_log rows for a given agent session (task_id).
+// Used by Admin → Sessions to purge a single run from the table.
+router.delete("/api/sessions/:taskId", async (req: Request, res: Response) => {
+  try {
+    const taskId = String(req.params.taskId || "").trim();
+    if (!taskId) {
+      res.status(400).json({ error: "taskId is required" });
+      return;
+    }
+    const result = await prisma.usageLog.deleteMany({ where: { taskId } });
+    res.json({ ok: true, deleted: result.count });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET current tier config
 router.get("/api/config/tiers", async (_req: Request, res: Response) => {
   res.json({ tiers: runtimeConfig.getAllTiers() });
@@ -1351,6 +1439,440 @@ router.delete("/api/tasks/:id", async (req: Request<{ id: string }>, res: Respon
 
 // Serve uploaded task images
 router.use("/uploads/tasks", express.static(TASK_UPLOADS_DIR));
+
+// ── Agent Lessons & Code Patches (training knowledge) ──────────────────────
+//
+// Two stores share one Import/Export pipeline:
+//   * agent-lessons  — text rules, runtime-injected when enabled.
+//   * agent-patches  — text suggestions for editing agent code, never auto-applied.
+// See agent-lessons.service.ts for per-env semantics.
+import * as agentKnowledge from "../../services/agent-lessons.service";
+
+// In-memory upload storage for the import preview/apply endpoints (small JSON files).
+const knowledgeImportUpload = (require("multer") as any)({
+  storage: (require("multer") as any).memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+// --- Lessons CRUD ---
+
+router.get("/api/agent-lessons", async (req: Request, res: Response) => {
+  try {
+    const enabled =
+      req.query.enabled === "true" ? true : req.query.enabled === "false" ? false : undefined;
+    const tag = typeof req.query.tag === "string" ? req.query.tag : undefined;
+    const q = typeof req.query.q === "string" ? req.query.q : undefined;
+    const lessons = await agentKnowledge.listLessons({ enabled, tag, q });
+    res.json(lessons);
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post("/api/agent-lessons", async (req: Request, res: Response) => {
+  try {
+    const lesson = await agentKnowledge.createLesson(req.body || {});
+    res.json(lesson);
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.get("/api/agent-lessons/:id", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const lesson = await agentKnowledge.getLesson(req.params.id);
+    if (!lesson) {
+      res.status(404).json({ error: "Lesson not found" });
+      return;
+    }
+    res.json(lesson);
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.patch("/api/agent-lessons/:id", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const lesson = await agentKnowledge.updateLesson(req.params.id, req.body || {});
+    res.json(lesson);
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.delete("/api/agent-lessons/:id", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    await agentKnowledge.deleteLesson(req.params.id);
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post("/api/agent-lessons/:id/enable", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const lesson = await agentKnowledge.setLessonEnabled(req.params.id, true);
+    res.json(lesson);
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post("/api/agent-lessons/:id/disable", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const lesson = await agentKnowledge.setLessonEnabled(req.params.id, false);
+    res.json(lesson);
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post("/api/agent-lessons/bulk-enable", async (req: Request, res: Response) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+    const result = await agentKnowledge.bulkSetLessonEnabled(ids, true);
+    res.json({ ok: true, count: result.count });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post("/api/agent-lessons/bulk-disable", async (req: Request, res: Response) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+    const result = await agentKnowledge.bulkSetLessonEnabled(ids, false);
+    res.json({ ok: true, count: result.count });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// --- Code Patches CRUD ---
+
+router.get("/api/agent-patches", async (req: Request, res: Response) => {
+  try {
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    const tag = typeof req.query.tag === "string" ? req.query.tag : undefined;
+    const q = typeof req.query.q === "string" ? req.query.q : undefined;
+    const patches = await agentKnowledge.listPatches({ status, tag, q });
+    res.json(patches);
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post("/api/agent-patches", async (req: Request, res: Response) => {
+  try {
+    const patch = await agentKnowledge.createPatch(req.body || {});
+    res.json(patch);
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.get("/api/agent-patches/:id", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const patch = await agentKnowledge.getPatch(req.params.id);
+    if (!patch) {
+      res.status(404).json({ error: "Patch not found" });
+      return;
+    }
+    res.json(patch);
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.patch("/api/agent-patches/:id", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const patch = await agentKnowledge.updatePatch(req.params.id, req.body || {});
+    res.json(patch);
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.delete("/api/agent-patches/:id", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    await agentKnowledge.deletePatch(req.params.id);
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post("/api/agent-patches/:id/mark-applied", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const commit = typeof req.body?.commit === "string" ? req.body.commit : undefined;
+    const patch = await agentKnowledge.setPatchStatus(req.params.id, "applied", { commit });
+    res.json(patch);
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post("/api/agent-patches/:id/mark-rejected", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const patch = await agentKnowledge.setPatchStatus(req.params.id, "rejected");
+    res.json(patch);
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post("/api/agent-patches/:id/reopen", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const patch = await agentKnowledge.setPatchStatus(req.params.id, "proposed");
+    res.json(patch);
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// --- Unified Export / Import (one file, both kinds) ---
+
+router.get("/api/agent-knowledge/export", async (req: Request, res: Response) => {
+  try {
+    const includeRaw =
+      typeof req.query.include === "string" ? req.query.include : undefined;
+    const include = includeRaw
+      ? (includeRaw.split(",").map((s) => s.trim()).filter(Boolean) as any)
+      : undefined;
+    const { json, filename } = await agentKnowledge.exportKnowledge({ include });
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(json);
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post(
+  "/api/agent-knowledge/import/preview",
+  knowledgeImportUpload.single("file"),
+  async (req: Request, res: Response) => {
+    try {
+      const raw = req.file?.buffer?.toString("utf-8");
+      if (!raw) {
+        res.status(400).json({ error: "No file uploaded" });
+        return;
+      }
+      const diff = await agentKnowledge.previewImport(raw);
+      res.json(diff);
+    } catch (err: any) {
+      res.status(err.status || 500).json({ error: err.message });
+    }
+  },
+);
+
+router.post("/api/agent-knowledge/import/apply", async (req: Request, res: Response) => {
+  try {
+    const { json, lessonActions, patchActions, enableNewLessons } = req.body || {};
+    if (typeof json !== "string" || !json.trim()) {
+      res.status(400).json({ error: "Missing 'json' string in body" });
+      return;
+    }
+    const result = await agentKnowledge.applyImport(json, {
+      lessonActions: lessonActions || {},
+      patchActions: patchActions || {},
+      enableNewLessons: !!enableNewLessons,
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// ── Agent Feedback (cashback issues) — review & analysis ────────────────────
+//
+// Admin reviews cases collected by the mini app, then either:
+//   1. Clicks "Run Analysis" → fires LLM in background (status: learning)
+//   2. After result_ready, clicks "Apply" → creates AgentLesson / AgentCodePatch
+//      rows from the LLM's suggestions.
+import * as agentFeedbackService from "../../services/agent-feedback.service";
+
+router.get("/api/agent-feedback", async (req: Request, res: Response) => {
+  try {
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    const q = typeof req.query.q === "string" ? req.query.q : undefined;
+    const where: any = {};
+    if (status && status !== "all") where.analysisStatus = status;
+    if (q) {
+      where.OR = [
+        { userPrompt: { contains: q, mode: "insensitive" } },
+        { userDescription: { contains: q, mode: "insensitive" } },
+      ];
+    }
+    // Guard against orphaned rows (project deleted after feedback was created).
+    // Prisma throws "got null instead" for required relations, so we pre-filter.
+    where.project = { id: { not: "" } };
+    const items = await prisma.agentFeedback.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: 200,
+      include: {
+        user: { select: { id: true, telegramId: true, username: true, firstName: true } },
+        project: { select: { id: true, name: true, botUsername: true } },
+      },
+    });
+    // Convert BigInt telegramId for JSON.
+    const safe = items.map((it: any) => ({
+      ...it,
+      user: it.user
+        ? { ...it.user, telegramId: it.user.telegramId ? String(it.user.telegramId) : null }
+        : null,
+    }));
+    res.json(safe);
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.get("/api/agent-feedback/:id", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const fb = await prisma.agentFeedback.findFirst({
+      where: { id: req.params.id, project: { id: { not: "" } } },
+      include: {
+        user: { select: { id: true, telegramId: true, username: true, firstName: true } },
+        project: { select: { id: true, name: true, botUsername: true } },
+      },
+    });
+    if (!fb) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    // Lazy-load the parsed agent log only on the detail endpoint to keep the
+    // list payload light.
+    const logEntries = agentFeedbackService.readAgentLogEntries(fb.projectId, fb.commitNumAfter);
+    res.json({
+      ...fb,
+      user: fb.user
+        ? { ...fb.user, telegramId: fb.user.telegramId ? String(fb.user.telegramId) : null }
+        : null,
+      logEntries,
+    });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post("/api/agent-feedback/:id/analyze", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const fb = await prisma.agentFeedback.findUnique({ where: { id: req.params.id } });
+    if (!fb) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    if (fb.analysisStatus === "learning") {
+      res.status(409).json({ error: "already_learning" });
+      return;
+    }
+    // Fire-and-forget: respond immediately so admin UI can poll for status.
+    // Errors are caught + recorded to analysisError on the row.
+    agentFeedbackService.analyzeCase(req.params.id).catch((err) => {
+      console.warn(`[Admin] analyzeCase background failure: ${err?.message || err}`);
+    });
+    res.json({ ok: true, status: "learning" });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post("/api/agent-feedback/:id/apply", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const fb = await prisma.agentFeedback.findUnique({ where: { id: req.params.id } });
+    if (!fb) { res.status(404).json({ error: "Not found" }); return; }
+    if (fb.analysisStatus !== "result_ready") {
+      res.status(409).json({ error: "not_ready" });
+      return;
+    }
+    const result = (fb.analysisResult as any) || {};
+    const lessons = Array.isArray(result.suggestedLessons) ? result.suggestedLessons : [];
+    const patches = Array.isArray(result.suggestedPatches) ? result.suggestedPatches : [];
+
+    // Optional: caller can specify which suggestions to apply. Default = all.
+    const lessonPicks: number[] = Array.isArray(req.body?.lessonIndexes)
+      ? req.body.lessonIndexes.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n))
+      : lessons.map((_: any, i: number) => i);
+    const patchPicks: number[] = Array.isArray(req.body?.patchIndexes)
+      ? req.body.patchIndexes.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n))
+      : patches.map((_: any, i: number) => i);
+
+    const createdLessonIds: string[] = [];
+    for (const idx of lessonPicks) {
+      const l = lessons[idx];
+      if (!l || !l.rule) continue;
+      const created = await agentKnowledge.createLesson({
+        rule: String(l.rule),
+        context: l.context ? String(l.context) : null,
+        tags: Array.isArray(l.tags) ? l.tags.map(String) : [],
+        notes: l.notes ? String(l.notes) : `From feedback case ${fb.id}`,
+      });
+      createdLessonIds.push(created.id);
+    }
+
+    const createdPatchIds: string[] = [];
+    for (const idx of patchPicks) {
+      const p = patches[idx];
+      if (!p || !p.title || !p.problem || !p.suggestion || !p.cursorPrompt) continue;
+      const created = await agentKnowledge.createPatch({
+        title: String(p.title),
+        problem: String(p.problem),
+        targetFiles: Array.isArray(p.targetFiles) ? p.targetFiles.map(String) : [],
+        suggestion: String(p.suggestion),
+        cursorPrompt: String(p.cursorPrompt),
+        tags: Array.isArray(p.tags) ? p.tags.map(String) : [],
+        notes: p.notes ? String(p.notes) : `From feedback case ${fb.id}`,
+      });
+      createdPatchIds.push(created.id);
+    }
+
+    const updated = await prisma.agentFeedback.update({
+      where: { id: fb.id },
+      data: {
+        analysisStatus: "applied",
+        appliedAt: new Date(),
+        appliedLessonIds: createdLessonIds,
+        appliedPatchIds: createdPatchIds,
+      },
+    });
+    res.json({
+      ok: true,
+      createdLessons: createdLessonIds.length,
+      createdPatches: createdPatchIds.length,
+      feedback: updated,
+    });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.patch("/api/agent-feedback/:id", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const status = typeof req.body?.analysisStatus === "string" ? req.body.analysisStatus : undefined;
+    const allowed = new Set(["pending", "learning", "result_ready", "applied", "skipped"]);
+    if (!status || !allowed.has(status)) {
+      res.status(400).json({ error: "Invalid analysisStatus" });
+      return;
+    }
+    const data: any = { analysisStatus: status };
+    if (status === "skipped") data.appliedAt = new Date();
+    if (status === "pending") data.analysisError = null;
+    const updated = await prisma.agentFeedback.update({ where: { id: req.params.id }, data });
+    res.json(updated);
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.delete("/api/agent-feedback/:id", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    await prisma.agentFeedback.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
 
 router.get(/^\/(?!api(\/|$)).*/, (_req: Request, res: Response) => {
   const indexPath = path.join(ADMIN_DIR, "index.html");

@@ -52,15 +52,12 @@ This workflow replaces the standard App workflow entirely.
 
    **Performance budget** — pixel ratio cap, InstancedMesh threshold (use when count > 30), geometry/material reuse strategy.
 
-3. Write `frontend/index.html` — ONE file, inline CSS, `<script type="module">`.
-   - Three.js via importmap (version 0.160.0, ESM CDN).
-   - Canvas: 100vw × 100vh. Body: margin:0; overflow:hidden; background:#000; touch-action:none.
+3. Write THREE frontend files: `frontend/index.html`, `frontend/styles.css`, `frontend/app.js`.
+   - **index.html**: loads `<link href="styles.css">` and `<script src="app.js">`. Three.js via importmap (version 0.160.0, ESM CDN). Canvas element, HTML overlay for score/UI. Call Telegram.WebApp.ready/expand/disableVerticalSwipes/requestFullscreen with try/catch.
+   - **styles.css**: all visual styling — canvas sizing (100vw × 100vh), body (margin:0; overflow:hidden; background:#000; touch-action:none), overlay panels, mobile controls, score display.
+   - **app.js**: `<script type="module">`. All game logic — Three.js scene setup, animation loop, input handling, collision, scoring, persistence. Use THREE.Clock; clamp dt = Math.min(clock.getDelta(), 1/30). Persistence via Telegram.WebApp.CloudStorage with localStorage fallback. Haptic feedback on key events.
    - HTML ids/classes must be plain, not escaped. Correct: `<canvas id="game-canvas">`; wrong: `<canvas id="\"game-canvas\"">`.
-   - WebApp.ready(), WebApp.expand(), WebApp.disableVerticalSwipes?.(), WebApp.requestFullscreen?.() — all best-effort with try/catch.
-   - One requestAnimationFrame loop with THREE.Clock. Clamp dt = Math.min(clock.getDelta(), 1/30).
-   - Persistence via Telegram.WebApp.CloudStorage (getItem/setItem) with localStorage fallback.
-   - Haptic feedback: HapticFeedback.impactOccurred / notificationOccurred on key events.
-   - HTML overlay for score, start/death screen, mobile controls only — no Telegram chrome classes.
+   - **routes.js is optional** — only create it if the game needs server-side multiplayer or shared leaderboards.
 
 4. configure_app(name, description, longDescription, menuButtonText)
    - One atomic call. First build only. It saves metadata to Apps Father DB first and configures the bot now or when it is later linked.

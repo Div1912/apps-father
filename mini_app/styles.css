@@ -1026,6 +1026,18 @@ i.icon {
   align-self: flex-start;
 }
 
+.detail-copy-id {
+  cursor: pointer;
+  display: inline-block;
+  border-radius: 6px;
+  padding: 1px 4px;
+  transition: background 0.15s;
+  user-select: none;
+}
+.detail-copy-id:active {
+  background: rgba(128,128,128,0.15);
+}
+
 .tm-table-header {
   flex-shrink: 0;
   margin-inline-end: 12px;
@@ -3498,6 +3510,7 @@ color-mix(in srgb, #000000 10%, #00000000);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    max-width: 120px;
 }
 
 .chat-header-status {
@@ -3814,6 +3827,78 @@ color-mix(in srgb, #000000 10%, #00000000);
   margin-right: 6px;
   font-size: 14px;
   opacity: 0.95;
+}
+
+/* ── Dev-tools service messages (Restyle App / Bug Report) ────────────────── */
+.chat-devtools-svc {
+  display: flex;
+  justify-content: center;
+  padding: 10px 16px;
+  margin: 2px 0;
+}
+.chat-devtools-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px 9px 12px;
+  border-radius: 22px;
+  max-width: 85%;
+  position: relative;
+  overflow: hidden;
+}
+.chat-devtools-pill::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0.06;
+  background: radial-gradient(circle at 20% 50%, white, transparent 70%);
+  pointer-events: none;
+}
+.chat-devtools-icon {
+  font-size: 16px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.chat-devtools-label {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-devtools-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+  flex-shrink: 0;
+  animation: svc-dot-pulse 2.2s ease-in-out infinite;
+}
+@keyframes svc-dot-pulse {
+  0%, 100% { opacity: 0.2; transform: scale(0.8); }
+  50% { opacity: 0.6; transform: scale(1.15); }
+}
+/* Restyle variant — purple/indigo */
+.chat-devtools-svc--restyle .chat-devtools-pill {
+  background: linear-gradient(135deg, rgba(99,102,241,0.18), rgba(139,92,246,0.12));
+  border: 1px solid rgba(139,92,246,0.28);
+  color: #a78bfa;
+  box-shadow: 0 2px 12px rgba(139,92,246,0.10);
+}
+/* Bug variant — red */
+.chat-devtools-svc--bug .chat-devtools-pill {
+  background: linear-gradient(135deg, rgba(239,68,68,0.14), rgba(249,115,22,0.09));
+  border: 1px solid rgba(239,68,68,0.28);
+  color: #f87171;
+  box-shadow: 0 2px 12px rgba(239,68,68,0.10);
+}
+/* Default variant — grey */
+.chat-devtools-svc--default .chat-devtools-pill {
+  background: linear-gradient(135deg, rgba(148,163,184,0.14), rgba(100,116,139,0.09));
+  border: 1px solid rgba(148,163,184,0.22);
+  color: #94a3b8;
 }
 
 .chat-bubble--preparing {
@@ -4231,8 +4316,8 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
   border-color: rgba(52,199,89,0.16);
 }
 .agent-step--error {
-  background: rgba(255,59,48,0.05);
-  border-color: rgba(255,59,48,0.18);
+  background: rgba(148,163,184,0.05);
+  border-color: rgba(148,163,184,0.14);
 }
 /* Ghost "still working" step — shown after all green steps while agent runs */
 .agent-step--ghost {
@@ -4287,7 +4372,7 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
 /* Icon color per state */
 .agent-step--running .agent-step-icon { color: #5eb5f7; }
 .agent-step--done    .agent-step-icon { color: rgba(52,199,89,0.9); }
-.agent-step--error   .agent-step-icon { color: rgba(255,90,80,0.9); }
+.agent-step--error   .agent-step-icon { color: rgba(148,163,184,0.7); }
 
 /* Shared SVG icon sizing */
 .step-svg-icon {
@@ -4322,7 +4407,7 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
   font-size: 12px;
 }
 .agent-step--done .agent-step-title  { color: rgba(52,199,89,0.85); }
-.agent-step--error .agent-step-title { color: rgba(255,90,80,0.9); }
+.agent-step--error .agent-step-title { color: rgba(148,163,184,0.8); }
 .agent-step-target {
   font-family: 'Courier New', monospace;
   font-size: 11px;
@@ -10022,3 +10107,391 @@ color-mix(in srgb, var(--tg-theme-button-color, #2563eb) 50%, transparent);
   color: rgba(255,255,255,0.4);
   font-size: 14px;
 }
+
+/* ─── Agent Rating / Cashback modal ──────────────────────────────────────── */
+
+#rating-modal .purchase-modal-sheet {
+  padding: 8px 18px 22px;
+  max-height: 92vh;
+  overflow-y: auto;
+}
+
+/* Legacy classes from old purchase-modal style (kept for safety) */
+.rating-header { display: none; }
+.rating-title  { display: none; }
+.rating-subtitle { display: none; }
+
+/* ── Rating modal — full-screen tier-modal style ─────────────────────────── */
+.rating-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+}
+.rating-modal.hidden { display: none; }
+
+.rating-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 7, 15, 0.82);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.rating-modal-sheet {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  background: var(--tg-theme-bg-color, #0d0d12);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.rating-modal-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px 12px;
+  background: var(--tg-theme-bg-color, #0d0d12);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  flex-shrink: 0;
+}
+.rating-modal-back {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.05);
+  color: rgba(255,255,255,0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.rating-modal-back:active { transform: scale(0.92); }
+.rating-modal-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.rating-modal-title {
+  font-size: 18px;
+  font-weight: 800;
+  color: #fff;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+.rating-modal-subtitle {
+  font-size: 12px;
+  color: rgba(255,255,255,0.35);
+  text-align: left;
+  margin: 0;
+}
+.rating-modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 16px 40px;
+  display: flex;
+  flex-direction: column;
+}
+
+.rating-field-group {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 16px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+}
+.rating-field-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.85);
+  margin-bottom: 10px;
+}
+
+.rating-attention {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(251,191,36,0.10);
+  border: 1px solid rgba(251,191,36,0.28);
+  color: #fbd38a;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.rating-question {
+  margin: 14px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.85);
+  letter-spacing: 0.01em;
+}
+
+.rating-yn-row {
+  display: flex;
+  gap: 10px;
+}
+.rating-yn-btn {
+  flex: 1;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1.5px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.85);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.05s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.rating-yn-btn:active { transform: scale(0.98); }
+.rating-yn-btn.active {
+  background: rgba(78,164,246,0.16);
+  border-color: rgba(78,164,246,0.55);
+  color: #fff;
+  box-shadow: 0 0 0 2px rgba(78,164,246,0.12);
+}
+#rating-no.active {
+  background: rgba(248,113,113,0.16);
+  border-color: rgba(248,113,113,0.55);
+  box-shadow: 0 0 0 2px rgba(248,113,113,0.12);
+}
+
+.rating-score-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 2px;
+}
+.rating-score-input {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: rgba(255,255,255,0.10);
+  border-radius: 2px;
+  outline: none;
+}
+.rating-score-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #6aa9ff 0%, #4382e6 100%);
+  border: 2px solid #1c1c1e;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+}
+.rating-score-input::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #6aa9ff 0%, #4382e6 100%);
+  border: 2px solid #1c1c1e;
+  cursor: pointer;
+}
+.rating-score-value {
+  min-width: 28px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 15px;
+  color: #fff;
+  background: rgba(255,255,255,0.06);
+  padding: 4px 8px;
+  border-radius: 8px;
+}
+
+.rating-desc-wrap {
+  margin-top: 4px;
+}
+.rating-desc {
+  width: 100%;
+  min-height: 100px;
+  resize: vertical;
+  border-radius: 12px;
+  border: 1.5px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.04);
+  padding: 10px 12px;
+  color: #fff;
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.4;
+  outline: none;
+  box-sizing: border-box;
+}
+.rating-desc:focus {
+  border-color: rgba(78,164,246,0.55);
+  background: rgba(255,255,255,0.06);
+}
+.rating-desc-counter {
+  margin-top: 6px;
+  text-align: right;
+  font-size: 11.5px;
+  color: rgba(248,113,113,0.85);
+  font-variant-numeric: tabular-nums;
+}
+.rating-desc-counter--ok {
+  color: rgba(74,222,128,0.85);
+}
+
+.rating-cashback-preview {
+  margin: 18px 0 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(251,191,36,0.10) 0%, rgba(251,191,36,0.04) 100%);
+  border: 1px solid rgba(251,191,36,0.20);
+  color: rgba(255,255,255,0.78);
+  font-size: 13.5px;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.rating-cashback-amt {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #fbbf24;
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.rating-submit-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin-top: 8px;
+  padding: 15px;
+  border-radius: 16px;
+  border: none;
+  background: rgba(99,156,255,0.18);
+  color: rgba(255,255,255,0.45);
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, transform 0.05s ease;
+  letter-spacing: -0.01em;
+}
+.rating-submit-btn--ready {
+  background: linear-gradient(135deg, #4e9cf6 0%, #335fd8 100%);
+  color: #fff;
+  box-shadow: 0 4px 16px rgba(78,156,246,0.32);
+}
+.rating-submit-btn:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
+/* Inline button on the result bubble that opens the rating modal. */
+/* Legacy class kept for old rendered bubbles */
+.chat-cashback-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  margin: 10px 0 4px;
+  padding: 11px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(251,191,36,0.32);
+  background: linear-gradient(180deg, rgba(251,191,36,0.14) 0%, rgba(251,191,36,0.06) 100%);
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.18s ease, transform 0.05s ease;
+}
+.chat-cashback-btn:active { transform: scale(0.99); }
+.chat-cashback-btn__label {
+  flex: 1;
+  text-align: left;
+}
+.chat-cashback-btn__amt {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: #fbbf24;
+  font-weight: 700;
+  background: rgba(0,0,0,0.18);
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 13px;
+}
+.chat-cashback-btn--done {
+  background: rgba(74,222,128,0.10);
+  border-color: rgba(74,222,128,0.30);
+  color: rgba(255,255,255,0.65);
+  cursor: default;
+  justify-content: center;
+}
+.chat-cashback-btn--done:active { transform: none; }
+
+/* New "Rate the update" button — replaces chat-cashback-btn */
+.chat-rate-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 11px 14px;
+  border-radius: 14px;
+  border: 1.5px solid rgba(99,156,255,0.30);
+  background: rgba(99,156,255,0.08);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.05s ease, border-color 0.15s ease;
+  text-align: left;
+}
+.chat-rate-btn:active { transform: scale(0.99); }
+.chat-rate-btn:hover {
+  background: rgba(99,156,255,0.14);
+  border-color: rgba(99,156,255,0.5);
+}
+.chat-rate-btn__icon {
+  font-size: 15px;
+  flex-shrink: 0;
+  color: #9ec5ff;
+  line-height: 1;
+}
+.chat-rate-btn__label {
+  flex: 1;
+  min-width: 0;
+}
+.chat-rate-btn__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(251,191,36,0.16);
+  border: 1px solid rgba(251,191,36,0.30);
+  color: #fbbf24;
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.chat-rate-btn--done {
+  background: rgba(74,222,128,0.08);
+  border-color: rgba(74,222,128,0.22);
+  color: rgba(255,255,255,0.55);
+  cursor: default;
+  font-size: 13px;
+  font-weight: 500;
+  justify-content: center;
+  padding: 8px 14px;
+}
+.chat-rate-btn--done:active { transform: none; }

@@ -1,24 +1,129 @@
-import OpenAI from "openai";
 import { config } from "../config";
 import { runtimeConfig } from "./runtime-config.service";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
+export interface OpenRouterClient {
+  chat: {
+    completions: {
+      create(params: any): Promise<any>;
+    };
+  };
+}
+
+function openRouterHeaders(apiKey: string, sessionId?: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+    "HTTP-Referer": `https://${config.domain}`,
+    "X-Title": "Apps Father",
+    "X-OpenRouter-Title": "Apps Father",
+    ...(sessionId ? { "x-session-id": sessionId } : {}),
+  };
+}
+
+function normalizeOpenRouterBody(params: any): any {
+  const { extra_body, ...rest } = params || {};
+  // Older OpenAI SDK path used extra_body as a pass-through. Direct OpenRouter
+  // requests should receive these fields at top-level (session_id, thinking, etc.).
+  return {
+    ...(extra_body || {}),
+    ...rest,
+  };
+}
+
+function normalizeOpenRouterJson(data: any): any {
+  if (data?.error) {
+    const err = data.error;
+    const message = typeof err === "string"
+      ? err
+      : err.message || err.code || JSON.stringify(err).slice(0, 500);
+    throw new Error(`OpenRouter error: ${message}`);
+  }
+
+  // Some proxy-style APIs wrap the completion in { data: ... }. Accept that
+  // defensively so callers still receive the OpenAI-compatible shape.
+  if (!Array.isArray(data?.choices) && Array.isArray(data?.data?.choices)) {
+    return data.data;
+  }
+
+  if (!Array.isArray(data?.choices)) {
+    throw new Error(`OpenRouter returned unexpected response: ${JSON.stringify(data).slice(0, 1000)}`);
+  }
+
+  return data;
+}
+
+async function* parseOpenRouterStream(resp: Response): AsyncGenerator<any> {
+  const reader = (resp.body as any)?.getReader?.();
+  if (!reader) throw new Error("OpenRouter streaming response has no readable body");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary !== -1) {
+        const rawEvent = buffer.slice(0, boundary).trim();
+        buffer = buffer.slice(boundary + 2);
+
+        for (const line of rawEvent.split(/\r?\n/)) {
+          if (!line.startsWith("data:")) continue;
+          const data = line.slice(5).trim();
+          if (!data || data === "[DONE]") return;
+          const parsed = JSON.parse(data);
+          if (parsed?.error) {
+            const err = parsed.error;
+            throw new Error(`OpenRouter stream error: ${err.message || JSON.stringify(err).slice(0, 500)}`);
+          }
+          yield parsed;
+        }
+
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
+  } finally {
+    try { reader.releaseLock?.(); } catch {}
+  }
+}
+
 /**
- * Returns a fresh OpenAI client pointed at OpenRouter.
+ * Returns a fresh OpenRouter client.
  * The API key is read from runtimeConfig at call time so admin changes
  * take effect immediately without restart.
  */
-export function getOpenRouterClient(): OpenAI {
+export function getOpenRouterClient(): OpenRouterClient {
   const key = runtimeConfig.getOpenRouterApiKey() || config.openrouterApiKey;
-  return new OpenAI({
-    apiKey: key,
-    baseURL: OPENROUTER_BASE_URL,
-    defaultHeaders: {
-      "HTTP-Referer": `https://${config.domain}`,
-      "X-Title": "Apps Father",
+  return {
+    chat: {
+      completions: {
+        async create(params: any): Promise<any> {
+          const body = normalizeOpenRouterBody(params);
+          const sessionId = body.session_id ? String(body.session_id) : undefined;
+          const resp = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+            method: "POST",
+            headers: openRouterHeaders(key, sessionId),
+            body: JSON.stringify(body),
+          });
+
+          if (!resp.ok) {
+            const text = await resp.text().catch(() => "");
+            throw new Error(`OpenRouter ${resp.status}: ${text || resp.statusText}`);
+          }
+
+          if (body.stream) {
+            return parseOpenRouterStream(resp);
+          }
+          const data = await resp.json();
+          return normalizeOpenRouterJson(data);
+        },
+      },
     },
-  });
+  };
 }
 
 /**
@@ -94,7 +199,7 @@ export function toOpenAITool(tool: {
   name: string;
   description: string;
   input_schema: Record<string, any>;
-}): OpenAI.Chat.Completions.ChatCompletionTool {
+}): any {
   return {
     type: "function",
     function: {

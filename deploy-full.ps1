@@ -29,6 +29,8 @@ Write-Host ">>> Deploying to $ENV_NAME <<<" -ForegroundColor $COLOR
 Write-Host "=== [$ENV_NAME] Building ===" -ForegroundColor $COLOR
 npx tsc --project tsconfig.json
 if ($LASTEXITCODE -ne 0) { Write-Host "Build failed!" -ForegroundColor Red; exit 1 }
+# Copy non-TS assets that tsc doesn't handle
+Copy-Item "src/web/routes/af-devtools.js" "dist/web/routes/af-devtools.js" -Force
 Write-Host "Build OK" -ForegroundColor Green
 
 # ── Upload dist ───────────────────────────────────────────
@@ -249,7 +251,40 @@ scp tmp_welcome.sql "${SERVER}:/tmp/tmp_welcome.sql"
 ssh $SERVER "docker cp /tmp/tmp_welcome.sql ${DB_CTR}:/tmp/tmp_welcome.sql; docker exec ${DB_CTR} psql -U ${DB_USER} -d ${DB_NAME} -f /tmp/tmp_welcome.sql"
 Remove-Item tmp_welcome.sql -ErrorAction SilentlyContinue
 
+# Agent training tables (lessons + code patches)
+$lessonsSql = Get-Content "deploy/sql/agent_lessons.sql" -Raw
+$lessonsSql | Out-File -Encoding utf8 -FilePath tmp_agent_lessons.sql
+scp tmp_agent_lessons.sql "${SERVER}:/tmp/tmp_agent_lessons.sql"
+ssh $SERVER "docker cp /tmp/tmp_agent_lessons.sql ${DB_CTR}:/tmp/tmp_agent_lessons.sql; docker exec ${DB_CTR} psql -U ${DB_USER} -d ${DB_NAME} -f /tmp/tmp_agent_lessons.sql"
+Remove-Item tmp_agent_lessons.sql -ErrorAction SilentlyContinue
+
+# Agent feedback (cashback issues)
+$feedbackSql = Get-Content "deploy/sql/agent_feedback.sql" -Raw
+$feedbackSql | Out-File -Encoding utf8 -FilePath tmp_agent_feedback.sql
+scp tmp_agent_feedback.sql "${SERVER}:/tmp/tmp_agent_feedback.sql"
+ssh $SERVER "docker cp /tmp/tmp_agent_feedback.sql ${DB_CTR}:/tmp/tmp_agent_feedback.sql; docker exec ${DB_CTR} psql -U ${DB_USER} -d ${DB_NAME} -f /tmp/tmp_agent_feedback.sql"
+Remove-Item tmp_agent_feedback.sql -ErrorAction SilentlyContinue
+
+# task_id column on usage_logs
+$usageTaskSql = Get-Content "deploy/sql/usage_log_task_id.sql" -Raw
+$usageTaskSql | Out-File -Encoding utf8 -FilePath tmp_usage_task_id.sql
+scp tmp_usage_task_id.sql "${SERVER}:/tmp/tmp_usage_task_id.sql"
+ssh $SERVER "docker cp /tmp/tmp_usage_task_id.sql ${DB_CTR}:/tmp/tmp_usage_task_id.sql; docker exec ${DB_CTR} psql -U ${DB_USER} -d ${DB_NAME} -f /tmp/tmp_usage_task_id.sql"
+Remove-Item tmp_usage_task_id.sql -ErrorAction SilentlyContinue
+
+# last_task_id column on projects
+$lastTaskSql = Get-Content "deploy/sql/last_task_id.sql" -Raw
+$lastTaskSql | Out-File -Encoding utf8 -FilePath tmp_last_task_id.sql
+scp tmp_last_task_id.sql "${SERVER}:/tmp/tmp_last_task_id.sql"
+ssh $SERVER "docker cp /tmp/tmp_last_task_id.sql ${DB_CTR}:/tmp/tmp_last_task_id.sql; docker exec ${DB_CTR} psql -U ${DB_USER} -d ${DB_NAME} -f /tmp/tmp_last_task_id.sql"
+Remove-Item tmp_last_task_id.sql -ErrorAction SilentlyContinue
+
 Write-Host "Migration OK" -ForegroundColor Green
+
+# ── Bucket directory (persistent image storage, survives deploys) ─────────
+Write-Host "=== [$ENV_NAME] Ensuring bucket directory exists ===" -ForegroundColor $COLOR
+ssh $SERVER "mkdir -p ${APP_DIR}/bucket"
+Write-Host "Bucket OK" -ForegroundColor Green
 
 # ── Agent knowledge (instructions + skills) ───────────────
 Write-Host "=== [$ENV_NAME] Syncing agent_knowledge ===" -ForegroundColor $COLOR
