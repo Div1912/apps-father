@@ -5052,12 +5052,38 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
   font-weight: 600;
   font-family: inherit;
   cursor: pointer;
-  transition: opacity 0.15s, transform 0.1s;
+  transition: opacity 0.15s, transform 0.1s, filter 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 .link-bot-btn:active {
   opacity: 0.85;
   transform: scale(0.98);
 }
+.link-bot-btn:disabled,
+.link-bot-btn.busy {
+  cursor: progress;
+  opacity: 0.7;
+  transform: none;
+}
+.link-bot-btn .link-bot-btn-label {
+  font-weight: 600;
+}
+.link-bot-fee {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 70%);
+  color: #fde68a;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+.link-bot-fee b { color: #fde68a; font-weight: 800; }
 .link-bot-waiting {
   /* margin-top: 10px; */
   font-size: 12px;
@@ -5154,6 +5180,215 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
   width: 100%;
   background: #000;
 }
+
+/* ── Locked preview (paywall) overlay ──────────────────────────────────── */
+/* Shown when free users tap Run & Test on a project they haven't unlocked.
+   Renders the running app in a fullscreen iframe with a soft frosted blur
+   so users SEE what they're about to unlock, plus a gold-trimmed centered
+   card built to make them WANT to spend the credits. Once paid, we hand
+   off to the proper Telegram player (apps_father_player_bot). */
+.locked-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: transparent;
+  font-family: inherit;
+  color: #fff;
+  opacity: 1;
+}
+.locked-preview-iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: #000;
+  pointer-events: none;
+}
+/* Light teaser blur — user can still see colors/shapes of their app
+   peeking through, which sells the unlock harder than a black wall. */
+.locked-preview-blur {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at top, rgba(245, 158, 11, 0.12), transparent 55%),
+    radial-gradient(ellipse at bottom, rgba(99, 102, 241, 0.10), transparent 60%),
+    rgba(8, 8, 14, 0.30);
+  backdrop-filter: blur(3px) saturate(180%);
+  -webkit-backdrop-filter: blur(8px) saturate(180%);
+  transition: opacity 0.45s ease;
+}
+.locked-preview-close {
+  position: absolute;
+  top: max(16px, calc(var(--tg-content-safe-area-inset-top, 0px) + var(--tg-safe-area-inset-top, 0px) + 6px));
+  right: 16px;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 3;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: background 0.15s ease, transform 0.15s ease, opacity 0.3s ease;
+}
+.locked-preview-close:hover {
+  background: rgba(0, 0, 0, 0.6);
+  transform: scale(1.05);
+}
+
+/* Compact paywall strip — pinned near the bottom so the user still sees
+   most of the blurred app behind it. Goal: occupy ≤ 30% of viewport. */
+.locked-preview-card {
+  position: absolute;
+  left: 50%;
+  bottom: max(24px, calc(var(--tg-safe-area-inset-bottom, 0px) + 16px));
+  transform: translateX(-50%);
+  width: calc(100% - 28px);
+  max-width: 360px;
+  padding: 16px 16px 14px;
+  border-radius: 20px;
+  text-align: center;
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgb(251 225 36 / 16%), #000000 60%),
+    linear-gradient(180deg, rgba(56, 50, 27, 0.96), rgba(32, 17, 14, 0.96));
+  border: 1px solid rgba(253, 224, 71, 0.22);
+  box-shadow:
+    0 18px 48px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 0 40px rgba(251, 191, 36, 0.07);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  z-index: 2;
+  overflow: hidden;
+  isolation: isolate;
+  transition: opacity 0.4s ease, transform 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* Hide blur/close/card while the iframe's "Made by Apps Father" splash plays
+   (~1.8s + 0.5s fade), then fade them in once `lpv-armed` is set. */
+.locked-preview-overlay.lpv-arming .locked-preview-blur,
+.locked-preview-overlay.lpv-arming .locked-preview-close {
+  opacity: 0;
+  pointer-events: none;
+}
+.locked-preview-overlay.lpv-arming .locked-preview-card {
+  opacity: 0;
+  transform: translate(-50%, 24px);
+  pointer-events: none;
+}
+.locked-preview-overlay.lpv-armed .locked-preview-card {
+  animation: lpv-card-in 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.locked-preview-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(253, 224, 71, 0.55), rgba(255, 255, 255, 0.05) 40%, rgba(139, 92, 246, 0.35));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0.85;
+}
+@keyframes lpv-card-in {
+  from { opacity: 0; transform: translate(-50%, 12px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* Single-line message (with inline coin) — replaces title + subtitle. */
+.locked-preview-msg {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.92);
+  margin: 0 0 12px;
+}
+.locked-preview-msg b { color: #fde68a; font-weight: 800; }
+
+/* Gold CTA — compact, full-width. */
+.locked-preview-cta {
+  position: relative;
+  width: 100%;
+  border: none;
+  padding: 12px 16px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #fde68a 0%, #f59e0b 55%, #b45309 100%);
+  color: #1f1300;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  box-shadow:
+    0 10px 24px rgba(245, 158, 11, 0.45),
+    0 0 0 1px rgba(255, 255, 255, 0.45) inset;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.2s ease;
+  overflow: hidden;
+}
+.locked-preview-cta::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -120%;
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(120deg, transparent 0%, rgba(255, 255, 255, 0.55) 50%, transparent 100%);
+  transform: skewX(-20deg);
+  animation: lpv-cta-shine 3.2s ease-in-out infinite;
+  pointer-events: none;
+}
+.locked-preview-cta:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 14px 30px rgba(245, 158, 11, 0.55),
+    0 0 0 1px rgba(255, 255, 255, 0.45) inset;
+}
+.locked-preview-cta:active { transform: translateY(0); filter: brightness(0.96); }
+.locked-preview-cta:disabled,
+.locked-preview-cta.busy { opacity: 0.7; cursor: progress; transform: none; }
+.locked-preview-cta.busy::after { animation: none; opacity: 0; }
+.locked-preview-cta.lpv-cta--low {
+  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 50%, #92400e 100%);
+  filter: saturate(0.85);
+}
+.lpv-cta-label { color: #1f1300; }
+.lpv-cta-price {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgb(31 19 0 / 68%);
+  color: #1f1300;
+  font-weight: 900;
+}
+.lpv-cta-price b { color: #f9e698; }
+@keyframes lpv-cta-shine {
+  0%, 30% { left: -120%; }
+  70%, 100% { left: 130%; }
+}
+
+.locked-preview-balance {
+  margin-top: 8px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+.locked-preview-balance b { color: rgba(255, 255, 255, 0.78); font-weight: 700; }
+.locked-preview-balance .lpv-low { color: #fca5a5; }
 
 /* ── Auto-size textareas ── */
 .tm-autosize {
@@ -6144,6 +6379,44 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
 .adm-tab.active .adm-tab-count {
   background: rgba(255,255,255,0.2);
 }
+
+/* ── Admin Apps page: jump-to-project row ───────────────────────────── */
+.adm-jump-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 0 0 12px;
+}
+.adm-jump-input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 10px;
+  color: #fff;
+  font-size: 13px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.adm-jump-input::placeholder { color: rgba(255,255,255,0.3); }
+.adm-jump-input:focus { border-color: var(--accent-color, #248BDA); }
+.adm-jump-btn {
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  padding: 9px 16px;
+  border-radius: 10px;
+  background: var(--accent-color, #248BDA);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 0.15s, transform 0.1s;
+}
+.adm-jump-btn:active { opacity: 0.85; transform: scale(0.97); }
 
 /* ── Admin Apps page: toolbar / sort / budget ────────────────────────── */
 .adm-apps-toolbar {
@@ -9511,6 +9784,127 @@ color-mix(in srgb, var(--tg-theme-button-color, #2563eb) 50%, transparent);
   border-radius: 6px;
   letter-spacing: 0.04em;
 }
+.pref-fee-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 800;
+  color: #fde68a;
+  background: linear-gradient(135deg, rgba(31, 19, 0, 0.65), rgba(0, 0, 0, 0.55));
+  border: 1px solid rgba(253, 224, 71, 0.55);
+  padding: 3px 8px;
+  border-radius: 999px;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(253, 224, 71, 0.18) inset;
+  z-index: 2;
+}
+.pref-fee-badge b { color: #fde68a; font-weight: 800; }
+.pref-fee-badge svg { display: block; }
+/* Insufficient-credits state: dim it down so the card reads as locked. */
+.pref-fee-badge--locked {
+  color: rgba(248, 113, 113, 0.95);
+  background: linear-gradient(135deg, rgba(40, 12, 12, 0.75), rgba(0, 0, 0, 0.6));
+  border-color: rgba(248, 113, 113, 0.55);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(248, 113, 113, 0.18) inset;
+}
+.pref-fee-badge--locked b { color: rgba(248, 113, 113, 0.95); }
+/* Locked Game card — visually conveys the un-tappable state. The click
+   handler still fires (we want users to be told *why* it's locked + get
+   nudged to topup), so we keep cursor: pointer. */
+.gp-card-kind-game--locked .gp-canvas {
+  filter: grayscale(0.45) brightness(0.85);
+}
+.gp-card-kind-game--locked::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+}
+
+/* Refund / retry block under an error chat bubble.
+   Stacked layout — refund pill up top, full-width green Try-again CTA
+   below. Side-by-side broke whenever the localized "Try again" copy was
+   long (RU "Попробовать ещё раз" wraps onto two lines). */
+.error-refund-block {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px;
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.25);
+  border-radius: 12px;
+  font-size: 13px;
+}
+.error-refund-block .refund-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.14);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  color: #4ade80;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+.error-refund-block .refund-icon { display: inline-flex; }
+.error-refund-block .refund-icon svg { display: block; }
+.error-refund-block .refund-amount { font-weight: 800; color: #4ade80; }
+.error-refund-block .refund-suffix {
+  color: rgba(74, 222, 128, 0.85);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+.error-refund-block .btn-retry {
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  width: 100%;
+  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-shadow:
+    0 6px 16px rgba(22, 163, 74, 0.35),
+    0 0 0 1px rgba(255, 255, 255, 0.15) inset;
+  transition: transform 0.12s ease, opacity 0.12s ease, box-shadow 0.15s ease, filter 0.2s ease;
+}
+.error-refund-block .btn-retry:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 8px 22px rgba(22, 163, 74, 0.45),
+    0 0 0 1px rgba(255, 255, 255, 0.18) inset;
+}
+.error-refund-block .btn-retry:active { transform: translateY(0); filter: brightness(0.96); }
+.error-refund-block .btn-retry:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+.error-refund-block .btn-retry-icon { flex-shrink: 0; }
 .gp-tag {
   position: absolute;
   top: 8px;

@@ -53,7 +53,7 @@ This workflow replaces the standard App workflow entirely.
    **Performance budget** — pixel ratio cap, InstancedMesh threshold (use when count > 30), geometry/material reuse strategy.
 
 3. Write THREE frontend files: `frontend/index.html`, `frontend/styles.css`, `frontend/app.js`.
-   - **index.html**: loads `<link href="styles.css">` and `<script src="app.js">`. Three.js via importmap (version 0.160.0, ESM CDN). Canvas element, HTML overlay for score/UI. Call Telegram.WebApp.ready/expand/disableVerticalSwipes/requestFullscreen with try/catch.
+   - **index.html**: MUST load the Telegram Mini App SDK in `<head>` BEFORE any other script: `<script src="https://telegram.org/js/telegram-web-app.js"></script>`. Without it `Telegram.WebApp` is undefined and theme / safe-area / back-button / haptics / payments all silently break — and the build will FAIL validation. Then loads `<link href="styles.css">` and `<script src="app.js">`. Three.js via importmap (version 0.160.0, ESM CDN). Canvas element, HTML overlay for score/UI. Call Telegram.WebApp.ready/expand/disableVerticalSwipes/requestFullscreen with try/catch.
    - **styles.css**: all visual styling — canvas sizing (100vw × 100vh), body (margin:0; overflow:hidden; background:#000; touch-action:none), overlay panels, mobile controls, score display.
    - **app.js**: `<script type="module">`. All game logic — Three.js scene setup, animation loop, input handling, collision, scoring, persistence. Use THREE.Clock; clamp dt = Math.min(clock.getDelta(), 1/30). Persistence via Telegram.WebApp.CloudStorage with localStorage fallback. Haptic feedback on key events.
    - HTML ids/classes must be plain, not escaped. Correct: `<canvas id="game-canvas">`; wrong: `<canvas id="\"game-canvas\"">`.
@@ -65,4 +65,4 @@ This workflow replaces the standard App workflow entirely.
 
 5. deploy_to_dev() — deploy and verify via the Dev URL in Telegram.
 
-6. finish(shortSummary, summary) — ONE atomic call at the very end.
+6. finish(shortSummary, summary, context_diff) — ONE atomic call at the very end. See finish-tool.md.

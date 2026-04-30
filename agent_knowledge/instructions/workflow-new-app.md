@@ -91,4 +91,4 @@ WORKFLOW — NEW APP (Kind = App / standard Telegram Mini App)
    - For WS flows, pass `scenarioId` and `expectTypes` for each planned test scenario.
    - Do not add simulator-specific hacks to generated app code. Fix the app logic or the test setup.
 
-11. finish(shortSummary, summary) — ONE atomic call at the very end.
+11. finish(shortSummary, summary, context_diff) — ONE atomic call at the very end. See finish-tool.md.

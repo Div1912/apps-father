@@ -21,7 +21,7 @@ export class ProjectService {
     // admin notification, and the random winner of the create decided
     // whether utm_source/referred_by were persisted (only /api/init passes
     // those, so the source data was being lost ~75% of the time).
-    const WELCOME_CREDITS = 100;
+    const WELCOME_CREDITS = 50;
     const createData: any = { telegramId: BigInt(telegramId), username, firstName, balance: 0, credits: WELCOME_CREDITS, performanceTier: "tier_0" };
     if (referredBy && referredBy !== telegramId) {
       createData.referredBy = BigInt(referredBy);
@@ -189,8 +189,15 @@ export class ProjectService {
     const token = botToken || (project.botTokenEncrypted ? decryptToken(project.botTokenEncrypted) : "");
     if (!token) return { configured: false, lines: ["bot token not available; saved app config for later bot linking"] };
 
-    const appDescription = ((project as any).appDescription || "Open the app below").toString().substring(0, 120);
-    const appLongDescription = ((project as any).appLongDescription || project.description || "Telegram Mini App powered by Apps Father").toString().substring(0, 512);
+    // IMPORTANT: never fall back to project.description here — that's the raw
+    // user prompt ("an app for booking dentists with reminders…") and pushing
+    // it as the public bot description leaks the user's idea brief into
+    // Telegram's profile previews. Only use values the agent has explicitly
+    // saved via configure_app; otherwise leave the bot description alone.
+    const rawAppDescription = (project as any).appDescription;
+    const rawAppLongDescription = (project as any).appLongDescription;
+    const appDescription = rawAppDescription ? String(rawAppDescription).substring(0, 120) : null;
+    const appLongDescription = rawAppLongDescription ? String(rawAppLongDescription).substring(0, 512) : null;
     const rawMenuButtonText = ((project as any).appMenuButtonText ?? "Launch App").toString().substring(0, 32);
     let isTextBot = false;
     try {
@@ -212,10 +219,14 @@ export class ProjectService {
       ? { menu_button: { type: "default" as const } }
       : { menu_button: { type: "web_app" as const, text: rawMenuButtonText, web_app: { url: appUrl } } };
     const calls: Array<Promise<{ method: string; status: number; body: string }>> = [
-      callApi("setMyDescription", { description: appLongDescription }),
-      callApi("setMyShortDescription", { short_description: appDescription }),
       callApi("setChatMenuButton", menuButtonPayload),
     ];
+    if (appLongDescription) {
+      calls.push(callApi("setMyDescription", { description: appLongDescription }));
+    }
+    if (appDescription) {
+      calls.push(callApi("setMyShortDescription", { short_description: appDescription }));
+    }
     if (project.name) {
       calls.push(callApi("setMyName", { name: project.name.toString().substring(0, 64) }));
     }

@@ -752,6 +752,60 @@ function handleWSMessage(data) {
     return;
   }
 
+  if (data.type === 'plan_stream_start') {
+    setTyping(false);
+    setInputDisabled(true);
+    document.querySelectorAll('.chat-bubble--plan').forEach(el => el.remove());
+    const inner = $('dchat-messages-inner');
+    if (!inner) return;
+    const el = document.createElement('div');
+    el.id = `msg-${data.messageId}`;
+    el.className = 'chat-bubble chat-bubble--assistant chat-bubble--plan chat-bubble--plan-streaming';
+    el.innerHTML = `<div class="chat-plan-content"><span class="stream-cursor"></span></div>`;
+    inner.appendChild(el);
+    scrollToBottom();
+    return;
+  }
+
+  if (data.type === 'plan_stream_chunk') {
+    const el = $(`msg-${data.messageId}`);
+    if (el) {
+      const content = el.querySelector('.chat-plan-content');
+      if (content) content.innerHTML = formatContent(data.text) + '<span class="stream-cursor"></span>';
+    }
+    return;
+  }
+
+  if (data.type === 'plan_stream_end') {
+    const el = $(`msg-${data.messageId}`);
+    if (!el || !data.message) return;
+    const msg = data.message;
+    if (msg.type === 'error') {
+      el.className = 'chat-bubble chat-bubble--error';
+      el.innerHTML = `<div class="chat-bubble-content">${esc(msg.content)}</div>${renderRefundBlock(msg.metadata)}<div class="chat-bubble-time">${timeStr(msg.timestamp)}</div>`;
+      bindRefundRetry(el, msg.metadata);
+      el.id = `msg-${msg.id}`;
+      setInputDisabled(false);
+      scrollToBottom();
+      return;
+    }
+    el.className = 'chat-bubble chat-bubble--assistant chat-bubble--plan';
+    let html = `<div class="chat-plan-content">${formatContent(msg.content)}</div>`;
+    if (typeof msg.metadata?.costUsd === 'number') {
+      html += `<div class="chat-progress-cost">Cost: $${msg.metadata.costUsd.toFixed(4)}${typeof msg.metadata?.balance === 'number' ? ` · Balance: $${msg.metadata.balance.toFixed(2)}` : ''}</div>`;
+    }
+    html += `<div class="chat-plan-actions">
+      <button class="chat-plan-btn chat-plan-btn--build" onclick="approvePlan()">${t('chat_lets_build') || "Let's build"}</button>
+      <button class="chat-plan-btn chat-plan-btn--edit" onclick="startEditPlan()">${t('chat_edit') || 'Edit'}</button>
+    </div>`;
+    el.innerHTML = html;
+    el.id = `msg-${msg.id}`;
+    setInputDisabled(false);
+    scrollToBottom();
+    if (typeof loadBalance === 'function') loadBalance();
+    return;
+  }
+
   if (data.type === 'stream_end') {
     const el = $(`msg-${data.messageId}`);
     if (el && data.message) {
@@ -978,9 +1032,7 @@ function handleWSMessage(data) {
             <div class="changelog-card-arrow">›</div>
           </div>`;
         }
-        html += `<div class="result-actions">
-          <button class="result-action-btn result-action-test" onclick="window.open('/app/${activeProjectId}/','_blank')">▶ ${t('chat_run_test') || 'Test'}</button>
-        </div>`;
+        html += desktopResultActionsHtml(activeProjectId);
         if (typeof data.costUsd === 'number') {
           html += `<div class="chat-progress-cost">Cost: $${data.costUsd.toFixed(4)}${typeof data.balance === 'number' ? ` · Balance: $${data.balance.toFixed(2)}` : ''}</div>`;
         }
@@ -991,6 +1043,30 @@ function handleWSMessage(data) {
     }
     return;
   }
+}
+
+/**
+ * Desktop result-card actions. Mirrors mini_app/app.js#resultActionsHtml:
+ * Text Bot projects can't be opened as a web preview (no Mini App URL),
+ * so we drop the "Run & Test" button and offer "Open Bot" instead when a
+ * bot is linked. Other kinds keep the Test button.
+ */
+function desktopResultActionsHtml(projectId) {
+  const proj = (projects || []).find(p => p.id === projectId)
+    || (activeProject && activeProject.id === projectId ? activeProject : null);
+  const isTextBot = proj?.preferences?.kind === 'textBot';
+  if (isTextBot) {
+    if (proj?.botUsername) {
+      const botUrl = `https://t.me/${proj.botUsername}`;
+      return `<div class="result-actions">
+        <button class="result-action-btn result-action-test" onclick="window.open('${botUrl}','_blank')">${t('chat_open_bot') || 'Open Bot'}</button>
+      </div>`;
+    }
+    return '';
+  }
+  return `<div class="result-actions">
+    <button class="result-action-btn result-action-test" onclick="window.open('/app/${projectId}/','_blank')">▶ ${t('chat_run_test') || 'Test'}</button>
+  </div>`;
 }
 
 // ── Chat History ──
@@ -1031,6 +1107,78 @@ async function loadChatHistory(projectId) {
   } catch (err) {
     console.error('Failed to load chat history:', err);
     inner.innerHTML = '';
+  }
+}
+
+// ── Refund + retry block under error bubbles ──
+// Mirrors the mobile mini_app/app.js implementation. Server stamps
+// `metadata.refunded`, `metadata.creditsRefunded`, and `metadata.retry`
+// on error chat messages when the agent failed and credits were given
+// back to the user.
+function renderRefundBlock(metadata) {
+  if (!metadata?.refunded) return '';
+  const credits = Number(metadata.creditsRefunded || 0);
+  const retryLabel = (typeof t === 'function' && t('btn_try_again')) || 'Try again';
+  const refundSuffix = (typeof t === 'function' && t('error_credits_refunded_suffix')) || 'refunded';
+  // Inline coin SVG — kept self-contained here so desktop.js doesn't need
+  // to depend on app.js' coinSvg helper.
+  const coin = '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="9" viewBox="0 0 211.551 144.439" fill="#22c55e" style="vertical-align:middle;flex-shrink:0" aria-hidden="true"><path d="M129.743,95.01c-15.97-.027-35.976,5.02-55.714,15.292-19.706,10.273-35.326,23.73-44.495,36.873-9.174,13.1-11.654,25.3-7.141,34,4.517,8.658,15.938,13.637,31.948,13.637,16.01.045,36.017-5.024,55.709-15.252,19.738-10.273,35.348-23.775,44.5-36.873,9.2-13.1,11.618-25.3,7.132-34-4.531-8.658-15.925-13.677-31.939-13.677Zm41.225,31.531a60.545,60.545,0,0,1-9.779,20.769C151.051,161.8,134.5,175.93,113.774,186.7c-20.725,10.811-41.763,16.239-59.437,16.239a60.477,60.477,0,0,1-22.6-3.9l4.75,9.151c4.522,8.7,15.911,13.682,31.93,13.682s36.021-5.024,55.714-15.3c19.738-10.228,35.348-23.73,44.5-36.873,9.151-13.1,11.663-25.3,7.132-33.958Zm12.919,7.536c5.024,11.977.987,26.556-8.613,40.238-8.478,12.157-21.442,23.954-37.5,33.823a144.6,144.6,0,0,0,15.476.807c22.2,0,42.3-4.755,56.477-12.157,14.22-7.4,22.025-17.091,22.025-26.87s-7.805-19.468-22.025-26.87a103.163,103.163,0,0,0-25.838-8.972Zm47.864,55.983a61.176,61.176,0,0,1-18.257,13.906c-15.7,8.164-36.874,13.054-60.245,13.054a155.816,155.816,0,0,1-27.229-2.333A152.678,152.678,0,0,1,95.113,226.4c.538.314,1.077.583,1.66.9,14.175,7.4,34.272,12.157,56.477,12.157s42.3-4.755,56.477-12.157c14.22-7.4,22.025-17.091,22.025-26.87Z" transform="translate(-20.199 -95.01)"/></svg>';
+  return `
+    <div class="error-refund-block" data-refund-block>
+      <div class="refund-line">
+        <span class="refund-icon" aria-hidden="true">${coin}</span>
+        <span class="refund-amount">+${credits}</span>
+        <span class="refund-suffix">${esc(refundSuffix)}</span>
+      </div>
+      <button type="button" class="btn-retry" data-refund-retry>
+        <svg class="btn-retry-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+        <span>${esc(retryLabel)}</span>
+      </button>
+    </div>
+  `;
+}
+
+function bindRefundRetry(el, metadata) {
+  if (!metadata?.refunded) return;
+  const retry = metadata.retry;
+  if (!retry || !retry.kind) return;
+  const btn = el.querySelector('[data-refund-retry]');
+  if (!btn) return;
+  btn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (btn.disabled) return;
+    btn.disabled = true;
+    try {
+      if (retry.kind === 'build' && typeof window.approvePlan === 'function') {
+        await window.approvePlan();
+      } else if (retry.kind === 'update' && retry.text) {
+        await refireUpdate(retry.text);
+      }
+      el.style.transition = 'opacity 0.2s';
+      el.style.opacity = '0';
+      setTimeout(() => el.remove(), 200);
+    } catch (err) {
+      console.error('[refund-retry] failed:', err);
+      btn.disabled = false;
+    }
+  });
+}
+
+async function refireUpdate(text) {
+  if (!activeProjectId || !text) return;
+  setInputDisabled(true);
+  try {
+    const res = await fetch(`${API_BASE}/chat/${activeProjectId}/send`, {
+      method: 'POST',
+      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, type: 'update' }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      console.error('[refund-retry] update re-fire failed', err);
+    }
+  } catch (err) {
+    console.error('[refund-retry] update re-fire error:', err);
   }
 }
 
@@ -1090,7 +1238,8 @@ function appendMessage(msg, animate = true) {
     return;
   } else if (msg.type === 'error') {
     el.className = 'chat-bubble chat-bubble--error';
-    el.innerHTML = `<div class="chat-bubble-content">${esc(msg.content)}</div>`;
+    el.innerHTML = `<div class="chat-bubble-content">${esc(msg.content)}</div>${renderRefundBlock(msg.metadata)}`;
+    bindRefundRetry(el, msg.metadata);
     if (isProcessing) {
       isProcessing = false;
       setInputDisabled(false);
@@ -1157,9 +1306,7 @@ function appendMessage(msg, animate = true) {
         <div class="changelog-card-arrow">›</div>
       </div>`;
     }
-    html += `<div class="result-actions">
-      <button class="result-action-btn result-action-test" onclick="window.open('/app/${msg.metadata?.projectId || activeProjectId}/','_blank')">▶ ${t('chat_run_test') || 'Test'}</button>
-    </div>`;
+    html += desktopResultActionsHtml(msg.metadata?.projectId || activeProjectId);
     if (typeof msg.costUsd === 'number') {
       html += `<div class="chat-progress-cost">Cost: $${msg.costUsd.toFixed(4)}${typeof msg.balance === 'number' ? ` · Balance: $${msg.balance.toFixed(2)}` : ''}</div>`;
     }
@@ -1359,6 +1506,10 @@ async function sendPlanRequest(description) {
     }
 
     const data = await res.json();
+    if (data.status === 'streaming') {
+      // Plan delivered via WebSocket plan_stream_* events.
+      return;
+    }
     appendMessage({ role: 'assistant', type: 'plan', content: data.plan, id: 'plan-' + Date.now(), timestamp: Date.now(), metadata: { costUsd: data.costUsd, balance: data.balance } });
     setInputDisabled(false);
     scrollToBottom();
@@ -1386,6 +1537,10 @@ async function sendEditPlan(text) {
 
     if (res.ok) {
       const data = await res.json();
+      if (data.status === 'streaming') {
+        // Plan delivered via WebSocket plan_stream_* events.
+        return;
+      }
       document.querySelectorAll('.chat-bubble--plan').forEach(el => el.remove());
       appendMessage({ role: 'assistant', type: 'plan', content: data.plan, id: 'plan-' + Date.now(), timestamp: Date.now(), metadata: { costUsd: data.costUsd, balance: data.balance } });
       loadBalance();

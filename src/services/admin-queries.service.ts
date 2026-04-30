@@ -633,12 +633,20 @@ export async function getTimeseries(params: TimeseriesParams) {
       `;
       break;
     case "paying_users":
+      // "Paying users" = NEW paying users per bucket. We bucket each user by
+      // the time of their first-ever confirmed payment, then count distinct
+      // users per bucket. So 18 March on the chart = "X people became paying
+      // customers for the first time on 18 March", NOT "X confirmed payments
+      // happened on 18 March".
       sql = `
-        SELECT bucket, COUNT(DISTINCT user_id)::int AS value FROM (
-          SELECT date_trunc('${interval}', p.created_at) AS bucket, p.user_id
-          FROM payments p
-          WHERE p.status = 'confirmed' AND p.created_at >= $1::timestamptz AND p.created_at < $2::timestamptz
-        ) t
+        SELECT date_trunc('${interval}', first_paid_at) AS bucket, COUNT(*)::int AS value
+        FROM (
+          SELECT user_id, MIN(created_at) AS first_paid_at
+          FROM payments
+          WHERE status = 'confirmed'
+          GROUP BY user_id
+        ) fp
+        WHERE first_paid_at >= $1::timestamptz AND first_paid_at < $2::timestamptz
         GROUP BY 1 ORDER BY 1
       `;
       break;

@@ -243,6 +243,7 @@ export class ClaudeService {
     max_tokens: number;
     modelId: string;
     provider?: string;
+    onChunk?: (delta: string, full: string) => void;
   }): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
     const client = getOpenRouterClient();
     const stream = await client.chat.completions.create({
@@ -262,7 +263,12 @@ export class ClaudeService {
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta?.content;
-      if (delta) result += delta;
+      if (delta) {
+        result += delta;
+        if (params.onChunk) {
+          try { params.onChunk(delta, result); } catch {}
+        }
+      }
       // OpenRouter returns usage on the final chunk
       if (chunk.usage) {
         inputTokens = chunk.usage.prompt_tokens || 0;
@@ -279,6 +285,7 @@ export class ClaudeService {
     lang?: string,
     prefs?: ProjectPreferences | null,
     tierId?: string,
+    onChunk?: (delta: string, full: string) => void,
   ): Promise<{
     plan: string;
     inputTokens: number;
@@ -307,6 +314,7 @@ IMPORTANT: Keep the plan CONCISE. The user-facing summary must fit in a Telegram
       max_tokens: modelCfg.maxTokens,
       modelId: modelCfg.modelId,
       provider: modelCfg.provider,
+      onChunk,
     });
 
     return { plan: result.text, inputTokens: result.inputTokens, outputTokens: result.outputTokens };

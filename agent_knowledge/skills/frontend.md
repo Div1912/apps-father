@@ -84,8 +84,14 @@ const platform = Telegram.WebApp.platform; // 'android' | 'ios' | 'tdesktop' | '
 
 ## API Call Helper (always use this pattern)
 
+CRITICAL — `API_BASE` MUST end with a trailing slash, and endpoint strings
+MUST NOT start with a slash. Otherwise fetch produces a malformed URL like
+`/api/<id>convert` (no separator) or `/api/<id>//convert` (double slash),
+both of which 404 silently and the agent only finds out via runtime errors.
+
 ```js
-const API_BASE = '/api/{PROJECT_ID}';
+// ✅ CORRECT — API_BASE ends with "/", endpoints have no leading "/"
+const API_BASE = '/api/{PROJECT_ID}/';
 
 async function apiCall(endpoint, options = {}) {
   const headers = {
@@ -97,6 +103,20 @@ async function apiCall(endpoint, options = {}) {
   if (!response.ok) throw new Error(await response.text());
   return response.json();
 }
+
+// Usage:
+apiCall('convert?amount=100&from=USD&to=EUR'); // → /api/<id>/convert?...
+apiCall('preferences');                        // → /api/<id>/preferences
+```
+
+```js
+// ❌ WRONG — missing trailing slash on API_BASE produces /api/<id>convert
+const API_BASE = '/api/{PROJECT_ID}';
+fetch(API_BASE + 'convert'); // → /api/<id>convert  (404)
+
+// ❌ WRONG — leading slash on endpoint produces /api/<id>//convert
+const API_BASE = '/api/{PROJECT_ID}/';
+fetch(API_BASE + '/convert'); // → /api/<id>//convert  (404)
 ```
 
 ## Direct External API Calls (no backend needed)

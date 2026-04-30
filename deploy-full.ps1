@@ -251,6 +251,13 @@ scp tmp_welcome.sql "${SERVER}:/tmp/tmp_welcome.sql"
 ssh $SERVER "docker cp /tmp/tmp_welcome.sql ${DB_CTR}:/tmp/tmp_welcome.sql; docker exec ${DB_CTR} psql -U ${DB_USER} -d ${DB_NAME} -f /tmp/tmp_welcome.sql"
 Remove-Item tmp_welcome.sql -ErrorAction SilentlyContinue
 
+# Welcome credits 100 → 50 migration (lowers new-user grant + corrects existing 100-credit balances)
+$welcome50Sql = Get-Content "deploy/sql/welcome_credits_50.sql" -Raw
+$welcome50Sql | Out-File -Encoding utf8 -FilePath tmp_welcome50.sql
+scp tmp_welcome50.sql "${SERVER}:/tmp/tmp_welcome50.sql"
+ssh $SERVER "docker cp /tmp/tmp_welcome50.sql ${DB_CTR}:/tmp/tmp_welcome50.sql; docker exec ${DB_CTR} psql -U ${DB_USER} -d ${DB_NAME} -f /tmp/tmp_welcome50.sql"
+Remove-Item tmp_welcome50.sql -ErrorAction SilentlyContinue
+
 # Agent training tables (lessons + code patches)
 $lessonsSql = Get-Content "deploy/sql/agent_lessons.sql" -Raw
 $lessonsSql | Out-File -Encoding utf8 -FilePath tmp_agent_lessons.sql
@@ -286,12 +293,13 @@ Write-Host "=== [$ENV_NAME] Ensuring bucket directory exists ===" -ForegroundCol
 ssh $SERVER "mkdir -p ${APP_DIR}/bucket"
 Write-Host "Bucket OK" -ForegroundColor Green
 
-# ── Agent knowledge (instructions + skills) ───────────────
+# ── Agent knowledge (instructions + skills + ask docs) ───
 Write-Host "=== [$ENV_NAME] Syncing agent_knowledge ===" -ForegroundColor $COLOR
-ssh $SERVER "mkdir -p ${APP_DIR}/agent_knowledge/instructions ${APP_DIR}/agent_knowledge/skills ${APP_DIR}/agent_knowledge/preferences"
+ssh $SERVER "mkdir -p ${APP_DIR}/agent_knowledge/instructions ${APP_DIR}/agent_knowledge/skills ${APP_DIR}/agent_knowledge/preferences ${APP_DIR}/agent_knowledge/ask/topics"
 scp -r agent_knowledge/instructions/* "${SERVER}:${APP_DIR}/agent_knowledge/instructions/"
 scp -r agent_knowledge/skills/* "${SERVER}:${APP_DIR}/agent_knowledge/skills/"
 scp -r agent_knowledge/preferences/* "${SERVER}:${APP_DIR}/agent_knowledge/preferences/"
+scp -r agent_knowledge/ask/* "${SERVER}:${APP_DIR}/agent_knowledge/ask/"
 Write-Host "agent_knowledge OK" -ForegroundColor Green
 
 # ── Restart ───────────────────────────────────────────────

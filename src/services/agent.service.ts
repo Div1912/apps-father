@@ -64,6 +64,7 @@ const INSTRUCTION_MANIFEST: Array<{ file: string; modes?: AgentMode[]; kinds?: P
 
   { file: "workflow-new.md", modes: ["new"] },
   { file: "workflow-update.md", modes: ["update"] },
+  { file: "finish-tool.md" },
   { file: "telegram-api.md" },
   { file: "bot-side-updates.md", kinds: ["app", "textBot"] },
   { file: "after-writing.md" },
@@ -532,6 +533,10 @@ const TOOLS_DEFS: Array<{ name: string; description: string; input_schema: Recor
           type: "string" as const,
           description: "Detailed technical summary/changelog: architecture decisions, new files, changes made, anything the next update should know.",
         },
+        context_diff: {
+          type: "string" as const,
+          description: "Short delta for the project passport (1-3 sentences). Describe NEW or REMOVED routes, DB keys, screens, key decisions, or architectural changes from THIS commit only. Used to incrementally update the passport without re-reading the codebase. If empty, the platform falls back to the first line of `summary`. Examples: 'Added /api/leaderboard returning top-10 by score from db.users.' / 'Removed legacy /api/stats-v1; replaced by /api/stats which paginates.' / 'New screen #profile with avatar upload via /api/upload-avatar.'",
+        },
       },
       required: ["shortSummary", "summary"],
     },
@@ -646,6 +651,14 @@ export class AgentAbortedError extends Error {
 export interface AgentResult {
   summary: string;
   shortSummary: string;
+  /**
+   * Agent-authored short delta describing the architectural changes from
+   * THIS commit (new/removed routes, DB keys, screens, decisions). Populated
+   * when the agent calls `finish(context_diff=...)`. Falls back to "" when
+   * the agent forgets — the platform then derives a delta from `summary`.
+   * Used by the cheap append-passport path; ignored on full-regen commits.
+   */
+  contextDiff?: string;
   model: string;
   inputTokens: number;
   outputTokens: number;
@@ -712,11 +725,23 @@ export class AgentService {
       const indexPath = path.join(frontendDir, "index.html");
       if (fs.existsSync(indexPath)) {
         const indexHtml = fs.readFileSync(indexPath, "utf-8");
-        if (!indexHtml.includes("app.js")) {
+        // Use 'src="app.js' (not just 'app.js') so that other URLs that
+        // happen to contain the string "app.js" — like the Telegram SDK
+        // versioned URL telegram-web-app.js?v=... — don't produce a false
+        // positive. The same logic applies to styles.css.
+        if (!indexHtml.includes('src="app.js')) {
           errors.push('frontend/index.html does not reference app.js. All apps must load app.js (e.g. <script src="app.js"></script>).');
         }
-        if (!indexHtml.includes("styles.css")) {
+        if (!indexHtml.includes('href="styles.css')) {
           errors.push('frontend/index.html does not reference styles.css. All apps must load styles.css (e.g. <link rel="stylesheet" href="styles.css">).');
+        }
+        // Telegram Mini App SDK is mandatory for both Mini Apps and Games —
+        // without it, Telegram.WebApp is undefined and theme/safe-area /
+        // back-button / haptics / payments stop working. Check for the
+        // canonical script URL with a plain substring so versioned variants
+        // (e.g. ?56) still pass.
+        if (!indexHtml.includes("telegram-web-app.js")) {
+          errors.push('frontend/index.html does not load the Telegram Mini App SDK. Add <script src="https://telegram.org/js/telegram-web-app.js"></script> in <head>. Required for Mini Apps AND Games — without it Telegram.WebApp is undefined and theme/safe-area/back-button/haptics/payments break.');
         }
       }
     }
@@ -1274,12 +1299,35 @@ export class AgentService {
       : lang === "ua" ? "\nAlways reply in Ukrainian."
       : "";
 
-    const systemPrompt = `You are a friendly assistant helping an app owner (non-technical person) understand their Telegram Mini App.
+    const platformOverview = this.loadAskPlatformOverview();
+
+    const systemPrompt = `You are a friendly assistant helping an app owner (non-technical person) understand their Telegram Mini App built on Apps Father.
 Answer in simple, everyday language. NO programming terms, NO code, NO file names, NO technical jargon.
 Talk as if explaining to a friend who doesn't know anything about coding.
 Use markdown formatting: **bold**, lists (- item), headings (## Title) to keep it readable.
 If the question is about app data/users/stats, give clear numbers and insights.
 Keep answers concise and actionable.${langInstruction}
+
+────────────────  APPS FATHER PLATFORM (what the owner can do here) ────────────────
+${platformOverview}
+────────────────────────────────────────────────────────────────────────────────────
+
+You have tools — USE them whenever the question is about *this specific project*:
+- project_info()              — name, kind, description, plan, prefs, locked features.
+- list_files()                — see what files the project has.
+- read_file(path, offset?, limit?) — peek into the live app code (frontend/, backend/).
+- db_query({ action, key?, prefix?, limit? }) — read the project's key/value store.
+    action="list"  → recent keys (with prefix filter); shows truncated values.
+    action="get"   → value for a single key.
+    action="count" → count of keys (with optional prefix).
+- platform_help(topic?)       — deeper Apps Father feature docs (topics: payments,
+    referrals, realtime, bot, billing, tiers). No topic = the high-level overview.
+
+Tool guidelines:
+- Prefer tools over guessing. If the owner asks "how many users?" → db_query count.
+- Don't dump tool output verbatim. Translate findings into plain language.
+- Never expose file paths, code, SQL, or stack traces in your final answer.
+- 1–3 tool calls per turn is plenty. Avoid fishing expeditions.
 
 APP DESCRIPTION:
 ${description.substring(0, 2000)}
@@ -1290,7 +1338,7 @@ ${context.substring(0, 6000)}
 ${lastUpdate ? `LAST UPDATE SUMMARY:\n${lastUpdate.substring(0, 2000)}\n` : ""}
 ${dbSummary ? `DB KEYS SUMMARY:\n${dbSummary}\n` : ""}`;
 
-    const messages: { role: "user" | "assistant"; content: string }[] = [];
+    const messages: any[] = [{ role: "system", content: systemPrompt }];
     if (conversationHistory && conversationHistory.length > 0) {
       for (const msg of conversationHistory) {
         messages.push({ role: msg.role, content: msg.content });
@@ -1301,38 +1349,89 @@ ${dbSummary ? `DB KEYS SUMMARY:\n${dbSummary}\n` : ""}`;
     const modelCfg = runtimeConfig.getModelConfig("ask", tierId);
     const askReasoningBudget = (modelCfg as any).reasoningBudget ?? 0;
     const askSessionId = crypto.randomUUID();
-    const askProject = await projectService.getProject(projectId);
-    const askOwner = (askProject as any)?.userId
-      ? await prisma.user.findUnique({ where: { id: (askProject as any).userId }, select: { telegramId: true } })
+    const askOwner = project?.userId
+      ? await prisma.user.findUnique({ where: { id: project.userId }, select: { telegramId: true } })
       : null;
     const askTelegramId = askOwner?.telegramId ? String(askOwner.telegramId) : undefined;
-    const client = getOpenRouterClient();
-    const stream = await client.chat.completions.create({
-      model: modelCfg.modelId,
-      max_tokens: modelCfg.maxTokens,
-      messages: [
-        { role: "system", content: systemPrompt },
-        ...messages,
-      ],
-      ...(askTelegramId ? { user: askTelegramId } : {}),
-      extra_body: { session_id: askSessionId },
-      ...(this.getProviderRouting(modelCfg.modelId, modelCfg.provider) ? { provider: this.getProviderRouting(modelCfg.modelId, modelCfg.provider) } : {}),
-      ...(askReasoningBudget > 0 ? { reasoning: { max_tokens: askReasoningBudget } } : {}),
-      stream: true,
-    } as any) as any;
 
     let fullText = "";
     let inputTokens = 0;
     let outputTokens = 0;
-    for await (const chunk of stream) {
-      const delta = chunk.choices?.[0]?.delta?.content;
-      if (delta) {
-        fullText += delta;
-        onChunk(delta, fullText);
+
+    const MAX_ITERATIONS = 4;
+    for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
+      const params: any = {
+        model: modelCfg.modelId,
+        max_tokens: modelCfg.maxTokens,
+        messages,
+        tools: AgentService.ASK_TOOLS,
+        tool_choice: "auto",
+        ...(askTelegramId ? { user: askTelegramId } : {}),
+        extra_body: { session_id: askSessionId },
+        ...(this.getProviderRouting(modelCfg.modelId, modelCfg.provider) ? { provider: this.getProviderRouting(modelCfg.modelId, modelCfg.provider) } : {}),
+        ...(askReasoningBudget > 0 ? { reasoning: { max_tokens: askReasoningBudget } } : {}),
+      };
+
+      let response: OpenAI.Chat.Completions.ChatCompletion;
+      try {
+        response = await this.streamAgentCall(params, {
+          onTextDelta: (_delta) => {
+            // Concatenate text across tool-call iterations so the UI sees a
+            // continuous stream rather than restarting on each tool result.
+            fullText += _delta;
+            onChunk(_delta, fullText);
+          },
+        });
+      } catch (err) {
+        // Some models / providers don't support tool streaming; fall back to a
+        // non-streaming call without tools so the owner still gets an answer.
+        console.warn("[Ask] Tool streaming failed, falling back to plain answer:", (err as Error).message);
+        const fallback = await getOpenRouterClient().chat.completions.create({
+          ...params,
+          tools: undefined,
+          tool_choice: undefined,
+        } as any) as OpenAI.Chat.Completions.ChatCompletion;
+        const txt = fallback.choices?.[0]?.message?.content || "";
+        if (txt) {
+          fullText += txt;
+          onChunk(txt, fullText);
+        }
+        if (fallback.usage) {
+          inputTokens += fallback.usage.prompt_tokens || 0;
+          outputTokens += fallback.usage.completion_tokens || 0;
+        }
+        break;
       }
-      if (chunk.usage) {
-        inputTokens = chunk.usage.prompt_tokens || 0;
-        outputTokens = chunk.usage.completion_tokens || 0;
+
+      if (response.usage) {
+        inputTokens += response.usage.prompt_tokens || 0;
+        outputTokens += response.usage.completion_tokens || 0;
+      }
+
+      const choice = response.choices?.[0];
+      const assistantMsg: any = choice?.message || {};
+      const toolCalls = assistantMsg.tool_calls || [];
+
+      messages.push({
+        role: "assistant",
+        content: assistantMsg.content || "",
+        tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+      });
+
+      if (toolCalls.length === 0 || choice?.finish_reason === "stop") {
+        break;
+      }
+
+      // Execute every tool call sequentially and append a tool message per id.
+      for (const tc of toolCalls) {
+        let argsObj: any = {};
+        try { argsObj = JSON.parse(tc.function?.arguments || "{}"); } catch {}
+        const toolResult = await this.runAskTool(tc.function?.name || "", argsObj, projectId);
+        messages.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: toolResult,
+        });
       }
     }
 
@@ -1341,6 +1440,240 @@ ${dbSummary ? `DB KEYS SUMMARY:\n${dbSummary}\n` : ""}`;
       inputTokens,
       outputTokens,
     };
+  }
+
+  // ─────────────────────  Ask tool dispatch  ─────────────────────
+
+  private static readonly ASK_TOOLS = [
+    {
+      type: "function",
+      function: {
+        name: "project_info",
+        description: "Get high-level metadata about THIS project: name, kind (app/game/textBot), description, plan presence, last update, status, owner-picked preferences, and which paid features are unlocked.",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "list_files",
+        description: "List files in the live app (frontend/ + backend/) with sizes. Use this to see what the project actually contains before asking the owner.",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "read_file",
+        description: "Read a text file from the live app. Paths are relative to the project root (e.g. 'frontend/index.html', 'backend/routes.js'). Refuses binary files. Optional offset/limit page through long files.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Relative file path, e.g. frontend/index.html" },
+            offset: { type: "number", description: "1-based start line for paging." },
+            limit: { type: "number", description: "Max lines to return when offset is set." },
+          },
+          required: ["path"],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "db_query",
+        description: "Read-only inspection of the project's key/value database. Use this to answer 'how many users?', 'what's stored?', 'show me the latest order' kinds of questions.",
+        parameters: {
+          type: "object",
+          properties: {
+            action: { type: "string", enum: ["list", "get", "count"], description: "list = recent keys with truncated values; get = single key value; count = key count." },
+            key: { type: "string", description: "Required when action=get." },
+            prefix: { type: "string", description: "Optional key prefix filter for list/count." },
+            limit: { type: "number", description: "Max keys returned by list (default 20, max 100)." },
+          },
+          required: ["action"],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "platform_help",
+        description: "Look up Apps Father platform documentation aimed at owners. Use this when the owner asks about platform-wide features, pricing, payments, referrals, real-time, the bot side, etc.",
+          parameters: {
+            type: "object",
+            properties: {
+              topic: { type: "string", description: "One of: payments, referrals, realtime, bot, billing, tiers. Omit for the high-level overview." },
+            },
+            additionalProperties: false,
+          },
+      },
+    },
+  ];
+
+  /**
+   * Resolve the directory the ask tools should read from. We prefer the
+   * deployed `development/` mirror because it reflects what the owner
+   * actually sees; if it's not built yet we fall back to the latest commit.
+   */
+  private resolveAskProjectDir(projectId: string): string | null {
+    const devDir = path.join(PROJECTS_DIR, projectId, "development");
+    if (fs.existsSync(devDir)) return devDir;
+    try {
+      const commitsDir = path.join(PROJECTS_DIR, projectId, "commits");
+      if (!fs.existsSync(commitsDir)) return null;
+      const nums = fs.readdirSync(commitsDir).map(Number).filter(n => !isNaN(n));
+      if (nums.length === 0) return null;
+      const latest = Math.max(...nums);
+      return path.join(commitsDir, String(latest));
+    } catch { return null; }
+  }
+
+  private loadAskPlatformOverview(): string {
+    try {
+      const p = path.join(KNOWLEDGE_DIR, "ask", "platform-overview.md");
+      if (fs.existsSync(p)) return fs.readFileSync(p, "utf-8");
+    } catch {}
+    return "(platform overview unavailable)";
+  }
+
+  private async runAskTool(name: string, args: any, projectId: string): Promise<string> {
+    try {
+      switch (name) {
+        case "project_info": {
+          const p: any = await projectService.getProject(projectId);
+          if (!p) return "Project not found.";
+          const features = await getProjectFeatures(projectId).catch(() => [] as string[]);
+          const prefs = p.preferences ? (typeof p.preferences === "string" ? p.preferences : JSON.stringify(p.preferences)) : "(default)";
+          const info = {
+            name: p.name || "(unnamed)",
+            kind: p.kind || "app",
+            status: p.status || "unknown",
+            description: (p.description || "").substring(0, 1500),
+            hasPlan: !!p.plan,
+            createdAt: p.createdAt ? new Date(p.createdAt).toISOString().slice(0, 10) : null,
+            updatedAt: p.updatedAt ? new Date(p.updatedAt).toISOString().slice(0, 10) : null,
+            botUsername: p.botUsername || null,
+            preferences: prefs.substring(0, 800),
+            paidFeatures: {
+              telegram_stars: features.includes("telegram_stars") ? "UNLOCKED" : "LOCKED",
+              ton_payment: features.includes("ton_payment") ? "UNLOCKED" : "LOCKED",
+            },
+          };
+          return JSON.stringify(info, null, 2);
+        }
+
+        case "list_files": {
+          const dir = this.resolveAskProjectDir(projectId);
+          if (!dir) return "Project has no built files yet.";
+          const files = this.walkDirWithStats(dir, dir);
+          if (files.length === 0) return "(empty project)";
+          // Cap to keep tool result small and on-budget for the model.
+          return files.slice(0, 80).join("\n") + (files.length > 80 ? `\n... +${files.length - 80} more` : "");
+        }
+
+        case "read_file": {
+          const dir = this.resolveAskProjectDir(projectId);
+          if (!dir) return "Project has no built files yet.";
+          if (typeof args?.path !== "string" || !args.path) return "Error: path is required.";
+          const filePath = this.safePath(dir, args.path);
+          if (!filePath) return "Error: invalid path.";
+          if (!fs.existsSync(filePath)) return `Error: file not found: ${args.path}`;
+
+          const stat = fs.statSync(filePath);
+          if (stat.isDirectory()) return `Error: ${args.path} is a directory; use list_files instead.`;
+
+          const ext = path.extname(args.path).toLowerCase();
+          const sizeKB = (stat.size / 1024).toFixed(1);
+          if (AgentService.BINARY_EXTS.has(ext)) {
+            return `Error: ${args.path} is a binary file (${ext}, ${sizeKB}KB) and cannot be read as text.`;
+          }
+          const HARD_CAP = 256 * 1024;
+          if (!args.offset && !args.limit && stat.size > HARD_CAP) {
+            return `Error: ${args.path} is ${sizeKB}KB; pass offset+limit to page through it.`;
+          }
+          if (stat.size > 512 * 1024) {
+            return `Error: ${args.path} is ${sizeKB}KB; too large to read.`;
+          }
+
+          const content = fs.readFileSync(filePath, "utf-8");
+          const lines = content.split("\n");
+          if (args.offset || args.limit) {
+            const start = Math.max(0, (args.offset || 1) - 1);
+            const end = args.limit ? start + args.limit : lines.length;
+            return lines.slice(start, end).map((l, i) => `${start + i + 1}|${l}`).join("\n");
+          }
+          // Cap full reads at ~20KB to keep tool responses lean.
+          if (Buffer.byteLength(content, "utf-8") > 20 * 1024) {
+            const sliced = content.slice(0, 20 * 1024);
+            return sliced + `\n... [truncated; pass offset+limit to read more]`;
+          }
+          return lines.map((l, i) => `${i + 1}|${l}`).join("\n");
+        }
+
+        case "db_query": {
+          const action = String(args?.action || "").toLowerCase();
+          if (!["list", "get", "count"].includes(action)) {
+            return "Error: action must be one of 'list', 'get', 'count'.";
+          }
+          const Database = require("better-sqlite3");
+          const dbPath = path.join(PROJECTS_DIR, projectId, "development", "data", "app.db");
+          if (!fs.existsSync(dbPath)) return "(no database yet — the app hasn't stored anything)";
+          const db = new Database(dbPath, { readonly: true });
+          try {
+            if (action === "count") {
+              const prefix = typeof args.prefix === "string" ? args.prefix : null;
+              const row: any = prefix
+                ? db.prepare("SELECT COUNT(*) AS n FROM kv WHERE key LIKE ?").get(`${prefix}%`)
+                : db.prepare("SELECT COUNT(*) AS n FROM kv").get();
+              return JSON.stringify({ action: "count", prefix, count: row?.n || 0 });
+            }
+            if (action === "get") {
+              if (typeof args.key !== "string" || !args.key) return "Error: key is required for action=get.";
+              const row: any = db.prepare("SELECT value FROM kv WHERE key = ?").get(args.key);
+              if (!row) return JSON.stringify({ key: args.key, value: null, found: false });
+              const truncated = row.value.length > 4000 ? row.value.slice(0, 4000) + "...(truncated)" : row.value;
+              return JSON.stringify({ key: args.key, value: truncated, found: true });
+            }
+            // list
+            const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 100);
+            const prefix = typeof args.prefix === "string" ? args.prefix : null;
+            const rows: any[] = prefix
+              ? db.prepare("SELECT key, value FROM kv WHERE key LIKE ? ORDER BY key LIMIT ?").all(`${prefix}%`, limit)
+              : db.prepare("SELECT key, value FROM kv ORDER BY key LIMIT ?").all(limit);
+            const out = rows.map(r => ({
+              key: r.key,
+              value: r.value.length > 200 ? r.value.slice(0, 200) + "..." : r.value,
+            }));
+            return JSON.stringify({ action: "list", prefix, returned: out.length, limit, items: out });
+          } finally {
+            try { db.close(); } catch {}
+          }
+        }
+
+        case "platform_help": {
+          const topic = (typeof args?.topic === "string" ? args.topic : "").toLowerCase().trim();
+          const askDir = path.join(KNOWLEDGE_DIR, "ask");
+          if (!topic) {
+            const overview = this.loadAskPlatformOverview();
+            return overview;
+          }
+          const allowed = new Set(["payments", "referrals", "realtime", "bot", "billing", "tiers"]);
+          if (!allowed.has(topic)) {
+            return `Unknown topic. Available: ${[...allowed].join(", ")}`;
+          }
+          const file = path.join(askDir, "topics", `${topic}.md`);
+          if (!fs.existsSync(file)) return `Topic '${topic}' has no doc yet.`;
+          return fs.readFileSync(file, "utf-8");
+        }
+
+        default:
+          return `Unknown tool: ${name}`;
+      }
+    } catch (err: any) {
+      return `Tool '${name}' error: ${err?.message || String(err)}`;
+    }
   }
 
   async getSuggestions(projectId: string, lang?: string, tierId?: string): Promise<{ title: string; description: string }[]> {
@@ -2056,6 +2389,7 @@ ${featureGating}`;
 
     let summary = "";
     let shortSummary = "";
+    let contextDiff = "";
     let iterations = 0;
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
@@ -2971,7 +3305,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
                   writeDetailedLog("blocked_deploy_locked");
                   const logFilePath = logger.getLogPath();
                   logger.close();
-                  return { summary, shortSummary, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath, commitNum, commitDir };
+                  return { summary, shortSummary, contextDiff, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath, commitNum, commitDir };
                 }
                 result = `Error: ${readinessError}`;
                 break;
@@ -2987,7 +3321,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
                   writeDetailedLog("blocked_deploy_locked_route_error");
                   const logFilePath = logger.getLogPath();
                   logger.close();
-                  return { summary, shortSummary, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath, commitNum, commitDir };
+                  return { summary, shortSummary, contextDiff, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath, commitNum, commitDir };
                 }
                 result = `Error: ${routeError} Fix backend/routes.js, deploy to dev, then call finish(shortSummary, summary) again.`;
                 break;
@@ -3007,7 +3341,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
               writeDetailedLog("done");
               const logFilePath = logger.getLogPath();
               logger.close();
-              return { summary, shortSummary, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath, commitNum, commitDir };
+              return { summary, shortSummary, contextDiff, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath, commitNum, commitDir };
             }
 
             case "finish": {
@@ -3015,10 +3349,12 @@ The user will visually verify. If this was your final action, in your NEXT turn 
               // that the model used to split across 3 iterations (~$0.50 wasted).
               shortSummary = (args.shortSummary || "").toString();
               summary = (args.summary || "Changes applied").toString();
+              contextDiff = (args.context_diff || "").toString();
               if (!shortSummary) shortSummary = summary.split("\n")[0].substring(0, 200);
               currentPercent = 100;
               console.log(`[Agent] 📝 finish.shortSummary: ${shortSummary.substring(0, 100)}`);
               console.log(`[Agent] 📝 finish.summary: ${summary.substring(0, 200)}`);
+              if (contextDiff) console.log(`[Agent] 📝 finish.context_diff: ${contextDiff.substring(0, 200)}`);
 
               console.log(`[Agent] ✅ finish() after ${iterations} iterations | Total tokens: in=${totalInputTokens} out=${totalOutputTokens}`);
 
@@ -3034,7 +3370,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
                   writeDetailedLog("blocked_deploy_locked");
                   const logFilePath2 = logger.getLogPath();
                   logger.close();
-                  return { summary, shortSummary, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath2, commitNum, commitDir };
+                  return { summary, shortSummary, contextDiff, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath2, commitNum, commitDir };
                 }
                 result = `Error: ${readinessError}`;
                 break;
@@ -3050,7 +3386,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
                   writeDetailedLog("blocked_deploy_locked_route_error");
                   const logFilePath2 = logger.getLogPath();
                   logger.close();
-                  return { summary, shortSummary, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath2, commitNum, commitDir };
+                  return { summary, shortSummary, contextDiff, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath2, commitNum, commitDir };
                 }
                 result = `Error: ${routeError} Fix backend/routes.js, deploy to dev, then call finish(shortSummary, summary) again.`;
                 break;
@@ -3070,7 +3406,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
               writeDetailedLog("finish");
               const logFilePath2 = logger.getLogPath();
               logger.close();
-              return { summary, shortSummary, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath2, commitNum, commitDir };
+              return { summary, shortSummary, contextDiff, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath2, commitNum, commitDir };
             }
 
             case "configure_app": {
@@ -3196,6 +3532,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
     return {
       summary: summary || "Agent failed: reached iteration limit before a valid finish().",
       shortSummary: shortSummary || summary?.split("\n")[0]?.substring(0, 200) || "Build failed: iteration limit",
+      contextDiff,
       model: tierConfig.modelId,
       inputTokens: totalInputTokens,
       outputTokens: totalOutputTokens,
@@ -3503,6 +3840,11 @@ The user will visually verify. If this was your final action, in your NEXT turn 
   // Hard cap on bytes read by read_file. Anything larger gets refused with
   // guidance to use offset/limit. 512KB ≈ ~130k tokens worst case for ASCII —
   // already huge but bounded.
+  // Passport regen cadence: every Nth commit performs full LLM regen; the
+  // commits in between use the cheap append-only delta path. Commit 0 always
+  // regens regardless. See compactContext / appendPassportDelta.
+  private static readonly PASSPORT_REGEN_EVERY = 5;
+
   private static readonly READ_FILE_MAX_BYTES = 512 * 1024;
   // Lower cap on bytes returned per call (truncation threshold for offset/limit).
   // Keeps any single read well below 100k tokens.
@@ -3683,6 +4025,15 @@ The user will visually verify. If this was your final action, in your NEXT turn 
     if (dbKeys) inputParts.push(`DB KEYS: ${dbKeys}`);
     if (npmPackages) inputParts.push(`NPM PACKAGES: ${npmPackages}`);
     if (prevPassport) inputParts.push(`PREVIOUS PASSPORT (for reference — preserve style and key decisions, but update everything from actual code):\n${prevPassport.substring(0, 8000)}`);
+    // Append-only deltas accumulated since the last full regen. Tell the LLM
+    // to fold each entry into the relevant body sections, then RESET the new
+    // Recent Changes section to empty so future commits start fresh.
+    const recentChanges = this.extractRecentChanges(prevPassport || "");
+    if (recentChanges) {
+      inputParts.push(
+        `RECENT CHANGES TO FOLD IN (these are append-only deltas from commits since the last regen — merge each entry into Architecture / Code Locations / Current State as appropriate, then leave the new Recent Changes section EMPTY):\n${recentChanges.substring(0, 4000)}`
+      );
+    }
     if (doneSummary) inputParts.push(`LATEST CHANGES (commit #${commitNum}):\n${doneSummary.substring(0, 3000)}`);
 
     const passportTierId = (await prisma.project.findUnique({ where: { id: projectId }, select: { userId: true } })
@@ -3700,11 +4051,11 @@ The user will visually verify. If this was your final action, in your NEXT turn 
 This document will be used by an AI developer agent in future updates to understand the project
 instantly WITHOUT reading all files. It must be accurate and complete — the agent will trust this
 document and use Code Locations to jump directly to the right lines.
-${prevPassport ? "\nUse the previous passport for style/format reference and to preserve Key Decisions that are still relevant." : ""}
+${prevPassport ? "\nUse the previous passport for style/format reference and to preserve Key Decisions that are still relevant." : ""}${recentChanges ? "\nIf RECENT CHANGES TO FOLD IN is provided above, merge every entry into the relevant body sections (new routes go to Architecture, new files go to Code Locations, removed features come out of Current State, etc.) and OUTPUT an EMPTY Recent Changes section at the bottom — do NOT just copy the deltas back into Recent Changes." : ""}
 
 ${inputParts.join("\n\n")}
 
-Output a structured markdown document (under 4000 words) with EXACTLY these sections:
+Output a structured markdown document (under 4000 words) with EXACTLY these sections (in this order):
 
 ## App: <name>
 Purpose: <one-line description>
@@ -3733,7 +4084,10 @@ Important implementation choices and WHY they were made. Include gotchas, known 
 and things that look wrong but are intentional.
 
 ## Current State
-What the app can do right now. What features are complete, what's partially done.`,
+What the app can do right now. What features are complete, what's partially done.
+
+## Recent Changes
+(empty — populated by future commits via append path)`,
       }],
     } as any);
 
@@ -3783,7 +4137,30 @@ What the app can do right now. What features are complete, what's partially done
     commitNum: number,
     description?: string,
     plan?: string,
+    contextDiff?: string,
   ): Promise<string> {
+    // ── Cheap path: every commit between full regens just appends a one-line
+    // delta to the prior passport. No LLM call, no tokens spent. The agent
+    // supplies `context_diff` via finish(); when missing, fall back to the
+    // first line of the build summary.
+    const isRegenCommit = commitNum === 0 || (commitNum % AgentService.PASSPORT_REGEN_EVERY === 0);
+    if (!isRegenCommit && commitNum > 0) {
+      try {
+        const appended = await this.appendPassportDelta(
+          projectId,
+          commitDir,
+          commitNum,
+          (contextDiff && contextDiff.trim()) || doneSummary,
+        );
+        if (appended) return appended;
+        // Prior passport missing — fall through to full regen below.
+      } catch (err) {
+        console.warn(`[Context] append-delta path failed for ${projectId.substring(0, 8)} commit #${commitNum}, falling back to regen:`, err);
+      }
+    }
+
+    // ── Full LLM regen path: every Nth commit, or whenever the cheap path
+    // bailed (e.g. no prior passport).
     let prevPassport = "";
     if (commitNum > 0) {
       const prevPath = path.join(commitDir, "..", String(commitNum - 1), "passport.md");
@@ -3807,6 +4184,120 @@ What the app can do right now. What features are complete, what's partially done
     fs.writeFileSync(path.join(commitDir, "context.md"), fallback, "utf-8");
     await projectService.updateProjectSummary(projectId, fallback);
     return fallback;
+  }
+
+  /**
+   * Extract the body of the `## Recent Changes` section from a passport.
+   * Returns "" when the section is missing or empty. Used by:
+   *   - appendPassportDelta — to know what's already there before adding a new bullet.
+   *   - generatePassport     — to feed the accumulated deltas to the regen LLM.
+   */
+  private extractRecentChanges(passport: string): string {
+    if (!passport) return "";
+    const re = /^##\s+Recent Changes\s*\n([\s\S]*?)(?=^##\s|$(?![\s\S]))/m;
+    const m = passport.match(re);
+    if (!m) return "";
+    return m[1].trim();
+  }
+
+  /**
+   * List relative paths under frontend/ and backend/ in a commit folder.
+   * Used by the cheap append path to detect newly created or deleted files
+   * without an LLM call.
+   */
+  private listProjectFiles(commitDir: string): string[] {
+    const out: string[] = [];
+    const walk = (dir: string, prefix: string) => {
+      if (!fs.existsSync(dir)) return;
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) {
+          walk(path.join(dir, entry.name), rel);
+        } else if (entry.isFile()) {
+          out.push(rel);
+        }
+      }
+    };
+    walk(path.join(commitDir, "frontend"), "frontend");
+    walk(path.join(commitDir, "backend"), "backend");
+    return out.sort();
+  }
+
+  /**
+   * Append a one-line delta to the prior commit's passport.md and write it
+   * into the new commit folder. NO LLM call. Returns the combined context or
+   * `null` if the prior passport could not be located (caller must fall back
+   * to a full regen in that case).
+   */
+  private async appendPassportDelta(
+    projectId: string,
+    commitDir: string,
+    commitNum: number,
+    deltaText: string,
+  ): Promise<string | null> {
+    if (commitNum <= 0) return null;
+    const prevDir = path.join(commitDir, "..", String(commitNum - 1));
+    const prevPassportPath = path.join(prevDir, "passport.md");
+    if (!fs.existsSync(prevPassportPath)) return null;
+
+    const prevPassport = fs.readFileSync(prevPassportPath, "utf-8");
+    if (!prevPassport.trim()) return null;
+
+    // Detect newly-added / deleted files between prior and current commit.
+    const prevFiles = new Set(this.listProjectFiles(prevDir));
+    const currFiles = new Set(this.listProjectFiles(commitDir));
+    const added = [...currFiles].filter(f => !prevFiles.has(f));
+    const removed = [...prevFiles].filter(f => !currFiles.has(f));
+
+    const firstLine = String(deltaText || "").split("\n")[0].trim().slice(0, 280);
+    const date = new Date().toISOString().slice(0, 10);
+    const bullet = `- #${commitNum} (${date}): ${firstLine || "Changes applied"}`;
+    const fileBullets: string[] = [];
+    for (const f of added)   fileBullets.push(`  - new: ${f}`);
+    for (const f of removed) fileBullets.push(`  - deleted: ${f}`);
+    const newEntry = [bullet, ...fileBullets].join("\n");
+
+    // Insert under `## Recent Changes`. If the section doesn't exist yet
+    // (older passport), append it at the end. We only keep prior body when
+    // it actually contains bullet entries — placeholders / hint text from
+    // the regen template (e.g. "(empty — populated by future commits…)")
+    // are discarded so the section doesn't accumulate noise.
+    let updated: string;
+    if (/^##\s+Recent Changes\s*$/m.test(prevPassport)) {
+      updated = prevPassport.replace(
+        /^##\s+Recent Changes\s*\n([\s\S]*?)(?=^##\s|$(?![\s\S]))/m,
+        (_match, body) => {
+          const existing = body.trim();
+          const hasBullets = /^- /m.test(existing);
+          const merged = hasBullets ? `${existing}\n${newEntry}` : newEntry;
+          return `## Recent Changes\n${merged}\n\n`;
+        },
+      );
+    } else {
+      updated = prevPassport.trimEnd() + `\n\n## Recent Changes\n${newEntry}\n`;
+    }
+
+    // Carry forward / extend history.md too.
+    let history = "";
+    const prevHistoryPath = path.join(prevDir, "history.md");
+    if (fs.existsSync(prevHistoryPath)) {
+      history = fs.readFileSync(prevHistoryPath, "utf-8");
+    }
+    history += `\n- #${commitNum}: ${firstLine || "Changes applied"}`;
+    history = history.trim();
+
+    fs.writeFileSync(path.join(commitDir, "passport.md"), updated, "utf-8");
+    fs.writeFileSync(path.join(commitDir, "history.md"), history, "utf-8");
+    const combined = updated + "\n\n## Update History\n" + history;
+    fs.writeFileSync(path.join(commitDir, "context.md"), combined, "utf-8");
+
+    await projectService.updateProjectSummary(projectId, combined);
+
+    console.log(
+      `[Context] +Δ passport for ${projectId.substring(0, 8)} commit #${commitNum} ` +
+      `(append, no LLM, $0.0000) | +${added.length} files, -${removed.length}`
+    );
+    return combined;
   }
 
   async regenerateContext(projectId: string): Promise<string> {

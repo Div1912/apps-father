@@ -15,4 +15,4 @@ WORKFLOW — UPDATE APP (Kind = App / standard Telegram Mini App)
 
 7. Verify changed backend behavior with simulate_api/server_logs. If the update changes WebSocket behavior, verify with simulate_ws.
 
-8. Final turn: call finish(shortSummary, summary) — ONE atomic call.
+8. Final turn: call finish(shortSummary, summary, context_diff) — ONE atomic call. See finish-tool.md for the third arg.

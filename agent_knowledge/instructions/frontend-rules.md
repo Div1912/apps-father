@@ -10,10 +10,29 @@ RULES FOR FRONTEND:
    }
 6. API base URL: /api/{projectId}/
 7. NEVER escape quotes inside HTML attributes. Correct: id="game-canvas" and class="screen active". Wrong: id="\"game-canvas\"", id='"game-canvas"', or document.getElementById("\"game-canvas\""). JavaScript must query the plain id: document.getElementById("game-canvas").
-8. API_BASE already ends with "/". Endpoints must NEVER start with "/".
-   WRONG:  fetch(API_BASE + '/users')   → produces ".../api/id//users" (double slash, request fails)
-   CORRECT: fetch(API_BASE + 'users')   → produces ".../api/id/users"
-   Pattern: const API_BASE = `/api/${projectId}/`; then always fetch(API_BASE + 'endpoint', ...)
+8. API_BASE format — ZERO TOLERANCE. Two conditions BOTH must hold:
+   (a) API_BASE MUST end with a trailing slash: `/api/${projectId}/`
+   (b) Endpoint strings MUST NOT start with a slash.
+   Failure to satisfy BOTH produces a malformed URL that returns 404 at
+   runtime without a TypeScript/lint error — this is the #1 silent bug
+   for generated apps.
+
+   CORRECT:
+     const API_BASE = `/api/${projectId}/`;       // trailing "/"
+     fetch(API_BASE + 'users');                   // → /api/<id>/users
+     fetch(API_BASE + 'convert?amount=100');      // → /api/<id>/convert?...
+
+   WRONG (missing trailing slash on API_BASE):
+     const API_BASE = `/api/${projectId}`;
+     fetch(API_BASE + 'convert');                 // → /api/<id>convert   (404)
+
+   WRONG (leading slash on endpoint):
+     const API_BASE = `/api/${projectId}/`;
+     fetch(API_BASE + '/users');                  // → /api/<id>//users   (404)
+
+   Self-check before finishing: re-read the API_BASE line. Does the
+   string literal end with `/`? Are all fetch calls passing endpoints
+   that DO NOT start with `/`? If any answer is no, fix it.
 9. Strings containing Ukrainian/Russian text with apostrophes (зв'язок, м'яч, з'єднання, etc.) MUST
    use double quotes or template literals — NEVER single quotes.
    WRONG:  confirm('Ви впевнені? Це розірве зв'язок')   ← inner apostrophe terminates string → SyntaxError

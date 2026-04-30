@@ -31,4 +31,4 @@ Follow the standard App workflow below.
 
 9. deploy_to_dev() — deploy and verify.
 
-10. finish(shortSummary, summary) — ONE atomic call at the very end.
+10. finish(shortSummary, summary, context_diff) — ONE atomic call at the very end. See finish-tool.md.

@@ -3,6 +3,13 @@ import path from "path";
 
 const CONFIG_PATH = path.join(process.cwd(), "data", "runtime-config.json");
 
+// One-time credit fees that aren't part of a per-action tier price.
+// Kept as plain exported constants for now; later moved into RuntimeConfig
+// JSON if admin needs to tune them without a redeploy.
+export const GAME_KIND_FEE_CREDITS = 100;
+export const PREVIEW_UNLOCK_FEE_CREDITS = 20;
+export const LINK_BOT_FEE_CREDITS = 15;
+
 export interface ModelActionConfig {
   modelId: string;
   provider?: string;

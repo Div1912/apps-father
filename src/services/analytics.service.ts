@@ -16,6 +16,7 @@ const op = new OpenPanel({
  */
 export const RESERVED_START_PARAMS = new Set<string>([
   "open_dialog", // sent by the user-bot welcome card → open the most recent project's chat
+  "topup",       // emitted by the player paywall on insufficient funds → opens the Topup view
 ]);
 
 /**

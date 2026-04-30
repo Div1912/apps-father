@@ -209,6 +209,89 @@ export class BillingService {
     return { creditsCharged, newCredits: updatedUser.credits };
   }
 
+  /**
+   * Refund credits previously taken via preChargeAction when the agent
+   * fails before producing usable output. Logs a UsageLog row with a
+   * negative `creditsCharged` so admin sessions page reflects refunds.
+   * Operation should be the original action id ("build", "update", ...);
+   * we tag the log row as `refund_<operation>` for clarity.
+   * Idempotent: refunds the requested amount as a single increment, so
+   * callers must guard against double-refund themselves (we do that via
+   * progress-message metadata flagging in /abort recovery).
+   */
+  async refundAction(
+    userId: number,
+    projectId: string | null,
+    operation: string,
+    credits: number,
+    taskId?: string,
+  ): Promise<{ newCredits: number }> {
+    if (credits <= 0) {
+      const u = await prisma.user.findUnique({ where: { id: userId }, select: { credits: true } });
+      return { newCredits: u?.credits ?? 0 };
+    }
+    const result = await prisma.$transaction(async (tx) => {
+      const u = await tx.user.update({
+        where: { id: userId },
+        data: { credits: { increment: credits } },
+      });
+      await tx.usageLog.create({
+        data: {
+          userId,
+          projectId: projectId ?? null,
+          inputTokens: 0,
+          outputTokens: 0,
+          costUsd: new Decimal("0"),
+          operation: `refund_${operation}`,
+          creditsCharged: -credits,
+          tierId: null,
+          taskId: taskId ?? null,
+        },
+      });
+      return u.credits;
+    });
+    return { newCredits: result };
+  }
+
+  /**
+   * True iff the user has ever made a confirmed deposit (any payment row
+   * with status = "confirmed"). Used to gate the player-preview paywall.
+   */
+  async hasEverDeposited(userId: number): Promise<boolean> {
+    const p = await prisma.payment.findFirst({
+      where: { userId, status: "confirmed" },
+      select: { id: true },
+    });
+    return !!p;
+  }
+
+  /**
+   * True iff this user has previously unlocked the preview for this
+   * project (one-time 20-credit purchase logged in usage_logs).
+   */
+  async hasUnlockedPreview(userId: number, projectId: string): Promise<boolean> {
+    const log = await prisma.usageLog.findFirst({
+      where: { userId, projectId, operation: "preview_unlock" },
+      select: { id: true },
+    });
+    return !!log;
+  }
+
+  /**
+   * True iff this user has previously paid the one-time 15-credit fee
+   * to unlock the "Create Bot" / link-bot flow for this project.
+   * The actual bot-link itself is tracked via Project.botUsername; this
+   * is just the gate that prevents charging the same project twice when
+   * the user re-clicks the button before completing the flow.
+   */
+  async hasUnlockedBotCreate(userId: number, projectId: string): Promise<boolean> {
+    const log = await prisma.usageLog.findFirst({
+      where: { userId, projectId, operation: "bot_create_unlock" },
+      select: { id: true },
+    });
+    return !!log;
+  }
+
   async recordUsage(
     userId: number,
     projectId: string | null,

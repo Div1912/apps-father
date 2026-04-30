@@ -1,5 +1,49 @@
 [
   {
+    "version": "3.1.0",
+    "date": "2026-04-30",
+    "title": "Agent Update — Smarter, Cleaner, More Reliable",
+    "image": "assets/updates/4.png",
+    "sections": [
+      {
+        "label": "Build Quality",
+        "items": [
+          "Fixed: black screen on freshly created apps",
+          "Fixed: updates that broke working apps or changed things you didn't ask for",
+          "Fixed: random errors leaking into chat messages",
+          "Fixed: app.js / styles.css sometimes missing from index.html",
+          "Agent now properly includes the Telegram Mini App SDK for Game apps",
+          "Stronger pre-flight checks catch API URL bugs, broken quotes, and missing files before the build reaches you — far fewer broken apps get published"
+        ]
+      },
+      {
+        "label": "Smarter Plans & Updates",
+        "items": [
+          "Plans now stream live as the agent writes them — Build / Edit buttons appear when the plan is ready",
+          "Updates incrementally append diffs to your project's memory, then compact it every 5 iterations — faster, cheaper, and more accurate over time",
+          "Ask mode upgraded: it can now read your project files, run database queries, and reference Apps Father's own feature docs"
+        ]
+      },
+      {
+        "label": "Polish & Fixes",
+        "items": [
+          "\"Run &amp; Test\" hidden for Text Bot apps — only Release shows (Run &amp; Test never made sense for bots anyway)",
+          "Bot description no longer copies your raw prompt",
+          "Touch + mouse parity enforced — no more buttons that respond on phone but ignore desktop clicks",
+          "Z-index discipline applied across overlays and modals — invisible buttons trapped under panels are gone"
+        ]
+      },
+      {
+        "label": "New Tools",
+        "items": [
+          "Dedicated in-app player for previewing your build with a proper Apps Father splash",
+          "Visual editor — tweak styles directly inside the live preview without touching code",
+          "Comfortable bug reporter — capture and send issues straight from any app you build"
+        ]
+      }
+    ]
+  },
+  {
     "version": "3.0.0",
     "date": "2026-04-27",
     "title": "Agent v3 — Credits, Tasks & New App Kinds",
@@ -24,7 +68,7 @@
         "items": [
           "Introduced the Credits system — all payments and actions now use credits",
           "+100% bonus credits on your first deposit",
-          "All new users receive 100 welcome credits",
+          "All new users receive 50 welcome credits",
           "Minimum deposit (bundle) starts at just $1"
         ]
       },

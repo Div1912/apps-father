@@ -6,12 +6,28 @@ import { hasFeature } from "../../services/features.service";
 const router = Router();
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
 
+// Splash shown over the player iframe while the user's app boots.
+// Animation spec (1800 ms total, linear):
+//   0%      → scale 1.0,    opacity 0
+//   ~27.8%  → scale 1.0278, opacity 1   (500 ms fade-in done)
+//   ~72.2%  → scale 1.0722, opacity 1   (500 ms fade-out begins)
+//   100%    → scale 1.1,    opacity 0
+// The percentages keep scale strictly linear from 1.0 → 1.1 across the
+// full duration while the opacity in/out happens at the first/last 500 ms.
 const SPLASH_HTML = `
-<div id="af-splash" style="position:fixed;inset:0;z-index:999999;display:flex;align-items:center;justify-content:center;background:#000000;flex-direction:column;gap:12px;opacity:1;transition:opacity .5s ease;pointer-events:none">
-<div style="font-size:32px;font-weight:800;background:linear-gradient(135deg,#6366f1,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-0.5px;background:url(https://i.postimg.cc/BZKFqnqh/welcome-2.png);background-size:contain;background-repeat:no-repeat;background-position:center;width:400px;height:98px"></div>
-<div style="font-size:12px;color:#71717a;letter-spacing:1px;margin-top:-32px;margin-left:12px">Made by Apps Father bot</div>
+<style>
+@keyframes af-splash-logo {
+  0%      { transform: scale(1);      opacity: 0; }
+  27.778% { transform: scale(1.0278); opacity: 1; }
+  72.222% { transform: scale(1.0722); opacity: 1; }
+  100%    { transform: scale(1.1);    opacity: 0; }
+}
+</style>
+<div id="af-splash" style="position:fixed;inset:0;z-index:999999;display:flex;align-items:center;justify-content:center;background:#000000;pointer-events:none">
+<img src="https://apps-father.com/splash-logo.png" alt="" style="max-width:60vw;max-height:32vh;width:auto;height:auto;animation:af-splash-logo 1800ms linear forwards;will-change:transform,opacity"/>
+<div style="display:none">Make your app with no code</div>
 </div>
-<script>setTimeout(function(){var s=document.getElementById('af-splash');if(s){s.style.opacity='0';setTimeout(function(){s.remove()},500)}},1800)</script>`;
+<script>setTimeout(function(){var s=document.getElementById('af-splash');if(s)s.remove()},1800)</script>`;
 
 function rewriteApiPaths(content: string, projectId: string): string {
   content = content.split("/api/" + projectId).join("/devapi/" + projectId);

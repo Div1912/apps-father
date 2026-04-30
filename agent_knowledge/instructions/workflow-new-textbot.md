@@ -92,4 +92,4 @@ There is NO Mini App, NO frontend, NO HTML. The ONLY file you produce is `backen
 
 7. deploy_to_dev() — deploy and verify with simulate_telegram + server_logs.
 
-8. finish(shortSummary, summary) — ONE atomic call at the very end.
+8. finish(shortSummary, summary, context_diff) — ONE atomic call at the very end. See finish-tool.md.

@@ -11,5 +11,5 @@ WORKFLOW FOR UPDATE (fallback / kind unknown):
 4. Make changes with edit_file (small) or write_file (large).
 5. deploy_to_dev() to deploy your code. It runs syntax/contract validation automatically.
 6. Verify changed behavior with simulate_api / simulate_telegram / simulate_ws when applicable.
-7. Final turn: call finish(shortSummary, summary) — ONE atomic call. There is NO separate short_summary/summary/done.
+7. Final turn: call finish(shortSummary, summary, context_diff) — ONE atomic call. There is NO separate short_summary/summary/done. See finish-tool.md for the third arg.
 IMPORTANT: Do NOT call configure_app during updates — app/bot profile metadata is set only on first build.

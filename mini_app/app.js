@@ -17,7 +17,7 @@ function coinSvg(w, h, fill) {
 
 // Reserved start_param values reserved for intra-app navigation. They must
 // not be treated as utm_source. Keep in sync with src/services/analytics.service.ts
-const RESERVED_START_PARAMS = new Set(['open_dialog']);
+const RESERVED_START_PARAMS = new Set(['open_dialog', 'topup']);
 
 function parseStartParam(param) {
   if (!param) return { source: null, referrerId: null };
@@ -617,6 +617,10 @@ function startLinkBotPolling(projectId, onLinked) {
         renderAppList();
         // Remove the "Link your bot" card if still visible
         document.getElementById('link-bot-card')?.remove();
+        // Result-card actions are gated on botUsername — re-render any
+        // existing result-action rows for this project so the Release
+        // button appears immediately, instead of only on next page load.
+        try { refreshResultActionsFor(projectId); } catch (_) {}
         if (typeof onLinked === 'function') {
           try { onLinked(updated); } catch (e) { console.error('[link-bot] onLinked threw', e); }
         }
@@ -2149,24 +2153,74 @@ function handleWSMessage(data) {
       html += `<div class="chat-bubble-time">${timeStr(msg.timestamp)}</div>`;
       el.innerHTML = html;
       el.id = `msg-${msg.id}`;
-      requestAnimationFrame(() => {
-        const seContent = el.querySelector('.chat-bubble-content');
-        if (!seContent) return;
-        if (seContent.scrollHeight > 280) {
-          el.classList.add('collapsed-msg');
-          const seBtn = document.createElement('button');
-          seBtn.className = 'msg-expand-btn';
-          seBtn.textContent = t('chat_show_more') || 'Show more';
-          seBtn.addEventListener('click', () => {
-            haptic('light');
-            const c = el.classList.toggle('collapsed-msg');
-            seBtn.textContent = c ? (t('chat_show_more') || 'Show more') : (t('chat_show_less') || 'Show less');
-          });
-          seContent.parentNode.insertBefore(seBtn, seContent.nextSibling);
-        }
-      });
+      // Live answer: keep fully expanded. The collapse-on-history-replay path
+      // (appendMessage with animate=false) is the only place that adds the
+      // "Show more" toggle.
       scrollToBottom();
     }
+    return;
+  }
+
+  // ── Plan generation stream (sendPlanRequest / sendEditPlan) ─────────────
+  if (data.type === 'plan_stream_start') {
+    setTyping(false);
+    setInputDisabled(true);
+    document.querySelectorAll('.chat-bubble--plan').forEach(el => el.remove());
+    const inner = document.getElementById('chat-messages-inner');
+    if (!inner) return;
+    const el = document.createElement('div');
+    el.id = `msg-${data.messageId}`;
+    el.className = 'chat-bubble chat-bubble--assistant chat-bubble--plan chat-bubble--plan-streaming';
+    el.innerHTML = `<div class="chat-plan-content"><span class="stream-cursor"></span></div>`;
+    inner.appendChild(el);
+    scrollToBottom();
+    return;
+  }
+
+  if (data.type === 'plan_stream_chunk') {
+    const el = document.getElementById(`msg-${data.messageId}`);
+    if (el) {
+      const content = el.querySelector('.chat-plan-content');
+      if (content) content.innerHTML = formatContent(data.text) + '<span class="stream-cursor"></span>';
+      haptic('light');
+    }
+    return;
+  }
+
+  if (data.type === 'plan_stream_end') {
+    const el = document.getElementById(`msg-${data.messageId}`);
+    if (!el) return;
+    const msg = data.message;
+    if (!msg) return;
+    if (msg.type === 'error') {
+      el.className = 'chat-bubble chat-bubble--error';
+      el.innerHTML = `<div class="chat-bubble-content">${esc(msg.content)}</div>${renderRefundBlock(msg.metadata)}<div class="chat-bubble-time">${timeStr(msg.timestamp)}</div>`;
+      bindRefundRetry(el, msg.metadata);
+      el.id = `msg-${msg.id}`;
+      setInputDisabled(false);
+      scrollToBottom();
+      return;
+    }
+    el.className = 'chat-bubble chat-bubble--assistant chat-bubble--plan';
+    let html = `<div class="chat-plan-content">${formatContent(msg.content)}</div>`;
+    if (typeof msg.metadata?.costUsd === 'number') {
+      html += `<div class="chat-progress-cost">Cost: $${msg.metadata.costUsd.toFixed(4)}${typeof msg.metadata?.balance === 'number' ? ` · Balance: ${Math.floor(msg.metadata.balance)}` : ''}</div>`;
+    }
+    const planPrice = userTierData?.pricing?.create ?? userTierData?.pricing?.plan ?? null;
+    const planPriceTag = planPrice != null ? `<span class="plan-btn-price">${coinSvg(11, 8, '#fbbf24')}${Number(planPrice).toLocaleString()}</span>` : '';
+    html += `<div class="chat-plan-actions">
+      <button class="chat-plan-btn chat-plan-btn--build" onclick="approvePlan()">${t('chat_lets_build')}${planPriceTag}</button>
+      <button class="chat-plan-btn chat-plan-btn--edit" onclick="startEditPlan()">${t('chat_edit')}</button>
+    </div>`;
+    el.innerHTML = html;
+    el.id = `msg-${msg.id}`;
+    if (typeof data.balance === 'number') {
+      userCredits = data.balance;
+      const balEl = document.getElementById('balance-amount');
+      if (balEl) balEl.textContent = `${t('balance_label') || 'Balance'}: ${Math.max(0, Math.floor(data.balance)).toLocaleString()}`;
+    }
+    setInputDisabled(false);
+    scrollToBottom();
     return;
   }
 
@@ -2511,16 +2565,23 @@ function handleWSMessage(data) {
 function resultActionsHtml(projectId) {
   const proj = (projects || []).find(p => p.id === projectId) || (currentProject && currentProject.id === projectId ? currentProject : null);
   const isTextBot = proj?.preferences?.kind === 'textBot';
-  const releaseBtn = `<button class="result-action-btn result-action-release" onclick="releaseLatest()">${t('chat_release_update')}</button>`;
+  // Release is gated behind a connected bot — there's nothing to ship to
+  // until BotFather has handed us a token. The "Create Bot" card below the
+  // result card handles the prompt to link one.
+  const hasBot = !!proj?.botUsername;
+  const releaseBtn = hasBot
+    ? `<button class="result-action-btn result-action-release" onclick="releaseLatest()">${t('chat_release_update')}</button>`
+    : '';
   if (isTextBot) {
-    if (proj?.botUsername) {
+    if (hasBot) {
       const botUrl = `https://t.me/${proj.botUsername}`;
       return `<div class="result-actions">
         <button class="result-action-btn result-action-test" onclick="tg?.openTelegramLink('${botUrl}')">${t('chat_open_bot')}</button>
         ${releaseBtn}
       </div>`;
     }
-    return `<div class="result-actions">${releaseBtn}</div>`;
+    // No bot yet → nothing actionable here; the link-bot card handles the next step.
+    return '';
   }
   return `<div class="result-actions">
     <button class="result-action-btn result-action-test" onclick="openTestPreview('${projectId}')">▶ ${t('chat_run_test')}</button>
@@ -2528,23 +2589,149 @@ function resultActionsHtml(projectId) {
   </div>`;
 }
 
+// Re-render every visible result-actions row for `projectId`. Called when
+// the bot link state flips (e.g. polling detects a fresh BotFather token)
+// so the Release button appears without forcing a chat reopen.
+function refreshResultActionsFor(projectId) {
+  const fresh = resultActionsHtml(projectId);
+  const rows = document.querySelectorAll('.result-actions');
+  rows.forEach((row) => {
+    // Only swap rows whose Test button targets this project. This avoids
+    // touching action rows for other projects that may also be in the DOM.
+    const onclick = row.querySelector('.result-action-test')?.getAttribute('onclick') || '';
+    if (!onclick.includes(`'${projectId}'`)) return;
+    if (!fresh) {
+      row.remove();
+    } else {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = fresh;
+      const newRow = tmp.firstElementChild;
+      if (newRow) row.replaceWith(newRow);
+    }
+  });
+}
+
+// One-time 15-credit fee to unlock the Create Bot flow per project. The
+// server is the source of truth — second clicks on the same project (or
+// projects that already have a botUsername) hit the alreadyUnlocked /
+// alreadyLinked branches and don't re-charge.
+const LINK_BOT_FEE_CREDITS = 15;
+
+// Project IDs that have already been unlocked for the link-bot flow this
+// session. Populated from the GET /bot-create/:id/state probe and from
+// successful POST /bot-create/:id/unlock responses. Used to suppress the
+// fee badge so we don't keep promising a 15 cr charge that would never
+// actually fire.
+const linkBotPaidProjects = new Set();
+
 // Returns the HTML for the "Link your bot" card if the current project has no
 // bot yet. Injected into result cards after every successful build.
 function linkBotCardHtml(projectId) {
   if (currentProject?.botUsername) return '';
-  const isDev = location.hostname === 'dev.apps-father.com';
-  const fatherBot = isDev ? 'apps_father_dev_bot' : 'apps_father_bot';
-  const newbotUrl = `https://t.me/newbot/${fatherBot}/username_bot`;
-  // Escape single quotes in projectId (UUIDs are safe, but be defensive)
   const safeId = (projectId || '').replace(/'/g, '');
+  const fee = LINK_BOT_FEE_CREDITS;
+  const paid = linkBotPaidProjects.has(projectId);
+  const feeBadge = paid
+    ? ''
+    : `<span class="link-bot-fee" data-link-bot-fee="${escAttr(safeId)}">${coinSvg(13, 9, '#fbbf24')}<b>${fee}</b></span>`;
+  // Probe the server for state so the badge disappears even after a chat
+  // reload (the in-memory Set is empty on first render after refresh).
+  if (!paid) probeLinkBotPaidState(projectId);
   return `<div class="link-bot-card" id="link-bot-card">
     <div class="link-bot-title">${t('link_bot_title')}</div>
     <div class="link-bot-sub">${t('link_bot_sub')}</div>
-    <button class="link-bot-btn" onclick="tg?.openTelegramLink('${newbotUrl}'); startLinkBotPolling('${safeId}'); showLinkBotWaiting()">
-      ${t('link_bot_btn')}
+    <button class="link-bot-btn" onclick="handleLinkBotClick('${safeId}', this)">
+      <span class="link-bot-btn-label">${t('link_bot_btn')}</span>
+      ${feeBadge}
     </button>
     <div class="link-bot-waiting" id="link-bot-waiting" style="display:none">${t('link_bot_waiting') || 'Waiting for bot creation…'}</div>
   </div>`;
+}
+
+// Async probe — silently asks the server whether the link-bot fee was
+// already paid for this project. If it was, mark it locally and strip
+// any rendered fee badges so the UI stops showing a price.
+const _linkBotProbeInflight = new Set();
+async function probeLinkBotPaidState(projectId) {
+  if (!projectId || linkBotPaidProjects.has(projectId) || _linkBotProbeInflight.has(projectId)) return;
+  _linkBotProbeInflight.add(projectId);
+  try {
+    const res = await fetch(`${API_BASE}/bot-create/${encodeURIComponent(projectId)}/state`, { headers: apiHeaders() });
+    if (!res.ok) return;
+    const data = await res.json().catch(() => ({}));
+    if (data?.alreadyUnlocked || data?.alreadyLinked) {
+      markLinkBotPaid(projectId);
+    }
+  } catch (_) {
+    // Best-effort: if the probe fails we just keep the badge visible.
+  } finally {
+    _linkBotProbeInflight.delete(projectId);
+  }
+}
+
+// Mark a project as paid + scrub any fee badges already on screen.
+function markLinkBotPaid(projectId) {
+  if (!projectId) return;
+  linkBotPaidProjects.add(projectId);
+  document.querySelectorAll(`.link-bot-fee[data-link-bot-fee="${CSS.escape(projectId)}"]`).forEach((el) => {
+    el.remove();
+  });
+}
+
+function escAttr(s) {
+  return String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+async function handleLinkBotClick(projectId, btnEl) {
+  const isDev = location.hostname === 'dev.apps-father.com';
+  const fatherBot = isDev ? 'apps_father_dev_bot' : 'apps_father_bot';
+  const newbotUrl = `https://t.me/newbot/${fatherBot}/username_bot`;
+
+  const proceed = () => {
+    try { tg?.openTelegramLink(newbotUrl); } catch (_) {}
+    try { startLinkBotPolling(projectId); } catch (_) {}
+    try { showLinkBotWaiting(); } catch (_) {}
+  };
+
+  if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.classList.add('busy');
+  }
+  try {
+    const res = await fetch(`${API_BASE}/bot-create/${encodeURIComponent(projectId)}/unlock`, {
+      method: 'POST',
+      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.ok) {
+      if (typeof data.newCredits === 'number') {
+        userCredits = data.newCredits;
+        try { loadBalance(); } catch (_) {}
+      }
+      // Either we just paid (fresh charge), or the server told us it was
+      // already paid / linked. In all three cases there's no future fee,
+      // so flip local state + drop badges from the DOM.
+      markLinkBotPaid(projectId);
+      hapticNotify('success');
+      proceed();
+      return;
+    }
+    if (res.status === 402) {
+      hapticNotify('error');
+      showToast(t('link_bot_insufficient') || 'Not enough credits — top up first.', 'error');
+      setTimeout(() => { try { openTopup(currentView || 'list'); } catch (_) {} }, 200);
+      return;
+    }
+    showToast(data?.error || 'Could not unlock bot creation', 'error');
+  } catch (err) {
+    console.error('[link-bot] unlock failed:', err);
+    showToast('Network error — please try again.', 'error');
+  } finally {
+    if (btnEl) {
+      btnEl.disabled = false;
+      btnEl.classList.remove('busy');
+    }
+  }
 }
 
 // Smoothly drives the progress bubble from its current % up to 100%, ticks
@@ -2637,6 +2824,79 @@ async function loadChatHistory(projectId) {
   }
 }
 
+// Refund block rendered under an error bubble when the agent failed and
+// we already credited the user back. Surfaces a Try-again CTA wired to
+// the same call (build / update) the user originally made.
+function renderRefundBlock(metadata) {
+  if (!metadata?.refunded) return '';
+  const credits = Number(metadata.creditsRefunded || 0);
+  const retryLabel = t('btn_try_again') || 'Try again';
+  return `
+    <div class="error-refund-block" data-refund-block>
+      <div class="refund-line">
+        <span class="refund-icon" aria-hidden="true">${coinSvg(13, 9, '#22c55e')}</span>
+        <span class="refund-amount">+${credits}</span>
+        <span class="refund-suffix">${esc(t('error_credits_refunded_suffix') || 'refunded')}</span>
+      </div>
+      <button type="button" class="btn-retry" data-refund-retry>
+        <svg class="btn-retry-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+        <span>${esc(retryLabel)}</span>
+      </button>
+    </div>
+  `;
+}
+
+function bindRefundRetry(el, metadata) {
+  if (!metadata?.refunded) return;
+  const retry = metadata.retry;
+  if (!retry || !retry.kind) return;
+  const btn = el.querySelector('[data-refund-retry]');
+  if (!btn) return;
+  btn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (btn.disabled) return;
+    btn.disabled = true;
+    try {
+      if (retry.kind === 'build') {
+        await approvePlan();
+      } else if (retry.kind === 'update' && retry.text) {
+        await refireUpdate(retry.text);
+      }
+      // Drop the error bubble once the retry is dispatched so the chat
+      // shows only the fresh progress entry. The new pre-charge happens
+      // server-side automatically.
+      el.style.transition = 'opacity 0.2s';
+      el.style.opacity = '0';
+      setTimeout(() => el.remove(), 200);
+    } catch (err) {
+      console.error('[refund-retry] failed:', err);
+      btn.disabled = false;
+    }
+  });
+}
+
+// Re-fire an update request with the original prompt so the user gets
+// the same agent run they paid for. Mirrors sendMessage's POST shape.
+async function refireUpdate(text) {
+  if (!chatProjectId || !text) return;
+  setTyping(true);
+  setProcessing(true);
+  setInputDisabled(true);
+  try {
+    const res = await fetch(`${API_BASE}/chat/${chatProjectId}/send`, {
+      method: 'POST',
+      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, type: 'update', tierId: userTierId }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      console.error('[refund-retry] update re-fire failed', err);
+    }
+  } catch (err) {
+    console.error('[refund-retry] update re-fire error:', err);
+  }
+}
+
 function appendMessage(msg, animate = true) {
   if (!chatHasMessages) {
     chatHasMessages = true;
@@ -2716,7 +2976,8 @@ function appendMessage(msg, animate = true) {
     return;
   } else if (msg.type === 'error') {
     el.className = 'chat-bubble chat-bubble--error';
-    el.innerHTML = `<div class="chat-bubble-content">${esc(msg.content)}</div>`;
+    el.innerHTML = `<div class="chat-bubble-content">${esc(msg.content)}</div>${renderRefundBlock(msg.metadata)}`;
+    bindRefundRetry(el, msg.metadata);
     if (isProcessing) {
       setProcessing(false);
       setInputDisabled(false);
@@ -2833,7 +3094,12 @@ function appendMessage(msg, animate = true) {
   if (!animate) el.style.animation = 'none';
   inner.appendChild(el);
 
-  if (msg.type !== 'result' && msg.type !== 'question' && msg.type !== 'balance_error' && msg.type !== 'error' && msg.type !== 'progress' && msg.type !== 'devtools_request') {
+  // Only auto-collapse messages when we're rebuilding the chat from history
+  // (animate=false). Fresh messages — whether streamed live or appended right
+  // after the user sends a prompt — stay fully expanded; the user just
+  // arrived at the bottom and shouldn't have to tap "Show more" to read what
+  // they just produced. Re-entering the chat will collapse them on replay.
+  if (!animate && msg.type !== 'result' && msg.type !== 'question' && msg.type !== 'balance_error' && msg.type !== 'error' && msg.type !== 'progress' && msg.type !== 'devtools_request') {
     requestAnimationFrame(() => {
       const collapsible = el.querySelector('.chat-bubble-content') || el.querySelector('.chat-plan-content');
       if (!collapsible) return;
@@ -3457,6 +3723,13 @@ async function sendPlanRequest(description, opts = {}) {
     }
 
     const data = await res.json();
+    if (data.status === 'streaming') {
+      // The plan now arrives via WebSocket as plan_stream_start / chunk / end.
+      // Keep input disabled until the end event fires; the bubble is created
+      // there and includes the Build / Edit buttons.
+      return;
+    }
+    // Backwards-compat: server returned the full plan inline (older clients).
     appendMessage({
       role: 'assistant', type: 'plan', content: data.plan,
       id: 'plan-' + Date.now(), timestamp: Date.now(),
@@ -3490,6 +3763,11 @@ let prefModalState = null;
 let prefModalCatalogCache = null;
 const PREF_AUTO_ADVANCE_MS = 280;
 const PREF_AUTO_VALUE = '__auto__';
+// Mirrors GAME_KIND_FEE_CREDITS in src/services/runtime-config.service.ts.
+// Used to gate the Game card client-side so users can't even tap it
+// when they can't afford the one-time 100-credit fee — the server still
+// enforces the same rule for safety.
+const GAME_KIND_FEE_CREDITS = 100;
 
 async function loadPreferencesCatalog(projectId) {
   if (prefModalCatalogCache) return prefModalCatalogCache;
@@ -3531,6 +3809,11 @@ async function openPreferencesModal({ initial, catalog, onSaved, userBubbleId, d
   prefModalState = {
     catalog: payload.catalog,
     selection,
+    // Snapshot of the kind that was already saved on the server (or null
+    // for fresh projects). Used to decide whether picking "Game" would
+    // trigger the one-time 100-credit transition fee — if the project is
+    // already kind=game, re-selecting it doesn't charge again.
+    originalKind: (payload.current && payload.current.kind) || null,
     onSaved,
     projectId: chatProjectId,
     stepIndex: 0,
@@ -3847,6 +4130,30 @@ function clearHiddenSelections() {
 
 function onPrefCardPick(catId, optId, cardEl, stepEl, stepIdx) {
   if (!prefModalState) return;
+
+  // Game-kind paywall: block the tap entirely when the user would be
+  // transitioning into kind=game (project's saved kind isn't already
+  // 'game') and they don't have enough credits to cover the one-time
+  // 100 cr fee. We don't apply the selection — instead we surface the
+  // same insufficient-funds + Topup flow used by the post-submit 402
+  // path, so the UX stays consistent across "click the card" and "click
+  // submit".
+  if (catId === 'kind' && optId === 'game') {
+    const alreadyGame = prefModalState.originalKind === 'game';
+    if (!alreadyGame && (typeof userCredits === 'number') && userCredits < GAME_KIND_FEE_CREDITS) {
+      hapticNotify('error');
+      const msg = (t('pref_game_insufficient_funds') || 'Game kind costs {required} credits. Your balance: {balance} cr.')
+        .replace('{required}', String(GAME_KIND_FEE_CREDITS))
+        .replace('{balance}', String(userCredits));
+      const goTopup = confirm(`${msg}\n\n${t('pref_topup_now') || 'Top up now?'}`);
+      if (goTopup) {
+        closePreferencesModal();
+        try { openTopup('list'); } catch (_) {}
+      }
+      return;
+    }
+  }
+
   const previous = prefModalState.selection[catId];
   prefModalState.selection[catId] = optId;
   stepEl.querySelectorAll('.pref-card').forEach((el) => el.classList.remove('selected'));
@@ -4058,11 +4365,24 @@ function renderKindPreviewCard(opt) {
     `;
   }
   // game variant — full-bleed canvas mock with iso cubes
+  // Gold "100 🪙" price tag in the corner so the one-time fee is visible
+  // before the user even taps. When the user can't afford it (and they'd
+  // be triggering a transition into game) we add `--locked` so the card
+  // reads as un-clickable; the click handler still surfaces an explanatory
+  // alert in case they hit it anyway.
+  const fee = GAME_KIND_FEE_CREDITS;
+  const alreadyGame = prefModalState?.originalKind === 'game';
+  const cantAfford = !alreadyGame && (typeof userCredits === 'number') && userCredits < fee;
+  const lockedCls = cantAfford ? ' pref-fee-badge--locked' : '';
+  const cardLockedCls = cantAfford ? ' gp-card-kind-game--locked' : '';
   return `
-    <div class="gp-card gp-card-kind gp-card-kind-game">
+    <div class="gp-card gp-card-kind gp-card-kind-game${cardLockedCls}">
       <div class="gp-canvas">
         ${renderIsoScene()}
         <span class="gp-score">SCORE 0042</span>
+        <span class="pref-fee-badge${lockedCls}">
+          <b>${fee}</b>${coinSvg(12, 9, '#fde68a')}
+        </span>
       </div>
     </div>
   `;
@@ -5180,6 +5500,19 @@ async function submitPreferences() {
         submitBtn.classList.remove('busy');
         submitBtn.textContent = textBotNeedsBotFirst() ? t('pref_modal_create_bot') : t('pref_modal_submit');
       }
+      // Game-kind paywall: 402 with kind=game means user can't afford the
+      // one-time 100 cr fee. Show explanation + open Topup so they can fix it.
+      if (res.status === 402 && err?.error === 'insufficient_credits' && err?.kind === 'game') {
+        const msg = (t('pref_game_insufficient_funds') || 'Game kind costs {required} credits. Your balance: {balance} cr.')
+          .replace('{required}', String(err.required ?? 100))
+          .replace('{balance}', String(err.balance ?? 0));
+        const goTopup = confirm(`${msg}\n\n${t('pref_topup_now') || 'Top up now?'}`);
+        if (goTopup) {
+          closePreferencesModal();
+          openTopup('list');
+        }
+        return;
+      }
       alert(t('pref_modal_save_failed'));
       return;
     }
@@ -5350,6 +5683,11 @@ async function sendEditPlan(feedback) {
     }
 
     const data = await res.json();
+    if (data.status === 'streaming') {
+      // Plan delivered via WebSocket plan_stream_* events.
+      return;
+    }
+    // Backwards-compat: server returned the full plan inline.
     appendMessage({
       role: 'assistant', type: 'plan', content: data.plan,
       id: 'plan-updated-' + Date.now(), timestamp: Date.now(),
@@ -5392,11 +5730,133 @@ async function releaseLatest() {
   });
 }
 
-function openTestPreview(projectId) {
+// Open the player for a project. For users who never deposited and haven't
+// already paid the one-time 20-credit unlock, we first show a fullscreen
+// in-app iframe of /dev/{projectId}/ with a frosted overlay asking them
+// to spend 20 credits — initData is only valid against the MAIN bot, so
+// the gate has to live here (in the main mini-app) instead of inside the
+// player itself.
+async function openTestPreview(projectId) {
+  let state = null;
+  try {
+    const res = await fetch(`${API_BASE}/preview/${encodeURIComponent(projectId)}/state`, { headers: apiHeaders() });
+    if (res.ok) state = await res.json();
+  } catch (err) {
+    console.warn('[preview] state check failed, falling open:', err);
+  }
+  if (state?.requiresPayment) {
+    openLockedPreview(projectId, state);
+    return;
+  }
+  launchPlayer(projectId);
+}
+
+function launchPlayer(projectId) {
   const isDev = location.hostname === 'dev.apps-father.com';
   const env = isDev ? 'dev' : 'prod';
   const startapp = `${env}-${projectId}`;
   tg?.openTelegramLink(`https://t.me/apps_father_player_bot/player?startapp=${startapp}`);
+}
+
+function openLockedPreview(projectId, state) {
+  closeLockedPreview();
+  const fee = Number(state?.fee || 20);
+  const balance = Number(state?.balance || 0);
+  const insufficient = balance < fee;
+  const iframeSrc = `${location.origin}/dev/${encodeURIComponent(projectId)}/`;
+
+  // Inline coin glyphs sized for each context. Gold (#fde68a → #f59e0b)
+  // for the price, dimmer for the balance row.
+  const ctaCoin = coinSvg(18, 12, '#fde68a');
+  const balCoin = coinSvg(13, 9, '#fbbf24');
+
+  const overlay = document.createElement('div');
+  overlay.id = 'locked-preview-overlay';
+  overlay.className = 'locked-preview-overlay';
+  overlay.innerHTML = `
+    <iframe class="locked-preview-iframe" src="${iframeSrc}" title="App preview"></iframe>
+    <div class="locked-preview-blur"></div>
+    <button type="button" class="locked-preview-close" id="locked-preview-close" aria-label="Close">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+    </button>
+    <div class="locked-preview-card">
+      <div class="locked-preview-msg">${esc(t('paywall_message') || 'See what you built — unlock for')}&nbsp;${ctaCoin}&nbsp;<b>${fee.toLocaleString()}</b></div>
+      <button type="button" class="locked-preview-cta" id="locked-preview-cta">
+        <span class="lpv-cta-label">${esc(t('paywall_unlock_btn_v2') || 'Unlock for')}</span>
+        <span class="lpv-cta-price">${ctaCoin}<b>${fee.toLocaleString()}</b></span>
+      </button>
+      <div class="locked-preview-balance" id="locked-preview-balance">
+        ${esc(t('paywall_balance_v2') || 'Balance')}&nbsp;${balCoin}&nbsp;<b>${balance.toLocaleString()}</b>${insufficient ? ` <span class="lpv-low">· ${esc(t('paywall_insufficient_short') || 'top up')}</span>` : ''}
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  if (insufficient) {
+    overlay.querySelector('.locked-preview-cta')?.classList.add('lpv-cta--low');
+  }
+  document.getElementById('locked-preview-close')?.addEventListener('click', closeLockedPreview);
+  document.getElementById('locked-preview-cta')?.addEventListener('click', () => unlockPreview(projectId));
+
+  // Let the "Made by Apps Father" splash inside the iframe play out (~1.8s + 0.5s fade)
+  // before revealing the blur + paywall card, so users perceive the app actually
+  // loading before being asked to unlock it.
+  overlay.classList.add('lpv-arming');
+  setTimeout(() => {
+    if (!overlay.isConnected) return;
+    overlay.classList.remove('lpv-arming');
+    overlay.classList.add('lpv-armed');
+    haptic('medium');
+  }, 2300);
+}
+
+function closeLockedPreview() {
+  const overlay = document.getElementById('locked-preview-overlay');
+  if (!overlay) return;
+  overlay.style.transition = 'opacity 0.2s';
+  overlay.style.opacity = '0';
+  setTimeout(() => overlay.remove(), 200);
+}
+
+async function unlockPreview(projectId) {
+  const cta = document.getElementById('locked-preview-cta');
+  if (!cta) return;
+  cta.disabled = true;
+  cta.classList.add('busy');
+  const originalHtml = cta.innerHTML;
+  cta.innerHTML = `<span class="lpv-cta-label">${esc(t('paywall_unlocking') || 'Unlocking…')}</span>`;
+  try {
+    const res = await fetch(`${API_BASE}/preview/${encodeURIComponent(projectId)}/unlock`, {
+      method: 'POST',
+      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.ok) {
+      if (typeof data.newCredits === 'number') {
+        userCredits = data.newCredits;
+        try { loadBalance(); } catch (_) {}
+      }
+      hapticNotify('success');
+      closeLockedPreview();
+      setTimeout(() => launchPlayer(projectId), 220);
+      return;
+    }
+    if (res.status === 402) {
+      closeLockedPreview();
+      showToast(t('paywall_insufficient') || 'Not enough credits — top up first.', 'error');
+      setTimeout(() => { try { openTopup(currentView || 'list'); } catch (_) {} }, 200);
+      return;
+    }
+    showToast(data?.error || 'Could not unlock', 'error');
+    cta.disabled = false;
+    cta.classList.remove('busy');
+    cta.innerHTML = originalHtml;
+  } catch (err) {
+    console.error('[preview] unlock failed:', err);
+    showToast('Network error — please try again.', 'error');
+    cta.disabled = false;
+    cta.classList.remove('busy');
+    cta.innerHTML = originalHtml;
+  }
 }
 
 function closeTestPreview() {
@@ -7845,7 +8305,23 @@ function admRenderApps() {
     listHtml += '</div>';
   }
 
-  el.innerHTML = chipsHtml + sortHtml + summaryHtml + listHtml;
+  const jumpHtml = `
+    <div class="adm-jump-row" id="adm-apps-jump-row">
+      <input class="tm-input adm-jump-input" id="adm-apps-jump-id" placeholder="Project ID…" spellcheck="false" autocomplete="off"/>
+      <button class="tm-btn adm-jump-btn" id="adm-apps-jump-btn">Open</button>
+    </div>`;
+
+  el.innerHTML = jumpHtml + chipsHtml + sortHtml + summaryHtml + listHtml;
+
+  const jumpInput = el.querySelector('#adm-apps-jump-id');
+  const jumpBtn   = el.querySelector('#adm-apps-jump-btn');
+  function doJump() {
+    const id = jumpInput.value.trim();
+    if (!id) return;
+    openAdmProjectChat(id);
+  }
+  jumpBtn.addEventListener('click', doJump);
+  jumpInput.addEventListener('keydown', e => { if (e.key === 'Enter') doJump(); });
 
   el.querySelectorAll('#adm-apps-status-chips .adm-tab').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -9029,6 +9505,18 @@ async function init() {
 // storage so subsequent opens don't keep re-triggering the auto-navigation.
 function maybeHandleReservedStartParam() {
   const sp = getStartParam();
+  if (!sp) return;
+
+  // Emitted by the player paywall when the user has insufficient credits
+  // to unlock a preview. Land them straight on the Topup view so they can
+  // recover and try again.
+  if (sp === 'topup') {
+    try { localStorage.removeItem('af_start_param'); } catch (_) {}
+    try { sessionStorage.removeItem('af_start_param'); } catch (_) {}
+    try { openTopup('list'); } catch (_) {}
+    return;
+  }
+
   if (sp !== 'open_dialog') return;
   try { localStorage.removeItem('af_start_param'); } catch (_) {}
   try { sessionStorage.removeItem('af_start_param'); } catch (_) {}

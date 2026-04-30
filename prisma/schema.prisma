@@ -13,7 +13,7 @@ model User {
   username   String?
   firstName  String?   @map("first_name")
   balance    Decimal   @default(0) @db.Decimal(12, 4)
-  credits    Int       @default(100)
+  credits    Int       @default(50)
   performanceTier String @default("tier_0") @map("performance_tier")
   appSlots   Int       @default(5) @map("app_slots")
   referredBy BigInt?   @map("referred_by")

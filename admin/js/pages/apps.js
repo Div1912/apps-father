@@ -38,6 +38,11 @@
           <div class="actions"><button class="btn btn-sm btn-ghost" id="apps-refresh">Refresh</button></div>
         </div>
 
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+          <input class="input" id="apps-jump-id" placeholder="Project ID…" style="width:300px;font-family:monospace;font-size:12px" spellcheck="false"/>
+          <button class="btn btn-sm btn-primary" id="apps-jump-btn">Open</button>
+        </div>
+
         <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
           <input class="input" id="apps-q" placeholder="Search by name, bot, owner, or id…" style="max-width:340px" value="${Fmt.escapeHtml(state.q)}"/>
           <div style="display:flex;gap:6px;flex-wrap:wrap" id="apps-filters">
@@ -176,6 +181,16 @@
       });
 
       host.querySelector("#apps-refresh").addEventListener("click", load);
+
+      const jumpInput = host.querySelector("#apps-jump-id");
+      const jumpBtn   = host.querySelector("#apps-jump-btn");
+      function doJump() {
+        const id = jumpInput.value.trim();
+        if (!id) return;
+        ctx.push({ pageKey: "app", params: { id } });
+      }
+      jumpBtn.addEventListener("click", doJump);
+      jumpInput.addEventListener("keydown", e => { if (e.key === "Enter") doJump(); });
 
       await load();
     },

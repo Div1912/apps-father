@@ -85,7 +85,7 @@
 
   const METRICS = [
     { id: "new_users",     title: "New Users",     color: "#a48bff", fmt: (v) => Fmt.intK(v) },
-    { id: "paying_users",  title: "Paying Users",  color: "#5cc377", fmt: (v) => Fmt.intK(v) },
+    { id: "paying_users",  title: "New Paying Users", color: "#5cc377", fmt: (v) => Fmt.intK(v) },
     { id: "conversion",    title: "Conversion %",  color: "#38b2e0", fmt: (v) => v.toFixed(1) + "%" },
     { id: "new_projects",  title: "New Apps",      color: "#ff8aa3", fmt: (v) => Fmt.intK(v) },
     { id: "revenue",       title: "Revenue",       color: "#ffb800", fmt: (v) => "$" + v.toFixed(2) },

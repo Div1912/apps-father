@@ -140,15 +140,10 @@ function inlineFormat(text: string): TelegraphNode[] {
   return nodes;
 }
 
-export async function publishReport(title: string, summary: string, cost?: string): Promise<string> {
+export async function publishReport(title: string, summary: string): Promise<string> {
   const token = await getToken();
 
   const content: TelegraphNode[] = markdownToNodes(summary);
-
-  if (cost) {
-    content.push({ tag: "hr" });
-    content.push({ tag: "p", children: [{ tag: "i", children: [cost] }] });
-  }
 
   if (content.length === 0) {
     content.push({ tag: "p", children: ["No summary available."] });
