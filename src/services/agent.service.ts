@@ -157,6 +157,10 @@ export interface AgentResult {
   logPath?: string;
   commitNum?: number;
   commitDir?: string;
+  /** Total tool-call steps executed by the agent */
+  stepCount?: number;
+  /** Wall-clock duration of the run in milliseconds */
+  durationMs?: number;
 }
 
 export class AgentService {
@@ -1097,6 +1101,7 @@ ${featureGating}`;
     // These ride on top of the legacy `progress` callback. Older consumers
     // ignore the new fields (`event`, `stepId`, `kind`, …); the WS forwarder
     // in src/web/server.ts maps them to dedicated `agent_*` WS events.
+    const runStartMs = Date.now();
     let stepCounter = 0;
     const newStepId = (prefix: string) =>
       `${prefix}-${Date.now().toString(36)}-${++stepCounter}`;
@@ -2149,7 +2154,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
                   writeDetailedLog("blocked_deploy_locked");
                   const logFilePath2 = logger.getLogPath();
                   logger.close();
-                  return { summary, shortSummary, contextDiff, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath2, commitNum, commitDir };
+                  return { summary, shortSummary, contextDiff, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath2, commitNum, commitDir, stepCount: stepCounter, durationMs: Date.now() - runStartMs };
                 }
                 result = `Error: ${readinessError}`;
                 break;
@@ -2165,7 +2170,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
                   writeDetailedLog("blocked_deploy_locked_route_error");
                   const logFilePath2 = logger.getLogPath();
                   logger.close();
-                  return { summary, shortSummary, contextDiff, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath2, commitNum, commitDir };
+                  return { summary, shortSummary, contextDiff, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath2, commitNum, commitDir, stepCount: stepCounter, durationMs: Date.now() - runStartMs };
                 }
                 result = `Error: ${routeError} Fix backend/routes.js, deploy to dev, then call finish(shortSummary, summary) again.`;
                 break;
@@ -2185,7 +2190,7 @@ The user will visually verify. If this was your final action, in your NEXT turn 
               writeDetailedLog("finish");
               const logFilePath2 = logger.getLogPath();
               logger.close();
-              return { summary, shortSummary, contextDiff, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath2, commitNum, commitDir };
+              return { summary, shortSummary, contextDiff, model: tierConfig.modelId, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cacheWriteTokens: totalCacheWriteTokens, cacheReadTokens: totalCacheReadTokens, logPath: logFilePath2, commitNum, commitDir, stepCount: stepCounter, durationMs: Date.now() - runStartMs };
             }
 
             case "configure_app": {
@@ -2318,6 +2323,8 @@ The user will visually verify. If this was your final action, in your NEXT turn 
       logPath: logFilePath,
       commitNum,
       commitDir,
+      stepCount: stepCounter,
+      durationMs: Date.now() - runStartMs,
     };
   }
 

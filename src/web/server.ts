@@ -1385,7 +1385,7 @@ export function createWebServer() {
                 cashbackAvailable: cashbackAvail,
                 cashbackClaimed: false,
                 checklist: items,
-                metadata: { changelogUrl },
+                metadata: { changelogUrl, stepCount: result.stepCount, durationMs: result.durationMs },
               });
             }
 
@@ -1399,6 +1399,8 @@ export function createWebServer() {
               creditsCharged: usage.creditsCharged,
               commitNum: result.commitNum,
               cashbackAvailable: cashbackAvail,
+              stepCount: result.stepCount,
+              durationMs: result.durationMs,
             });
 
             notifyProcessDone(auth.telegramId!, appName, result.shortSummary, "update", lang);
@@ -1691,9 +1693,9 @@ export function createWebServer() {
           const cashbackEnabledFix = runtimeConfig.get().cashbackEnabled !== false;
           const cashbackAvailFix = cashbackEnabledFix && (usage.creditsCharged ?? 0) > 0;
           if (progressMsgId) {
-            chatService.updateMessage(projectId, progressMsgId, { type: "result", content: result.shortSummary, percent: 100, costUsd: usage.costUsd, balance: usage.newBalance, creditsCharged: usage.creditsCharged, commitNum: result.commitNum, cashbackAvailable: cashbackAvailFix, cashbackClaimed: false, checklist: items, metadata: { changelogUrl } });
+            chatService.updateMessage(projectId, progressMsgId, { type: "result", content: result.shortSummary, percent: 100, costUsd: usage.costUsd, balance: usage.newBalance, creditsCharged: usage.creditsCharged, commitNum: result.commitNum, cashbackAvailable: cashbackAvailFix, cashbackClaimed: false, checklist: items, metadata: { changelogUrl, stepCount: result.stepCount, durationMs: result.durationMs } });
           }
-          broadcastToProject(projectId, { type: "status", projectId, status: "done", messageId: progressMsgId, summary: result.shortSummary, changelogUrl, costUsd: usage.costUsd, balance: usage.newBalance, creditsCharged: usage.creditsCharged, commitNum: result.commitNum, cashbackAvailable: cashbackAvailFix });
+          broadcastToProject(projectId, { type: "status", projectId, status: "done", messageId: progressMsgId, summary: result.shortSummary, changelogUrl, costUsd: usage.costUsd, balance: usage.newBalance, creditsCharged: usage.creditsCharged, commitNum: result.commitNum, cashbackAvailable: cashbackAvailFix, stepCount: result.stepCount, durationMs: result.durationMs });
 
           notifyProcessDone(Number(owner.telegramId), appName, result.shortSummary, "fix", ownerLang);
 
@@ -2076,7 +2078,7 @@ export function createWebServer() {
               commitNum: result.commitNum,
               cashbackAvailable: cashbackAvailCreate,
               cashbackClaimed: false,
-              metadata: { changelogUrl },
+              metadata: { changelogUrl, stepCount: result.stepCount, durationMs: result.durationMs },
             });
             broadcastToProject(projectId, {
               type: "status", projectId, messageId: progressMsgId,
@@ -2086,6 +2088,8 @@ export function createWebServer() {
               creditsCharged: usage.creditsCharged,
               commitNum: result.commitNum,
               cashbackAvailable: cashbackAvailCreate,
+              stepCount: result.stepCount,
+              durationMs: result.durationMs,
             });
           }
 

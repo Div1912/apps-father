@@ -330,6 +330,29 @@ html, body {
   color: var(--text-4);
   border: 1px dashed rgba(255,255,255,0.12);
 }
+.badge.rate {
+  cursor: pointer;
+  border: 1px solid;
+  padding: 3px 7px 3px 6px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  transition: filter 0.15s, transform 0.15s;
+}
+.badge.rate:hover { filter: brightness(1.15); transform: translateY(-1px); }
+.badge.rate .rate-tag {
+  background: linear-gradient(90deg, #F59E0B, #D97706);
+  color: #1a1206;
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 9px;
+  margin-left: 1px;
+}
+.thought-rate {
+  margin-left: auto;
+}
 .pulse {
   width: 6px; height: 6px;
   border-radius: 50%;
@@ -407,6 +430,7 @@ html, body {
   letter-spacing: 0.08em;
   display: flex; align-items: center; gap: 6px;
   margin-bottom: 5px;
+  width: 100%;
 }
 .dots { display: inline-flex; gap: 3px; align-items: center; }
 .dots i {

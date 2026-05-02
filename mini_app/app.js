@@ -2078,6 +2078,182 @@ function connectChatWS(projectId) {
   };
 }
 
+// ── Agent timeline (chain) helpers ──────────────────────────────────────────
+// Build/lookup the .agent-chain skeleton inside a process bubble. Idempotent:
+// safe to call from every narration_start / step_start / restore path.
+const CHAIN_SPARKLE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v6m0 6v6M3 12h6m6 0h6"/></svg>';
+const CHAIN_CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"/></svg>';
+
+function ensureChain(el) {
+  if (!el.classList.contains('agent-process')) {
+    el.classList.add('agent-process');
+    el.innerHTML = '';
+  }
+  let chain = el.querySelector(':scope > .agent-chain');
+  if (!chain) {
+    chain = document.createElement('div');
+    chain.className = 'agent-chain';
+    chain.innerHTML = '<div class="agent-chain-header"></div><div class="agent-chain-rows"></div>';
+    el.appendChild(chain);
+  }
+  // Strip stale inline styles from old localStorage HTML
+  chain.removeAttribute('style');
+  chain.querySelector('.agent-chain-rows')?.removeAttribute('style');
+  chain.querySelectorAll('.row').forEach(r => r.removeAttribute('style'));
+  return {
+    chain,
+    header: chain.querySelector('.agent-chain-header'),
+    rows: chain.querySelector('.agent-chain-rows'),
+  };
+}
+
+// Returns the user prompt that started this run by walking back to the
+// nearest preceding .chat-bubble--user. Falls back to a generic label.
+function findTaskPromptForBubble(el) {
+  let prev = el.previousElementSibling;
+  while (prev) {
+    if (prev.classList && prev.classList.contains('chat-bubble--user')) {
+      const txt = (prev.querySelector('.chat-bubble-content')?.textContent || '').trim();
+      if (txt) return txt;
+    }
+    prev = prev.previousElementSibling;
+  }
+  return '';
+}
+
+function ensureChainHeader(el) {
+  const { header } = ensureChain(el);
+  if (header.dataset.populated === '1') return header;
+  let prompt = findTaskPromptForBubble(el);
+  if (!prompt) prompt = (typeof t === 'function' && t('chat_chain_default_task')) || 'Working on your update';
+  const display = prompt.length > 80 ? prompt.slice(0, 80) + '\u2026' : prompt;
+  header.dataset.populated = '1';
+  header.dataset.prompt = display;
+  header.innerHTML =
+    `<div class="agent-chain-icon">${CHAIN_SPARKLE_SVG}</div>` +
+    `<div class="agent-chain-titles">` +
+      `<div class="agent-chain-title"></div>` +
+      `<div class="agent-chain-subtitle">live agent timeline</div>` +
+    `</div>` +
+    `<div class="agent-chain-step"></div>`;
+  header.querySelector('.agent-chain-title').textContent = display;
+  updateChainCounter(el);
+  return header;
+}
+
+function updateChainCounter(el) {
+  const rows = el.querySelector(':scope > .agent-chain > .agent-chain-rows');
+  if (!rows) return;
+  const counter = el.querySelector(':scope > .agent-chain > .agent-chain-header > .agent-chain-step');
+  if (!counter) return;
+  // Ghost rows don't count toward the total — they represent "still working".
+  const all = Array.from(rows.querySelectorAll(':scope > .row')).filter(r => !r.classList.contains('ghost'));
+  const total = all.length;
+  let active = 0;
+  for (const r of all) {
+    if (!r.classList.contains('pending')) active++;
+  }
+  counter.textContent = total > 0 ? `step ${Math.min(active, total)}/${total}` : '';
+}
+
+// Auto-scroll the running row into view inside the chat scroller.
+function scrollRunningRowIntoView(el) {
+  const running = el.querySelector(':scope > .agent-chain > .agent-chain-rows > .row.running');
+  if (!running) return;
+  try { running.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch {}
+}
+
+// Move the cost/abort footer back to the bottom of the chain after we
+// append/insert new rows. Footer lives inside .agent-chain (after rows) so
+// it stays anchored visually at the end of the timeline.
+function moveFooterToEnd(el) {
+  const chain = el.querySelector(':scope > .agent-chain');
+  const footer = el.querySelector('.agent-footer');
+  if (chain && footer && footer.parentNode !== chain) chain.appendChild(footer);
+  else if (chain && footer) chain.appendChild(footer); // re-append to end
+}
+
+// Once a thought row finishes streaming: drop the live cursor, swap the
+// "thinking" label + bouncing dots for "thought" + chevron, and bind the
+// click-to-toggle handler so the user can collapse/expand the body.
+function finalizeThoughtBlock(block) {
+  if (!block) return;
+  block.classList.remove('running');
+  block.classList.add('done');
+  const body = block.querySelector('.agent-think-body');
+  if (body) { body.querySelector('.stream-cursor')?.remove(); }
+  block.querySelector('.agent-completion-viewport')?.remove();
+  const label = block.querySelector('.agent-think-label');
+  if (label) label.textContent = 'thought';
+  block.querySelector('.agent-think-dots')?.remove();
+  const header = block.querySelector('.agent-think-header');
+  if (header && !header._clickBound) {
+    header._clickBound = true;
+    header.addEventListener('click', () => block.classList.toggle('open'));
+  }
+}
+
+// Once a tool step finishes: replace the "running" badge with a check (done)
+// or an X (error). The rail dot recolors via CSS based on the row state.
+function finalizeStepCard(step, isError) {
+  if (!step) return;
+  const head = step.querySelector('.agent-step-head');
+  const oldBadge = head?.querySelector('.agent-step-badge');
+  if (oldBadge) oldBadge.remove();
+  if (head) {
+    const badge = document.createElement('span');
+    if (isError) {
+      badge.className = 'agent-step-badge agent-step-badge--error';
+      badge.textContent = 'error';
+    } else {
+      badge.className = 'agent-step-badge agent-step-badge--done';
+      badge.innerHTML = CHAIN_CHECK_SVG;
+      badge.setAttribute('aria-label', 'done');
+    }
+    head.appendChild(badge);
+  }
+}
+
+// Stream a delta into the writing viewport. We keep the trailing
+// (un-newlined) chunk inside a `.live` span and continually overwrite it as
+// new deltas arrive. Each newline finalizes the current `.live` span (drops
+// the `.live` class) and starts a fresh one. Finalized spans pick up the
+// `chainLineIn` fade animation through `.agent-completion-line`.
+function appendCompletionDelta(viewport, delta) {
+  if (!delta) return;
+  const pre = viewport.querySelector('.agent-completion-pre');
+  if (!pre) return;
+  if (typeof viewport._lineSeq !== 'number') viewport._lineSeq = 0;
+  if (typeof viewport._buf !== 'string') viewport._buf = '';
+
+  const ensureLive = () => {
+    let live = pre.querySelector(':scope > .agent-completion-line.live');
+    if (!live) {
+      live = document.createElement('span');
+      live.className = 'agent-completion-line live';
+      live.style.animationDelay = ((viewport._lineSeq++ % 30) * 18) + 'ms';
+      pre.appendChild(live);
+    }
+    return live;
+  };
+
+  const combined = viewport._buf + delta;
+  const parts = combined.split('\n');
+  const tail = parts.pop();
+  for (const finished of parts) {
+    const live = ensureLive();
+    live.textContent = finished + '\n';
+    live.classList.remove('live');
+  }
+  if (tail.length > 0) {
+    ensureLive().textContent = tail;
+  } else {
+    pre.querySelector(':scope > .agent-completion-line.live')?.remove();
+  }
+  viewport._buf = tail;
+  pre.scrollTop = pre.scrollHeight;
+}
+
 // Filled SVG icons — fill="currentColor" so they inherit step state color
 // and are solid/visible at small sizes in all WebViews.
 function agentStepIcon(kind) {
@@ -2224,44 +2400,46 @@ function handleWSMessage(data) {
     return;
   }
 
-  // ── Agent narration events (collapsible "thinking" blocks) ───────────────
+  // ── Agent narration events (rail "thought" rows) ─────────────────────────
   if (data.type === 'agent_narration_start') {
     const el = document.getElementById(`msg-${data.messageId}`);
     if (!el) return;
-    // First narration: convert the progress bubble to a transparent timeline
-    if (!el.classList.contains('agent-process')) {
-      el.classList.add('agent-process');
-      el.innerHTML = ''; // wipe the old "Working X% / Starting..." UI
-    }
-    // Mark any still-running think blocks as done (guard for missed narration_end)
-    el.querySelectorAll('.agent-think-block.running').forEach(b => {
-      b.classList.remove('running');
-      b.classList.add('done');
-      const ic = b.querySelector('.agent-think-icon');
-      if (ic) ic.innerHTML = AGENT_DONE_SVG;
-      const hdr = b.querySelector('.agent-think-header');
-      if (hdr && !hdr._clickBound) { hdr._clickBound = true; hdr.addEventListener('click', () => b.classList.toggle('open')); }
+    el.removeAttribute('style');
+    ensureChainHeader(el);
+    const { rows } = ensureChain(el);
+    // Defensive: any still-running thought rows are forced to done.
+    rows.querySelectorAll('.row.thought.running').forEach(r => {
+      r.classList.remove('running');
+      r.classList.add('done');
+      const blk = r.querySelector('.agent-think-block');
+      if (blk) finalizeThoughtBlock(blk);
     });
-    // Remove or hide the footer to avoid it sitting above new blocks
-    const existingFooter = el.querySelector('.agent-footer');
-    if (existingFooter) existingFooter.remove();
-    // Create a fresh think block for this iteration
-    const block = document.createElement('div');
-    block.id = `narr-${data.stepId}`;
-    block.className = 'agent-think-block running';
-    block.innerHTML = `
-      <div class="agent-think-header">
-        <span class="agent-think-icon"><span class="step-spinner"></span></span>
-        <span class="agent-think-preview">Thinking…</span>
-        <span class="agent-think-toggle">›</span>
-      </div>
-      <div class="agent-think-body"></div>`;
-    el.appendChild(block);
-    // Persist: add narration entry
+    // Build the new thought row
+    const row = document.createElement('div');
+    row.className = 'row thought running';
+    row.dataset.stepId = data.stepId;
+    row.innerHTML =
+      `<div class="rail">` +
+        `<div class="rail-line"></div>` +
+        `<div class="thought-dot"></div>` +
+      `</div>` +
+      `<div class="agent-think-block running" id="narr-${esc(data.stepId)}">` +
+        `<div class="agent-think-header">` +
+          `<span class="agent-think-label">thinking</span>` +
+          `<span class="agent-think-dots"><i></i><i></i><i></i></span>` +
+          `<span class="agent-think-toggle">\u203a</span>` +
+        `</div>` +
+        `<div class="agent-think-body"></div>` +
+      `</div>`;
+    rows.appendChild(row);
+    moveFooterToEnd(el);
+    // Persist
     const _apst0 = ensureAgentProcState(data.messageId);
     if (typeof _apst0._seq !== 'number') _apst0._seq = 0;
     _apst0.narrations.push({ stepId: data.stepId, preview: 'Thinking\u2026', body: '', done: false, order: _apst0._seq++ });
     persistAgentProcState(data.messageId);
+    updateChainCounter(el);
+    scrollRunningRowIntoView(el);
     scrollToBottom();
     return;
   }
@@ -2270,14 +2448,12 @@ function handleWSMessage(data) {
     const block = document.getElementById(`narr-${data.stepId}`);
     if (!block) return;
     const body = block.querySelector('.agent-think-body');
-    const preview = block.querySelector('.agent-think-preview');
     if (body) {
       body.innerHTML = formatContent(data.text || '') + '<span class="stream-cursor"></span>';
       body.scrollTop = body.scrollHeight;
     }
     const plain = (data.text || '').replace(/[#*`_~\n]/g, ' ').trim();
-    const previewText = plain.length > 72 ? plain.slice(0, 72) + '…' : (plain || 'Thinking…');
-    if (preview) preview.textContent = previewText;
+    const previewText = plain.length > 72 ? plain.slice(0, 72) + '\u2026' : (plain || 'Thinking\u2026');
     // Persist: update narration body + preview
     const _apst1 = agentProcState.get(data.messageId);
     if (_apst1) {
@@ -2289,31 +2465,26 @@ function handleWSMessage(data) {
   }
 
   if (data.type === 'agent_writing_chunk') {
-    // Show tool-call arguments streaming in the active narration block —
-    // purely visual, gives the user feedback while the model writes files.
+    // Stream tool-call arguments inside the active narration block as
+    // animated lines, giving the user a sense the agent is producing output.
     const block = document.getElementById(`narr-${data.stepId}`);
     if (!block) return;
     let viewport = block.querySelector('.agent-completion-viewport');
     if (!viewport) {
       viewport = document.createElement('div');
       viewport.className = 'agent-completion-viewport';
+      viewport._buf = '';
       const label = document.createElement('div');
       label.className = 'agent-completion-label';
       const toolLabel = (data.toolName || '').replace(/_/g, ' ');
-      label.textContent = toolLabel ? `${toolLabel}` : 'Writing…';
+      label.textContent = toolLabel ? toolLabel : 'writing';
       viewport.appendChild(label);
       const pre = document.createElement('pre');
       pre.className = 'agent-completion-pre';
       viewport.appendChild(pre);
       block.appendChild(viewport);
     }
-    const pre = viewport.querySelector('.agent-completion-pre');
-    if (pre) {
-      // Append only the new delta (not the full accumulated args JSON) and
-      // auto-scroll to the bottom so the user always sees the latest output.
-      pre.textContent += data.delta || '';
-      pre.scrollTop = pre.scrollHeight;
-    }
+    appendCompletionDelta(viewport, data.delta || '');
     scrollToBottom();
     return;
   }
@@ -2321,59 +2492,68 @@ function handleWSMessage(data) {
   if (data.type === 'agent_narration_end') {
     const block = document.getElementById(`narr-${data.stepId}`);
     if (!block) return;
-    // Remove completion viewport when narration ends — the step card that
-    // follows immediately shows the tool name and result.
-    block.querySelector('.agent-completion-viewport')?.remove();
-    const body = block.querySelector('.agent-think-body');
-    if (body) { const cur = body.querySelector('.stream-cursor'); if (cur) cur.remove(); }
-    const iconEl = block.querySelector('.agent-think-icon');
-    if (iconEl) iconEl.innerHTML = AGENT_DONE_SVG;
-    block.classList.remove('running');
-    block.classList.add('done');
-    const header = block.querySelector('.agent-think-header');
-    if (header && !header._clickBound) {
-      header._clickBound = true;
-      header.addEventListener('click', () => block.classList.toggle('open'));
-    }
+    finalizeThoughtBlock(block);
+    const row = block.closest('.row.thought');
+    if (row) { row.classList.remove('running'); row.classList.add('done'); }
     // Persist: mark narration done
     const _apst2 = agentProcState.get(data.messageId);
     if (_apst2) {
       const _narr = _apst2.narrations.find(n => n.stepId === data.stepId);
       if (_narr) { _narr.done = true; persistAgentProcState(data.messageId); }
     }
+    const el = document.getElementById(`msg-${data.messageId}`);
+    if (el) updateChainCounter(el);
     return;
   }
 
-  // ── Agent step-card events ────────────────────────────────────────────────
+  // ── Agent step-card events (rail "tool" rows) ────────────────────────────
   if (data.type === 'agent_step_start') {
     const el = document.getElementById(`msg-${data.messageId}`);
     if (!el) return;
-    if (!el.classList.contains('agent-process')) {
-      el.classList.add('agent-process');
-      el.innerHTML = '';
-    }
-    // Remove footer so it re-appends after new step
-    const existingFooter = el.querySelector('.agent-footer');
-    if (existingFooter) existingFooter.remove();
+    el.removeAttribute('style');
+    ensureChainHeader(el);
+    const { rows } = ensureChain(el);
+    // Defensive: any still-running tool rows that never received an end are
+    // forced to done so the rail doesn't have multiple glowing nodes.
+    rows.querySelectorAll('.row.tool.running').forEach(r => {
+      r.classList.remove('running');
+      r.classList.add('done');
+      finalizeStepCard(r.querySelector('.agent-step'), false);
+    });
+    // Drop the "still working" ghost row before inserting the new step.
+    rows.querySelector('.row.tool.ghost')?.remove();
 
-    const targetHtml = data.target?.file || data.target?.url || data.target?.key
-      ? `<div class="agent-step-target">${esc(data.target.file || data.target.url || data.target.key || '')}</div>` : '';
-    const step = document.createElement('div');
-    step.id = `step-${data.stepId}`;
-    step.className = 'agent-step agent-step--running';
-    // Show kind icon while running (dimmed); will be replaced with ✓/✗ on end
-    step.innerHTML = `
-      <div class="agent-step-icon agent-step-icon--kind">${agentStepIcon(data.kind)}</div>
-      <div class="agent-step-body">
-        <div class="agent-step-title">${esc(data.title || data.toolName || data.kind || '')}</div>
-        ${targetHtml}
-      </div>`;
-    el.appendChild(step);
-    // Persist: add step entry
+    const targetText = data.target?.file || data.target?.url || data.target?.key || '';
+    const targetHtml = targetText ? `<div class="agent-step-target">${esc(targetText)}</div>` : '';
+    const titleText = data.title || data.toolName || data.kind || '';
+    const row = document.createElement('div');
+    row.className = 'row tool running';
+    row.dataset.stepId = data.stepId;
+    row.innerHTML =
+      `<div class="rail">` +
+        `<div class="rail-line"></div>` +
+        `<div class="tool-dot">${agentStepIcon(data.kind)}</div>` +
+      `</div>` +
+      `<div class="agent-step" id="step-${esc(data.stepId)}">` +
+        `<div class="agent-step-head">` +
+          `<div class="agent-step-body">` +
+            `<div class="agent-step-title">${esc(titleText)}</div>` +
+            targetHtml +
+          `</div>` +
+          `<span class="agent-step-badge agent-step-badge--running">` +
+            `<span class="ping-dot"></span>running` +
+          `</span>` +
+        `</div>` +
+      `</div>`;
+    rows.appendChild(row);
+    moveFooterToEnd(el);
+    // Persist
     const _apst3 = ensureAgentProcState(data.messageId);
     if (typeof _apst3._seq !== 'number') _apst3._seq = 0;
-    _apst3.steps.push({ stepId: data.stepId, kind: data.kind, title: data.title || data.toolName || data.kind || '', target: data.target || null, status: 'running', meta: null, order: _apst3._seq++ });
+    _apst3.steps.push({ stepId: data.stepId, kind: data.kind, title: titleText, target: data.target || null, status: 'running', meta: null, order: _apst3._seq++ });
     persistAgentProcState(data.messageId);
+    updateChainCounter(el);
+    scrollRunningRowIntoView(el);
     scrollToBottom();
     return;
   }
@@ -2382,15 +2562,13 @@ function handleWSMessage(data) {
     const step = document.getElementById(`step-${data.stepId}`);
     if (!step) return;
     const ok = data.status !== 'error';
-    step.classList.remove('agent-step--running');
-    step.classList.add(ok ? 'agent-step--done' : 'agent-step--error');
-    // For errors only: replace with ✗. For done: keep the kind icon — CSS recolors it green.
-    if (!ok) {
-      const iconEl = step.querySelector('.agent-step-icon');
-      if (iconEl) iconEl.innerHTML = '<svg class="step-svg-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/></svg>';
+    const row = step.closest('.row.tool');
+    if (row) {
+      row.classList.remove('running');
+      row.classList.add(ok ? 'done' : 'error');
     }
-    const body = step.querySelector('.agent-step-body');
-    if (body && data.meta) {
+    finalizeStepCard(step, !ok);
+    if (data.meta) {
       const m = data.meta;
       const bits = [];
       if (typeof m.lines === 'number') bits.push(`<span class="meta-neutral">${m.lines} lines</span>`);
@@ -2399,11 +2577,11 @@ function handleWSMessage(data) {
       if (typeof m.bytes === 'number') bits.push(`<span class="meta-neutral">${(m.bytes/1024).toFixed(1)}KB</span>`);
       if (m.error) bits.push(`<span class="meta-removed">${esc(m.error)}</span>`);
       if (bits.length) {
-        let meta = body.querySelector('.agent-step-meta');
+        let meta = step.querySelector('.agent-step-meta');
         if (!meta) {
           meta = document.createElement('div');
           meta.className = 'agent-step-meta';
-          body.appendChild(meta);
+          step.appendChild(meta);
         }
         meta.innerHTML = bits.join('');
       }
@@ -2414,6 +2592,8 @@ function handleWSMessage(data) {
       const _step = _apst4.steps.find(s => s.stepId === data.stepId);
       if (_step) { _step.status = ok ? 'done' : 'error'; if (data.meta) _step.meta = data.meta; persistAgentProcState(data.messageId); }
     }
+    const el = document.getElementById(`msg-${data.messageId}`);
+    if (el) updateChainCounter(el);
     return;
   }
 
@@ -2454,22 +2634,25 @@ function handleWSMessage(data) {
   if (data.type === 'update_result') {
     const el = document.getElementById(`msg-${data.messageId}`);
     if (el) {
-      let html = `<div class="chat-result-header">${t('chat_update_completed') || 'Update Completed'}</div>`;
-      html += `<div class="chat-bubble-content">${formatContent(data.summary || '')}</div>`;
-      if (data.changelogUrl) {
-        html += `<div class="changelog-card" onclick="tg.openLink('${data.changelogUrl}', {try_instant_view: true})">
-          <div class="changelog-card-text">
-            <div class="changelog-card-title">${t('version_change_log')}</div>
-            <div class="changelog-card-desc">Telegraph</div>
-          </div>
-          <div class="changelog-card-arrow">›</div>
-        </div>`;
-      }
-      const existing = el.querySelector('.result-actions');
-      if (existing) html += existing.outerHTML;
-      const costEl = el.querySelector('.chat-progress-cost');
-      if (costEl) html += costEl.outerHTML;
-      el.innerHTML = html;
+      // Preserve rate state (whether already rated)
+      const existingRate = el.querySelector('.completion-rate');
+      const alreadyRated = existingRate?.classList.contains('done') ?? false;
+      // Preserve changelog url and step count from existing card if possible
+      const existingActions = el.querySelector('.result-actions');
+      const changelogUrl = data.changelogUrl || existingActions?.dataset.changelog || '';
+      const existingSub = el.querySelector('.completion-sub');
+      const stepCount = existingSub ? (parseInt(existingSub.dataset.stepCount || '') || 0) : 0;
+      const durationMs = existingSub ? (parseInt(existingSub.dataset.durationMs || '') || 0) : 0;
+      el.innerHTML = resultCardHtml(data.projectId || chatProjectId, {
+        changelogUrl,
+        summary: data.summary || '',
+        commitNum: data.commitNum,
+        creditsCharged: data.creditsCharged,
+        cashbackAvailable: data.cashbackAvailable,
+        cashbackClaimed: alreadyRated,
+        stepCount,
+        durationMs,
+      });
     }
     return;
   }
@@ -2522,28 +2705,24 @@ function handleWSMessage(data) {
         setHeaderWorking(false);
         setProcessing(false);
         if (isPlanningMode) enterPlanningMode(false);
+        // Read step count BEFORE clearing proc state
+        const _proc = agentProcState.get(data.messageId);
+        const _stepCount = _proc ? ((_proc.steps?.length || 0) + (_proc.narrations?.length || 0)) : 0;
         progressBubbleState.delete(data.messageId);
         clearAgentProcState(data.messageId);
         if (!el) return;
         el.className = 'chat-bubble chat-bubble--result';
-        let html = `<div class="chat-result-header">${t('chat_update_completed') || 'Update Completed'}</div>`;
-        html += `<div class="chat-bubble-content">${formatContent(data.summary || '')}</div>`;
-        if (data.changelogUrl) {
-          html += `<div class="changelog-card" onclick="tg.openLink('${data.changelogUrl}', {try_instant_view: true})">
-            <div class="changelog-card-text">
-              <div class="changelog-card-title">${t('version_change_log')}</div>
-              <div class="changelog-card-desc">Telegraph</div>
-            </div>
-            <div class="changelog-card-arrow">›</div>
-          </div>`;
-        }
-        html += resultActionsHtml(chatProjectId);
-        if (typeof data.costUsd === 'number') {
-          html += `<div class="chat-progress-cost">${t('chat_cost')}: $${data.costUsd.toFixed(4)}${typeof data.balance === 'number' ? ` · ${t('chat_balance')}: ${Math.floor(data.balance)}` : ''}</div>`;
-        }
-        html += cashbackBtnHtml(chatProjectId, data.commitNum, data.creditsCharged, data.cashbackAvailable, false);
-        html += linkBotCardHtml(chatProjectId);
-        el.innerHTML = html;
+        el.removeAttribute('style'); // clear any stale inline styles from the progress bubble
+        el.innerHTML = resultCardHtml(chatProjectId, {
+          changelogUrl: data.changelogUrl,
+          summary: data.summary || '',
+          commitNum: data.commitNum,
+          creditsCharged: data.creditsCharged,
+          cashbackAvailable: data.cashbackAvailable,
+          cashbackClaimed: false,
+          stepCount: _stepCount,
+          durationMs: data.durationMs,
+        });
         scrollToBottom();
       };
 
@@ -2557,35 +2736,108 @@ function handleWSMessage(data) {
   }
 }
 
+const RESULT_CHECK_SVG = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+const RESULT_STAR_SVG  = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15 9 22 9.5 17 14.5 18.5 22 12 18 5.5 22 7 14.5 2 9.5 9 9 12 2"/></svg>`;
+
 /**
- * Build the result-card action row. For Text Bot projects we drop the
- * "Run Test" preview button (there's no Mini App to preview) and replace
- * it with an "Open Bot" deep-link to the linked Telegram bot.
+ * Build the full reference-style completion card HTML.
+ * Wraps resultActionsHtml + cashbackRatePill + linkBotCardHtml inside
+ * a .completion-card with glow, head, and summary block.
  */
-function resultActionsHtml(projectId) {
+function resultCardHtml(projectId, {changelogUrl, summary, commitNum, creditsCharged, cashbackAvailable, cashbackClaimed, stepCount, durationMs} = {}) {
+  // ── Rate pill (top-right of head) ──
+  let ratePill = '';
+  if (cashbackAvailable && projectId && commitNum) {
+    const cashback = cashbackEnabled ? cashbackAmount(creditsCharged) : 0;
+    const isRated = cashbackClaimed || ratedRuns.has(ratedKey(projectId, commitNum));
+    if (isRated) {
+      ratePill = `<button class="completion-rate done" disabled>${RESULT_STAR_SVG}<span>${t('rating_already_rated_short') || 'Rated'} ✓</span></button>`;
+    } else {
+      const safeId = String(projectId).replace(/'/g, '');
+      const tag = cashback > 0 ? `<span class="completion-rate-tag">+${cashback}</span>` : '';
+      ratePill = `<button class="completion-rate" onclick="openRatingModal('${safeId}',${commitNum},${creditsCharged})" data-project="${safeId}" data-commit="${commitNum}" data-credits="${creditsCharged}">${RESULT_STAR_SVG}<span>${t('rating_rate_btn_short')}</span>${tag}</button>`;
+    }
+  }
+
+  // ── Steps meta line ──
+  let subLine = '';
+  if (stepCount > 0 || durationMs > 0 || commitNum > 0) {
+    const parts = [];
+    if (stepCount > 0) {
+      const s = stepCount;
+      parts.push(`${s} ${s === 1 ? 'шаг' : s < 5 ? 'шага' : 'шагов'}`);
+    }
+    if (durationMs > 0) {
+      parts.push(`${(durationMs / 1000).toFixed(1)}s`);
+    }
+    if (commitNum > 0) {
+      parts.push(`v${commitNum}`);
+    }
+    subLine = `<div class="completion-sub" data-step-count="${stepCount || 0}" data-duration-ms="${durationMs || 0}">${parts.join(' · ')}</div>`;
+  }
+
+  // ── Action row (Run / Release / Changelog icon) ──
+  const actionsHtml = resultActionsHtml(projectId, changelogUrl);
+
+  // ── Bot row ──
+  const botHtml = linkBotCardHtml(projectId);
+
+  // ── Summary ──
+  const summaryHtml = summary
+    ? `<div class="completion-summary-block"><div class="completion-summary">${formatContent(summary)}</div></div>`
+    : '';
+
+  return `<div class="completion-card">
+    <div class="completion-glow"></div>
+    <div class="completion-head">
+      <div class="completion-check">${RESULT_CHECK_SVG}</div>
+      <div class="completion-head-text">
+        <div class="completion-title">${t('chat_update_completed') || 'Build complete'}</div>
+        ${subLine}
+      </div>
+      ${ratePill}
+    </div>
+    ${summaryHtml}
+    ${actionsHtml}
+    ${botHtml}
+  </div>`;
+}
+
+/**
+ * Build the result-card action row.
+ * changelogUrl (optional) — if present, adds a compact icon button beside Run.
+ * For Text Bot projects the "Run Test" preview is replaced with "Open Bot".
+ */
+function resultActionsHtml(projectId, changelogUrl) {
   const proj = (projects || []).find(p => p.id === projectId) || (currentProject && currentProject.id === projectId ? currentProject : null);
   const isTextBot = proj?.preferences?.kind === 'textBot';
-  // Release is gated behind a connected bot — there's nothing to ship to
-  // until BotFather has handed us a token. The "Create Bot" card below the
-  // result card handles the prompt to link one.
   const hasBot = !!proj?.botUsername;
   const releaseBtn = hasBot
     ? `<button class="result-action-btn result-action-release" onclick="releaseLatest()">${t('chat_release_update')}</button>`
     : '';
+  const safeLog = changelogUrl ? changelogUrl.replace(/'/g, '') : '';
+  const changelogBtn = safeLog
+    ? `<button class="result-action-btn result-action-changelog" onclick="tg.openLink('${safeLog}',{try_instant_view:true})" title="${t('version_change_log') || 'Changelog'}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></button>`
+    : '';
   if (isTextBot) {
     if (hasBot) {
       const botUrl = `https://t.me/${proj.botUsername}`;
-      return `<div class="result-actions">
-        <button class="result-action-btn result-action-test" onclick="tg?.openTelegramLink('${botUrl}')">${t('chat_open_bot')}</button>
-        ${releaseBtn}
+      return `<div class="result-actions" data-changelog="${safeLog}">
+        <div class="result-actions-row">
+          <button class="result-action-btn result-action-test" onclick="tg?.openTelegramLink('${botUrl}')">${t('chat_open_bot')}</button>
+          ${changelogBtn}
+        </div>
+        ${releaseBtn ? `<div class="result-actions-row">${releaseBtn}</div>` : ''}
       </div>`;
     }
-    // No bot yet → nothing actionable here; the link-bot card handles the next step.
     return '';
   }
-  return `<div class="result-actions">
-    <button class="result-action-btn result-action-test" onclick="openTestPreview('${projectId}')">▶ ${t('chat_run_test')}</button>
-    ${releaseBtn}
+  return `<div class="result-actions" data-changelog="${safeLog}">
+    <div class="result-actions-row">
+      <button class="result-action-btn result-action-test" onclick="openTestPreview('${projectId}')">▶ ${t('chat_run_test')}</button>
+      ${changelogBtn}
+    </div>
+    ${releaseBtn ? `<div class="result-actions-row">${releaseBtn}</div>` : ''}
   </div>`;
 }
 
@@ -2593,13 +2845,12 @@ function resultActionsHtml(projectId) {
 // the bot link state flips (e.g. polling detects a fresh BotFather token)
 // so the Release button appears without forcing a chat reopen.
 function refreshResultActionsFor(projectId) {
-  const fresh = resultActionsHtml(projectId);
   const rows = document.querySelectorAll('.result-actions');
   rows.forEach((row) => {
-    // Only swap rows whose Test button targets this project. This avoids
-    // touching action rows for other projects that may also be in the DOM.
     const onclick = row.querySelector('.result-action-test')?.getAttribute('onclick') || '';
     if (!onclick.includes(`'${projectId}'`)) return;
+    const changelogUrl = row.dataset.changelog || '';
+    const fresh = resultActionsHtml(projectId, changelogUrl);
     if (!fresh) {
       row.remove();
     } else {
@@ -2638,8 +2889,10 @@ function linkBotCardHtml(projectId) {
   // reload (the in-memory Set is empty on first render after refresh).
   if (!paid) probeLinkBotPaidState(projectId);
   return `<div class="link-bot-card" id="link-bot-card">
-    <div class="link-bot-title">${t('link_bot_title')}</div>
-    <div class="link-bot-sub">${t('link_bot_sub')}</div>
+    <div class="link-bot-text">
+      <div class="link-bot-title">${t('link_bot_title')}</div>
+      <div class="link-bot-sub">${t('link_bot_sub')}</div>
+    </div>
     <button class="link-bot-btn" onclick="handleLinkBotClick('${safeId}', this)">
       <span class="link-bot-btn-label">${t('link_bot_btn')}</span>
       ${feeBadge}
@@ -2986,11 +3239,14 @@ function appendMessage(msg, animate = true) {
     }
   } else if (msg.type === 'question') {
     el.className = 'chat-bubble chat-bubble--question';
-    let html = `<div class="question-card">`;
-    html += `<div class="question-card-icon">❓</div>`;
-    html += `<div class="question-card-title">${t('chat_question_title') || 'Agent needs your input'}</div>`;
-    html += `<div class="question-card-text">${formatContent(msg.content)}</div>`;
+    const questionIconSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`;
     const options = msg.metadata?.options || [];
+    let html = `<div class="question-card">`;
+    html += `<div class="question-card-head">`;
+    html += `<div class="question-card-badge">${questionIconSvg}</div>`;
+    html += `<div class="question-card-title">${t('chat_question_title') || 'Agent needs your input'}</div>`;
+    html += `</div>`;
+    html += `<div class="question-card-text">${formatContent(msg.content)}</div>`;
     if (options.length > 0) {
       html += '<div class="question-card-options">';
       for (const opt of options) {
@@ -3000,7 +3256,7 @@ function appendMessage(msg, animate = true) {
     }
     html += `<div class="question-card-divider"></div>`;
     html += `<div class="question-card-custom">`;
-    html += `<input type="text" class="question-custom-input" placeholder="Or type your own answer..." />`;
+    html += `<input type="text" class="question-custom-input" placeholder="${t('chat_question_placeholder') || 'Or type your own answer…'}" />`;
     html += `<button class="question-custom-send" disabled>`;
     html += `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>`;
     html += `</button>`;
@@ -3044,26 +3300,17 @@ function appendMessage(msg, animate = true) {
     });
   } else if (msg.type === 'result') {
     el.className = 'chat-bubble chat-bubble--result';
-    let html = `<div class="chat-result-header">${t('chat_update_completed') || 'Update Completed'}</div>`;
-    html += `<div class="chat-bubble-content">${formatContent(msg.content)}</div>`;
-    const changelogUrl = msg.metadata?.changelogUrl;
-    if (changelogUrl) {
-      html += `<div class="changelog-card" onclick="tg.openLink('${changelogUrl}', {try_instant_view: true})">
-        <div class="changelog-card-text">
-          <div class="changelog-card-title">${t('version_change_log')}</div>
-          <div class="changelog-card-desc">Telegraph</div>
-        </div>
-        <div class="changelog-card-arrow">›</div>
-      </div>`;
-    }
-    html += resultActionsHtml(msg.metadata?.projectId || chatProjectId);
-    if (typeof msg.costUsd === 'number') {
-      html += `<div class="chat-progress-cost">Cost: $${msg.costUsd.toFixed(4)}${typeof msg.balance === 'number' ? ` · Balance: ${Math.floor(msg.balance)}` : ''}</div>`;
-    }
-    html += cashbackBtnHtml(msg.metadata?.projectId || chatProjectId, msg.commitNum, msg.creditsCharged, msg.cashbackAvailable, msg.cashbackClaimed);
-    html += linkBotCardHtml(msg.metadata?.projectId || chatProjectId);
-    html += `<div class="chat-bubble-time">${timeStr(msg.timestamp)}</div>`;
-    el.innerHTML = html;
+    el.innerHTML = resultCardHtml(msg.metadata?.projectId || chatProjectId, {
+      changelogUrl: msg.metadata?.changelogUrl,
+      summary: msg.content,
+      commitNum: msg.commitNum,
+      creditsCharged: msg.creditsCharged,
+      cashbackAvailable: msg.cashbackAvailable,
+      cashbackClaimed: msg.cashbackClaimed,
+      stepCount: msg.metadata?.stepCount || 0,
+      durationMs: msg.metadata?.durationMs || 0,
+    });
+    el.innerHTML += `<div class="chat-bubble-time">${timeStr(msg.timestamp)}</div>`;
   } else if (msg.type === 'plan') {
     el.className = 'chat-bubble chat-bubble--assistant chat-bubble--plan';
     let html = `<div class="chat-plan-content">${formatContent(msg.content)}</div>`;
@@ -3161,6 +3408,8 @@ function clearAgentProcState(messageId) {
 function restoreAgentProcessCard(el, state, isRunning) {
   el.classList.add('agent-process');
   el.innerHTML = '';
+  const { chain, rows } = ensureChain(el);
+  ensureChainHeader(el);
 
   // Merge narrations and steps into a single chronological list using the
   // `order` stamp written at push time. Items without an order (legacy saves)
@@ -3175,30 +3424,47 @@ function restoreAgentProcessCard(el, state, isRunning) {
   for (const item of items) {
     if (item._kind === 'narration') {
       const n = item;
-      const block = document.createElement('div');
-      block.id = 'narr-' + n.stepId;
-      block.className = 'agent-think-block ' + (n.done ? 'done' : 'running');
-      block.innerHTML = `
-        <div class="agent-think-header">
-          <span class="agent-think-icon">${n.done ? AGENT_DONE_SVG : '<span class="step-spinner"></span>'}</span>
-          <span class="agent-think-preview">${esc(n.preview || 'Thinking\u2026')}</span>
-          <span class="agent-think-toggle">\u203a</span>
-        </div>
-        <div class="agent-think-body">${n.body ? formatContent(n.body) : ''}</div>`;
-      if (n.done) {
+      const isDone = !!n.done;
+      const row = document.createElement('div');
+      row.className = 'row thought ' + (isDone ? 'done' : 'running');
+      row.dataset.stepId = n.stepId;
+      const labelHtml = isDone
+        ? `<span class="agent-think-label">thought</span>`
+        : `<span class="agent-think-label">thinking</span><span class="agent-think-dots"><i></i><i></i><i></i></span>`;
+      row.innerHTML =
+        `<div class="rail">` +
+          `<div class="rail-line"></div>` +
+          `<div class="thought-dot"></div>` +
+        `</div>` +
+        `<div class="agent-think-block ${isDone ? 'done' : 'running'}" id="narr-${esc(n.stepId)}">` +
+          `<div class="agent-think-header">` +
+            labelHtml +
+            `<span class="agent-think-toggle">\u203a</span>` +
+          `</div>` +
+          `<div class="agent-think-body">${n.body ? formatContent(n.body) : ''}</div>` +
+        `</div>`;
+      rows.appendChild(row);
+      if (isDone) {
+        const block = row.querySelector('.agent-think-block');
         const hdr = block.querySelector('.agent-think-header');
-        hdr.addEventListener('click', () => block.classList.toggle('open'));
+        if (hdr && !hdr._clickBound) {
+          hdr._clickBound = true;
+          hdr.addEventListener('click', () => block.classList.toggle('open'));
+        }
       }
-      el.appendChild(block);
     } else {
       const s = item;
-      const targetHtml = (s.target?.file || s.target?.url || s.target?.key)
-        ? `<div class="agent-step-target">${esc(s.target.file || s.target.url || s.target.key || '')}</div>` : '';
-      const statusClass = s.status === 'error' ? 'agent-step--error'
-        : s.status === 'running' ? 'agent-step--running' : 'agent-step--done';
-      const iconHtml = s.status === 'error'
-        ? '<svg class="step-svg-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/></svg>'
-        : agentStepIcon(s.kind);
+      const targetText = s.target?.file || s.target?.url || s.target?.key || '';
+      const targetHtml = targetText ? `<div class="agent-step-target">${esc(targetText)}</div>` : '';
+      const status = s.status === 'error' ? 'error' : s.status === 'running' ? 'running' : 'done';
+      let badgeHtml = '';
+      if (status === 'running') {
+        badgeHtml = `<span class="agent-step-badge agent-step-badge--running"><span class="ping-dot"></span>running</span>`;
+      } else if (status === 'error') {
+        badgeHtml = `<span class="agent-step-badge agent-step-badge--error">error</span>`;
+      } else {
+        badgeHtml = `<span class="agent-step-badge agent-step-badge--done">${CHAIN_CHECK_SVG}</span>`;
+      }
       let metaHtml = '';
       if (s.meta) {
         const m = s.meta, bits = [];
@@ -3209,18 +3475,28 @@ function restoreAgentProcessCard(el, state, isRunning) {
         if (m.error) bits.push(`<span class="meta-removed">${esc(m.error)}</span>`);
         if (bits.length) metaHtml = `<div class="agent-step-meta">${bits.join('')}</div>`;
       }
-      const step = document.createElement('div');
-      step.id = 'step-' + s.stepId;
-      step.className = `agent-step ${statusClass}`;
-      step.innerHTML = `
-        <div class="agent-step-icon agent-step-icon--kind">${iconHtml}</div>
-        <div class="agent-step-body">
-          <div class="agent-step-title">${esc(s.title || s.kind || '')}</div>
-          ${targetHtml}${metaHtml}
-        </div>`;
-      el.appendChild(step);
+      const row = document.createElement('div');
+      row.className = `row tool ${status}`;
+      row.dataset.stepId = s.stepId;
+      row.innerHTML =
+        `<div class="rail">` +
+          `<div class="rail-line"></div>` +
+          `<div class="tool-dot">${agentStepIcon(s.kind)}</div>` +
+        `</div>` +
+        `<div class="agent-step" id="step-${esc(s.stepId)}">` +
+          `<div class="agent-step-head">` +
+            `<div class="agent-step-body">` +
+              `<div class="agent-step-title">${esc(s.title || s.kind || '')}</div>` +
+              targetHtml +
+            `</div>` +
+            badgeHtml +
+          `</div>` +
+          metaHtml +
+        `</div>`;
+      rows.appendChild(row);
     }
   }
+  updateChainCounter(el);
   const f = state.footer || {};
   if ((typeof f.costUsd === 'number' && f.costUsd > 0) || isRunning) {
     const footer = document.createElement('div');
@@ -3230,7 +3506,7 @@ function restoreAgentProcessCard(el, state, isRunning) {
       fHtml += `<div class="chat-progress-cost">${t('chat_cost')}: $${f.costUsd.toFixed(4)}${typeof f.balance === 'number' ? ` \u00b7 ${t('chat_balance')}: ${Math.floor(f.balance)}` : ''}</div>`;
     }
     footer.innerHTML = fHtml;
-    el.appendChild(footer);
+    chain.appendChild(footer);
   }
 }
 let progressTimer = null;
@@ -3331,6 +3607,9 @@ function renderProgressBubble(msg, fromHistory = false) {
     inner.appendChild(el);
   }
   el.className = 'chat-bubble chat-bubble--progress';
+  // Strip any stale inline styles left over from old localStorage HTML
+  // (e.g. "border: none !important; overflow: visible" etc.)
+  el.removeAttribute('style');
   // Track whether this bubble was opened from history (rejoin) so the stop
   // button is shown only in that case — not during the live first session.
   if (fromHistory) el.dataset.fromHistory = '1';
@@ -3420,32 +3699,26 @@ function updateProgressBubble(data) {
   if (typeof data.costUsd === 'number') st.costUsd = data.costUsd;
   if (typeof data.balance === 'number') st.balance = data.balance;
 
-  // In agent-process mode: only update the cost/abort footer. No percent bar,
-  // no checklist — those are replaced by the think-block timeline.
+  // In agent-process mode: only update the cost/abort footer + the ghost
+  // "still working" row. The percent bar / checklist are replaced by the
+  // chain timeline.
   if (el.classList.contains('agent-process')) {
-    let footer = el.querySelector('.agent-footer');
+    const { chain, rows } = ensureChain(el);
+    let footer = chain.querySelector(':scope > .agent-footer');
     if (!footer) {
       footer = document.createElement('div');
       footer.className = 'agent-footer';
-      el.appendChild(footer);
+      chain.appendChild(footer);
     }
     let html = '';
     if (typeof st.costUsd === 'number' && st.costUsd > 0) {
       html += `<div class="chat-progress-cost">${t('chat_cost')}: $${st.costUsd.toFixed(4)}${typeof st.balance === 'number' ? ` · ${t('chat_balance')}: ${Math.floor(st.balance)}` : ''}</div>`;
     }
     footer.innerHTML = html;
-    // Show/hide the "agent is still working" ghost step
-    let ghost = el.querySelector('.agent-step--ghost');
-    if (!st.completing) {
-      if (!ghost) {
-        ghost = document.createElement('div');
-        ghost.className = 'agent-step agent-step--ghost';
-        ghost.innerHTML = `<div class="agent-step-icon"><span class="step-spinner"></span></div><div class="agent-step-body"><div class="agent-step-title agent-step-title--ghost"></div></div>`;
-        el.insertBefore(ghost, footer);
-      }
-    } else {
-      if (ghost) ghost.remove();
-    }
+    // Make sure the footer sits below the rows
+    chain.appendChild(footer);
+    // Ghost row disabled — remove any stale ones
+    rows.querySelector(':scope > .row.tool.ghost')?.remove();
     // Persist footer cost/balance so they survive navigation
     const _apst5 = agentProcState.get(data.messageId);
     if (_apst5) {
@@ -5900,14 +6173,17 @@ function closeAgentLogViewer() {
 function setHeaderWorking(working, pct) {
   const statusEl = document.getElementById('chat-app-status');
   if (!statusEl) return;
+  const avatarEl = document.getElementById('chat-avatar');
   if (working) {
-    statusEl.innerHTML = `<span class="loader loader--small"></span> ${t('chat_working')}`;
+    statusEl.textContent = t('chat_working') || 'Working…';
     statusEl.classList.add('header-working');
+    avatarEl && avatarEl.classList.add('avatar-working');
   } else {
     statusEl.textContent = currentProject?.botUsername
       ? `@${currentProject.botUsername}`
       : statusLabel(currentProject?.status);
     statusEl.classList.remove('header-working');
+    avatarEl && avatarEl.classList.remove('avatar-working');
   }
 }
 
