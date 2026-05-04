@@ -221,7 +221,7 @@ export class Agent {
    */
   async executeAsRouter(
     ctx: RouterContext,
-    opts?: { telegramId?: string; sessionId?: string },
+    opts?: { telegramId?: string; sessionId?: string; onToolCall?: (toolName: string) => void },
   ): Promise<{ proposed: boolean; text: string; inputTokens: number; outputTokens: number }> {
     return new RouterRunner().run({
       modelCfg: this._buildModelCfg(),
@@ -229,6 +229,7 @@ export class Agent {
       messages: this._messages,
       tools: this._tools as unknown as RouterTool[],
       ctx,
+      onToolCall: opts?.onToolCall,
       telegramId: opts?.telegramId,
       sessionId: opts?.sessionId ?? crypto.randomUUID(),
     });

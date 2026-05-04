@@ -2,7 +2,6 @@ import type OpenAI from "openai";
 import type { AgentTool } from "../../../AgentTool";
 import type { RunContext } from "../../../RunContext";
 import { validateBackendRoutes } from "../../../validation";
-import type { ProjectKind } from "../../../types";
 import { commitService } from "../../../../../services/commit.service";
 import { forceReloadProjectWs } from "../../../../../web/ws-manager";
 import { evictDevApiCache } from "../../../../../web/routes/devapi.routes";
@@ -43,7 +42,7 @@ export class DeployToDevTool implements AgentTool {
     }
 
     try {
-      const routeError = validateBackendRoutes(ctx.projectDir, ctx.projectId, ctx.runKind as ProjectKind, ctx.technicalPlan);
+      const routeError = validateBackendRoutes(ctx.projectDir, ctx.projectId, ctx.technicalPlan);
       ctx.validatorResults.push({ stage: "deploy_to_dev", ok: !routeError, message: routeError || undefined });
       if (routeError) {
         ctx.deployCount--;

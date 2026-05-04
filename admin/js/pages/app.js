@@ -235,10 +235,6 @@
             <label>Features (JSON)</label>
             <textarea class="input mono" id="set-features" rows="6">${Fmt.escapeHtml(p.features || "")}</textarea>
           </div>
-          <div class="form-row">
-            <label>Preferences (JSON)</label>
-            <textarea class="input mono" id="set-prefs" rows="6">${Fmt.escapeHtml(p.preferences || "")}</textarea>
-          </div>
         </div>
 
         <div class="card">
@@ -264,10 +260,9 @@
         status:      host.querySelector("#set-status").value,
         totalCost:   Number(host.querySelector("#set-cost").value),
         features:    host.querySelector("#set-features").value,
-        preferences: host.querySelector("#set-prefs").value,
       };
       // Validate JSON blobs (allow empty string).
-      for (const k of ["features", "preferences"]) {
+      for (const k of ["features"]) {
         if (body[k] && body[k].trim()) {
           try { JSON.parse(body[k]); }
           catch (err) { Fmt.toast(k + " is not valid JSON", "err"); return; }

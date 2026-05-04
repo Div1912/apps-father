@@ -37,9 +37,7 @@ export class ConfigureAppTool implements AgentTool {
     const name = (args.name || "").toString().trim().substring(0, 64);
     const description = (args.description || "").toString().substring(0, 120);
     const longDescription = (args.longDescription || "").toString().substring(0, 512);
-    const menuButtonText = ctx.runPrefs.kind === "textBot"
-      ? ""
-      : (args.menuButtonText ?? "Launch App").toString().substring(0, 32);
+    const menuButtonText = (args.menuButtonText ?? "Launch App").toString().substring(0, 32);
 
     try {
       await projectService.updateProjectAppConfig(ctx.projectId, {

@@ -68,6 +68,17 @@ function evictProject(projectId: string): void {
     try { entry.db.close(); } catch {}
     projectCache.delete(projectId);
   }
+  // Always purge require.cache for this project's backend so the next
+  // require() call reads the freshly-deployed files from disk rather than
+  // returning the stale module.  This must run even when there is no
+  // projectCache entry (e.g. evictDevApiCache was called right after a deploy
+  // before any request hit the cache).
+  const backendDir = path.join(PROJECTS_DIR, projectId, "development", "backend");
+  for (const key of Object.keys(require.cache)) {
+    if (key.startsWith(backendDir) && !key.includes("node_modules")) {
+      delete require.cache[key];
+    }
+  }
 }
 
 async function loadProjectEntry(
@@ -84,14 +95,9 @@ async function loadProjectEntry(
   }
 
   // File changed (new deploy) or first load — evict stale entry.
+  // evictProject also purges require.cache for this project's backendDir.
   if (existing) {
     evictProject(projectId);
-    // Clear Node require cache so the new file is actually read from disk.
-    for (const key of Object.keys(require.cache)) {
-      if (key.startsWith(backendDir) && !key.includes("node_modules")) {
-        delete require.cache[key];
-      }
-    }
   }
 
   const routeFactory = require(routesFile);

@@ -106,7 +106,7 @@ Remove-Item tmp_ret.sql -ErrorAction SilentlyContinue
 ssh $SERVER "$psql 'ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_notified_at TIMESTAMPTZ;'"
 ssh $SERVER "$psql 'UPDATE users SET admin_notified_at = created_at WHERE admin_notified_at IS NULL;'"
 ssh $SERVER "$psql 'ALTER TABLE users ADD COLUMN IF NOT EXISTS sub_bonus_claimed_at TIMESTAMPTZ;'"
-ssh $SERVER "$psql 'ALTER TABLE projects ADD COLUMN IF NOT EXISTS preferences TEXT;'"
+ssh $SERVER "$psql 'ALTER TABLE projects DROP COLUMN IF EXISTS preferences;'"
 # Admin CRM: user tags + notes (Prisma User.adminTags / AdminUserNote)
 ssh $SERVER "$psql 'ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_tags TEXT;'"
 # App slots: bumped from 1 → 5 free starter slots. Existing users get +4 so
@@ -298,10 +298,9 @@ Write-Host "Bucket OK" -ForegroundColor Green
 
 # ── Agent knowledge (instructions + skills + ask docs) ───
 Write-Host "=== [$ENV_NAME] Syncing agent_knowledge ===" -ForegroundColor $COLOR
-ssh $SERVER "mkdir -p ${APP_DIR}/agent_knowledge/instructions ${APP_DIR}/agent_knowledge/skills ${APP_DIR}/agent_knowledge/preferences ${APP_DIR}/agent_knowledge/ask/topics"
+ssh $SERVER "mkdir -p ${APP_DIR}/agent_knowledge/instructions ${APP_DIR}/agent_knowledge/skills ${APP_DIR}/agent_knowledge/ask/topics"
 scp -r agent_knowledge/instructions/* "${SERVER}:${APP_DIR}/agent_knowledge/instructions/"
 scp -r agent_knowledge/skills/* "${SERVER}:${APP_DIR}/agent_knowledge/skills/"
-scp -r agent_knowledge/preferences/* "${SERVER}:${APP_DIR}/agent_knowledge/preferences/"
 scp -r agent_knowledge/ask/* "${SERVER}:${APP_DIR}/agent_knowledge/ask/"
 Write-Host "agent_knowledge OK" -ForegroundColor Green
 

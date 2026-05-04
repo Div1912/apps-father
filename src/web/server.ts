@@ -31,14 +31,9 @@ import { commitService } from "../services/commit.service";
 import * as adminQueries from "../services/admin-queries.service";
 import { publishReport } from "../services/telegraph.service";
 import { claudeService } from "../services/claude.service";
-import {
-  PREFERENCES_CATALOG,
-  validatePreferences,
-  parseProjectPreferences,
-} from "../services/preferences.catalog";
 import { parseStartParam, trackEvent } from "../services/analytics.service";
 import { prisma } from "../db";
-import { runtimeConfig, GAME_KIND_FEE_CREDITS, PREVIEW_UNLOCK_FEE_CREDITS, LINK_BOT_FEE_CREDITS } from "../services/runtime-config.service";
+import { runtimeConfig, PREVIEW_UNLOCK_FEE_CREDITS, LINK_BOT_FEE_CREDITS } from "../services/runtime-config.service";
 import { Decimal } from "@prisma/client/runtime/library";
 import { t, Lang } from "../bot/i18n";
 import { notifyProcessDone } from "../services/notify.service";
@@ -450,14 +445,6 @@ export function createWebServer() {
             }
           } catch {}
         }
-        // Surface preferences (parsed) so the client can branch on
-        // preferences.kind without doing its own JSON.parse. Used by
-        // resultActionsHtml to drop the "Run & Test" button on Text Bot
-        // projects (where there's no Mini App URL to test).
-        let preferences: any = null;
-        if ((p as any).preferences) {
-          try { preferences = JSON.parse((p as any).preferences); } catch { preferences = null; }
-        }
         return {
           id: p.id,
           name: p.name || "Unnamed App",
@@ -469,7 +456,6 @@ export function createWebServer() {
           features: p.features || "[]",
           releaseCommit: p.releaseCommit || null,
           lastTaskId: (p as any).lastTaskId || null,
-          preferences,
           avatarUrl,
         };
       }));
@@ -1627,99 +1613,6 @@ export function createWebServer() {
     }
   });
 
-  // ── Project preferences (style / theme / header / density / bottom menu) ──
-  // Captured via a full-screen modal in the mini-app immediately after the
-  // user's first prompt and BEFORE `/plan` is allowed to run.
-  app.get("/telegram-mini-app/api/chat/:projectId/preferences", async (req, res) => {
-    try {
-      const auth = validateAuth(req);
-      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await getOrCreateUserFromReq(req, auth);
-      const projectId = req.params.projectId;
-      const project = await projectService.getProject(projectId);
-      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
-
-      const current = parseProjectPreferences((project as any).preferences ?? null);
-      res.json({ catalog: PREFERENCES_CATALOG, current });
-    } catch (err) {
-      console.error("[Chat API] Get preferences error:", err);
-      res.status(500).json({ error: "Internal server error" });
-    }
-  });
-
-  app.post("/telegram-mini-app/api/chat/:projectId/preferences", async (req, res) => {
-    try {
-      const auth = validateAuth(req);
-      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await getOrCreateUserFromReq(req, auth);
-      const projectId = req.params.projectId;
-      const project = await projectService.getProject(projectId);
-      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
-
-      const validation = validatePreferences(req.body);
-      if (!validation.ok) {
-        res.status(400).json({ error: "invalid_preferences", details: validation.errors });
-        return;
-      }
-
-      // ── Game kind: one-time 100-credit fee per project ──
-      // First time the user transitions this project's `kind` to "game"
-      // and no previous game_kind_fee has been paid → charge 100 cr
-      // before persisting the new preferences.
-      const oldPrefs = parseProjectPreferences((project as any).preferences ?? null);
-      if (validation.prefs.kind === "game" && oldPrefs?.kind !== "game") {
-        const alreadyPaid = await prisma.usageLog.findFirst({
-          where: { projectId, operation: "game_kind_fee" },
-          select: { id: true },
-        });
-        if (!alreadyPaid) {
-          const fresh = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true } });
-          const credits = fresh?.credits ?? 0;
-          if (credits < GAME_KIND_FEE_CREDITS) {
-            res.status(402).json({
-              error: "insufficient_credits",
-              kind: "game",
-              required: GAME_KIND_FEE_CREDITS,
-              balance: credits,
-            });
-            return;
-          }
-          const updated = await prisma.$transaction(async (tx) => {
-            const u = await tx.user.update({
-              where: { id: user.id },
-              data: { credits: { decrement: GAME_KIND_FEE_CREDITS } },
-            });
-            await tx.usageLog.create({
-              data: {
-                userId: user.id,
-                projectId,
-                inputTokens: 0,
-                outputTokens: 0,
-                costUsd: new Decimal("0"),
-                operation: "game_kind_fee",
-                creditsCharged: GAME_KIND_FEE_CREDITS,
-                },
-            });
-            return u.credits;
-          });
-          broadcastToProject(projectId, { type: "balance_update", newCredits: updated });
-          void trackEvent(auth.telegramId!, "game_kind_purchased", { project_id: projectId });
-        }
-      }
-
-      const serialized = JSON.stringify(validation.prefs);
-      await prisma.project.update({
-        where: { id: projectId },
-        data: { preferences: serialized } as any,
-      });
-
-      res.json({ ok: true, current: validation.prefs });
-    } catch (err) {
-      console.error("[Chat API] Save preferences error:", err);
-      res.status(500).json({ error: "Internal server error" });
-    }
-  });
-
   app.post("/telegram-mini-app/api/chat/:projectId/plan", async (req, res) => {
     try {
       const auth = validateAuth(req);
@@ -1732,14 +1625,6 @@ export function createWebServer() {
 
       const { description } = req.body;
       if (!description?.trim()) { res.status(400).json({ error: "Description required" }); return; }
-
-      // Gate plan generation on the user having picked preferences. The
-      // mini-app reacts to a 412 by opening the preferences modal.
-      const projectPrefs = parseProjectPreferences((project as any).preferences ?? null);
-      if (!(project as any).preferences) {
-        res.status(412).json({ error: "preferences_required" });
-        return;
-      }
 
       // Plan generation is part of the build flow — free at this step (charged at approve-plan/build)
 
@@ -1762,7 +1647,7 @@ export function createWebServer() {
           const assets = await projectService.getProjectAssets(projectId);
           const assetPaths = assets.map((a: any) => a.filePath).filter(Boolean) as string[];
           const result = await claudeService.generatePlan(
-            description.trim(), assetPaths, planLang, projectPrefs, undefined,
+            description.trim(), assetPaths, planLang,
             (_delta, full) => {
               broadcastToProject(projectId, { type: "plan_stream_chunk", projectId, messageId: streamMsgId, text: full });
             },
@@ -1777,7 +1662,7 @@ export function createWebServer() {
 
           const planMsg = chatService.addMessage(projectId, {
             role: "assistant", type: "plan", content: result.plan,
-            metadata: { costUsd: usage.costUsd, balance: usage.newBalance },
+            metadata: { costUsd: usage.costUsd, balance: usage.newBalance, buildCost: runtimeConfig.getSessionCost("build") },
           });
 
           void trackEvent(auth.telegramId!, "plan_created", {
@@ -2046,9 +1931,8 @@ export function createWebServer() {
         broadcastToProject(projectId, { type: "plan_stream_start", projectId, messageId: streamMsgId });
         try {
           const updatedDescription = `${project.description}\n\nAdditional feedback: ${feedback.trim()}`;
-          const editPrefs = parseProjectPreferences((project as any).preferences ?? null);
           const result = await claudeService.generatePlan(
-            updatedDescription, undefined, editPlanLang, editPrefs, undefined,
+            updatedDescription, undefined, editPlanLang,
             (_delta, full) => {
               broadcastToProject(projectId, { type: "plan_stream_chunk", projectId, messageId: streamMsgId, text: full });
             },
@@ -2063,7 +1947,7 @@ export function createWebServer() {
 
           const planMsg = chatService.addMessage(projectId, {
             role: "assistant", type: "plan", content: result.plan,
-            metadata: { costUsd: usage.costUsd, balance: usage.newBalance },
+            metadata: { costUsd: usage.costUsd, balance: usage.newBalance, buildCost: runtimeConfig.getSessionCost("build") },
           });
 
           broadcastToProject(projectId, {
@@ -2160,6 +2044,9 @@ export function createWebServer() {
                 clearTimeout(timeout);
                 chatService.removeMessage(projectId, qMsg.id);
                 broadcastToProject(projectId, { type: "remove_messages", projectId, messageIds: [qMsg.id] });
+                // Re-emit thinking so the skeleton card reappears while the router
+                // processes the answer and decides on a proposal.
+                broadcastToProject(projectId, { type: "router_thinking", projectId, intent: null, detail: "Thinking\u2026" });
                 resolve({ answer });
               });
             });
@@ -2206,9 +2093,28 @@ export function createWebServer() {
           },
         };
 
+        const TOOL_LABELS: Record<string, string> = {
+          project_info:   "Reading project info…",
+          list_files:     "Listing project files…",
+          read_file:      "Reading a file…",
+          db_query:       "Checking the database…",
+          platform_help:  "Looking up platform docs…",
+          questionnaire:  "Asking you a question…",
+          propose_action: "Deciding…",
+        };
+        const onToolCall = (toolName: string) => {
+          if (toolName === "propose_action") return; // proposal event handles this
+          broadcastToProject(projectId, {
+            type: "router_tool_call",
+            projectId,
+            tool: toolName,
+            label: TOOL_LABELS[toolName] || `${toolName}…`,
+          });
+        };
+
         try {
           const result = await agentSessionService.session_router(
-            projectId, text.trim(), hooks as any, routerHistory, lang,
+            projectId, text.trim(), hooks as any, routerHistory, lang, onToolCall,
           );
 
           const usage = await billingService.recordUsage(

@@ -21,10 +21,8 @@ import { commitService } from "./commit.service";
 import { runWithProject } from "./console-tagger.service";
 import { decryptToken } from "./crypto.service";
 import { getModelPricing, getOpenRouterClient } from "./openrouter.service";
-import { parseProjectPreferences, DEFAULT_PREFERENCES } from "./preferences.catalog";
-import { normalizeProjectKind } from "./agent/types";
 import type { AgentMode } from "./agent/types";
-import { buildSystemPrompt, workflowFileFor } from "./agent/instruction-loader";
+import { buildSystemPrompt } from "./agent/instruction-loader";
 import { validateBackendRoutes } from "./agent/validation";
 import { PASSPORT_REGEN_EVERY } from "./agent/config";
 import { PROJECTS_DIR } from "./agent/paths";
@@ -86,6 +84,7 @@ class AgentSessionService {
     hooks: RouterChatHooks,
     conversationHistory?: { role: "user" | "assistant"; content: string }[],
     lang?: string,
+    onToolCall?: (toolName: string) => void,
   ): Promise<{ proposed: boolean; text: string; inputTokens: number; outputTokens: number; modelId: string }> {
     const { systemPrompt, messages } = await kb.session_router(projectId, { userMessage, lang, conversationHistory });
 
@@ -116,7 +115,7 @@ class AgentSessionService {
         new QuestionnaireTool(),
         new ProposeActionTool(),
       ] as any)
-      .executeAsRouter(ctx, { telegramId, sessionId: crypto.randomUUID() });
+      .executeAsRouter(ctx, { telegramId, sessionId: crypto.randomUUID(), onToolCall });
 
     return {
       proposed: result.proposed,
@@ -209,8 +208,8 @@ class AgentSessionService {
     userBalance?: number,
   ): Promise<AgentResult> {
     return runWithProject(projectId, async () => {
-      const { userPrompt, kind } = await kb.session_build(projectId, { description, plan, lang });
-      return this._runCoreAgent(projectId, userPrompt, onProgress, onAskUser, userBalance, undefined, "new", kind);
+      const { userPrompt } = await kb.session_build(projectId, { description, plan, lang });
+      return this._runCoreAgent(projectId, userPrompt, onProgress, onAskUser, userBalance, undefined, "new");
     });
   }
 
@@ -226,10 +225,10 @@ class AgentSessionService {
     userBalance?: number,
   ): Promise<AgentResult> {
     return runWithProject(projectId, async () => {
-      const { userPrompt, kind } = await kb.session_update(projectId, {
+      const { userPrompt } = await kb.session_update(projectId, {
         updateDescription, lang, attachments,
       });
-      return this._runCoreAgent(projectId, userPrompt, onProgress, onAskUser, userBalance, attachments, "update", kind);
+      return this._runCoreAgent(projectId, userPrompt, onProgress, onAskUser, userBalance, attachments, "update");
     });
   }
 
@@ -339,10 +338,8 @@ class AgentSessionService {
     userBalance?: number,
     attachments?: { localPath: string; projectPath: string; originalName: string; caption?: string }[],
     mode: AgentMode = "update",
-    kind?: string,
   ): Promise<AgentResult> {
-    const systemPrompt = await buildSystemPrompt(mode, kind);
-    const promptKind = normalizeProjectKind(kind);
+    const systemPrompt = await buildSystemPrompt(mode);
     const taskId = crypto.randomUUID();
 
     const agentProject = await projectService.getProject(projectId);
@@ -354,7 +351,7 @@ class AgentSessionService {
     const sessionType = mode === "new" ? "build" : "update";
     const sessionCfg = runtimeConfig.getSessionConfig(sessionType);
 
-    console.log(`[Agent] task_id=${taskId} user=${agentTelegramId ?? "?"} (mode=${mode}, kind=${promptKind}, workflow=${workflowFileFor(mode, promptKind)}, ${systemPrompt.length} chars)`);
+    console.log(`[Agent] task_id=${taskId} user=${agentTelegramId ?? "?"} (mode=${mode}, ${systemPrompt.length} chars)`);
     projectService.updateProjectLastTaskId(projectId, taskId).catch(() => {});
 
     const projectRootDir = path.join(PROJECTS_DIR, projectId);
@@ -366,15 +363,11 @@ class AgentSessionService {
     const logger = new AgentLogger(projectId);
 
     let botToken = "";
-    let runPrefs = { ...DEFAULT_PREFERENCES };
     try {
       const project = await projectService.getProject(projectId);
       if (project?.botTokenEncrypted) botToken = decryptToken(project.botTokenEncrypted);
-      const parsed = parseProjectPreferences((project as any)?.preferences ?? null);
-      if (parsed) runPrefs = parsed;
     } catch {}
 
-    const runKind = normalizeProjectKind(kind || runPrefs.kind);
     const tierConfig = {
       modelId: sessionCfg.model,
       provider: sessionCfg.provider,
@@ -433,12 +426,10 @@ class AgentSessionService {
       commitDir,
       commitNum,
       mode,
-      runKind,
       botToken,
-      runPrefs,
       tierConfig,
       taskId,
-      selectedWorkflow: workflowFileFor(mode, runKind),
+      selectedWorkflow: mode === "new" ? "workflow-new.md" : "workflow-update.md",
       logger,
       onAskUser,
       rawProgress: onProgress || (async () => {}),
@@ -457,7 +448,7 @@ class AgentSessionService {
     if (runnerResult) return runnerResult;
 
     // Iteration limit reached — agent never called finish()
-    const finalRouteError = validateBackendRoutes(commitDir, projectId, runKind, ctx.technicalPlan);
+    const finalRouteError = validateBackendRoutes(commitDir, projectId, ctx.technicalPlan);
     if (finalRouteError) {
       ctx.summary = `Agent reached iteration limit with invalid backend routes: ${finalRouteError}`;
       console.warn(`[Agent] final sync blocked: ${finalRouteError}`);

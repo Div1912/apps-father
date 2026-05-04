@@ -701,6 +701,9 @@ let featuresReturnView = null;
 let userBalance = 0;
 let userCredits = 0;
 let userTierData = null;
+/** Account default + active chat tier (set from /balance and openChat). */
+let accountTierId = 'tier_0';
+let userTierId = 'tier_0';
 let allTiers = [];
 const projectTierMap = {};        // { [projectId]: tierId } — per-chat overrides
 let creditsPerDollar = 50;
@@ -2303,19 +2306,38 @@ function handleWSMessage(data) {
 
   if (data.type === 'stream_start') {
     setTyping(false);
+    // Remove the router thinking card if it's still visible (free session started)
+    const pending = document.getElementById('router-pending-card');
+    if (pending) pending.remove();
     const inner = document.getElementById('chat-messages-inner');
     const el = document.createElement('div');
     el.id = `msg-${data.messageId}`;
     el.className = 'chat-bubble chat-bubble--assistant';
-    el.innerHTML = `<div class="chat-bubble-content"><span class="stream-cursor"></span></div>`;
+    // Show a small tool-activity indicator above the streaming content
+    el.innerHTML = `
+      <div class="stream-tool-indicator" id="stream-tool-indicator-${data.messageId}">
+        <span class="router-thinking-dots"><i></i><i></i><i></i></span>
+        <span class="stream-tool-label" id="stream-tool-label-${data.messageId}">Thinking...</span>
+      </div>
+      <div class="chat-bubble-content"><span class="stream-cursor"></span></div>`;
     inner.appendChild(el);
     scrollToBottom();
+    return;
+  }
+
+  if (data.type === 'stream_tool') {
+    // Agent is using a tool during a free session — update the label
+    const labelEl = document.getElementById(`stream-tool-label-${data.messageId}`);
+    if (labelEl) labelEl.textContent = data.toolName || 'Working...';
     return;
   }
 
   if (data.type === 'stream_chunk') {
     const el = document.getElementById(`msg-${data.messageId}`);
     if (el) {
+      // Hide the tool indicator once content starts streaming
+      const indicator = el.querySelector('.stream-tool-indicator');
+      if (indicator) indicator.style.display = 'none';
       el.querySelector('.chat-bubble-content').innerHTML = formatContent(data.text) + '<span class="stream-cursor"></span>';
       haptic('light');
     }
@@ -2325,6 +2347,8 @@ function handleWSMessage(data) {
   if (data.type === 'stream_end') {
     const el = document.getElementById(`msg-${data.messageId}`);
     if (el && data.message) {
+      // Remove router pending card (in case it's still around)
+      document.getElementById('router-pending-card')?.remove();
       const msg = data.message;
       const cls = msg.type === 'error' ? 'chat-bubble--error' : 'chat-bubble--assistant';
       el.className = `chat-bubble ${cls}`;
@@ -2335,9 +2359,6 @@ function handleWSMessage(data) {
       html += `<div class="chat-bubble-time">${timeStr(msg.timestamp)}</div>`;
       el.innerHTML = html;
       el.id = `msg-${msg.id}`;
-      // Live answer: keep fully expanded. The collapse-on-history-replay path
-      // (appendMessage with animate=false) is the only place that adds the
-      // "Show more" toggle.
       scrollToBottom();
     }
     return;
@@ -2606,12 +2627,14 @@ function handleWSMessage(data) {
   if (data.type === 'message') {
     const msg = data.message;
     if (msg.type === 'answer') return;
+    // Remove router thinking card whenever the assistant sends a real message
+    if (msg.role !== 'user') {
+      document.getElementById('router-pending-card')?.remove();
+    }
     if (msg.type === 'progress') {
       hidePlanActions();
       renderProgressBubble(msg);
     } else {
-      // Don't hide the video when the server echoes the user's own message —
-      // we're still waiting for the assistant response at that point.
       if (msg.role !== 'user') setTyping(false);
       appendMessage(msg);
     }
@@ -2640,16 +2663,46 @@ function handleWSMessage(data) {
   }
 
   // ── v4 router events ──────────────────────────────────────────────
+
   if (data.type === 'router_thinking') {
-    // Lightweight UX hint — keep typing dots visible so the user knows
-    // the router is still working. We deliberately don't render a bubble
-    // for every detail to avoid chat noise.
-    setTyping(true);
+    // Show/update the "Reading your message..." thinking card.
+    // Only the last action is shown (we replace the label text each time).
+    setTyping(false);
+    let card = document.getElementById('router-pending-card');
+    if (!card) {
+      card = document.createElement('div');
+      card.id = 'router-pending-card';
+      card.className = 'chat-bubble';
+      card.innerHTML = `
+        <div class="router-thinking-card">
+          <div class="router-thinking-header">
+            <span class="router-thinking-dots"><i></i><i></i><i></i></span>
+            <span class="router-thinking-label" id="router-thinking-label">Reading your message...</span>
+          </div>
+        </div>`;
+      const inner = document.getElementById('chat-messages-inner');
+      if (inner) inner.appendChild(card);
+      scrollToBottom();
+    }
+    // Update label to the latest action (last only — no history)
+    if (data.label) {
+      const labelEl = document.getElementById('router-thinking-label');
+      if (labelEl) labelEl.textContent = data.label;
+    }
+    return;
+  }
+
+  if (data.type === 'router_tool_call') {
+    // Router is using a tool (e.g. AskUser). Update the thinking card label.
+    const labelEl = document.getElementById('router-thinking-label');
+    if (labelEl) labelEl.textContent = data.toolName || 'Working...';
     return;
   }
 
   if (data.type === 'router_question') {
-    // Same shape as the build agent's question, just sourced by the router.
+    // Router asked a clarifying question — remove thinking card, show question.
+    const pending = document.getElementById('router-pending-card');
+    if (pending) pending.remove();
     setTyping(false);
     appendMessage({
       id: data.messageId,
@@ -2663,11 +2716,69 @@ function handleWSMessage(data) {
     return;
   }
 
+  if (data.type === 'router_stream_start') {
+    // Router decided on a session type and is streaming the brief.
+    // Create the proposal card immediately and stream text into it.
+    setTyping(false);
+    const pending = document.getElementById('router-pending-card');
+    if (pending) pending.remove();
+
+    const kind = data.kind || 'build';
+    const inner = document.getElementById('chat-messages-inner');
+    if (!inner) return;
+
+    const el = document.createElement('div');
+    el.id = `msg-${data.messageId}`;
+    el.className = `chat-bubble chat-bubble--assistant chat-bubble--proposal proposal-${kind}`;
+    el.innerHTML = `
+      <div class="proposal-card proposal-card--${kind}" id="router-stream-card">
+        <div class="proposal-head">
+          <span class="proposal-kind-badge proposal-kind-badge--${kind}">${kind}</span>
+          <div class="router-thinking-header" style="margin-left:8px">
+            <span class="router-thinking-dots"><i></i><i></i><i></i></span>
+          </div>
+        </div>
+        <div class="proposal-body proposal-streaming-body"><span class="stream-cursor"></span></div>
+      </div>`;
+    inner.appendChild(el);
+    scrollToBottom();
+    return;
+  }
+
+  if (data.type === 'router_stream_chunk') {
+    // Append streamed text into the active proposal card body.
+    const el = document.getElementById(`msg-${data.messageId}`);
+    if (!el) return;
+    const body = el.querySelector('.proposal-body');
+    if (body) {
+      body.innerHTML = formatContent(data.text || '') + '<span class="stream-cursor"></span>';
+    }
+    scrollToBottom();
+    return;
+  }
+
+  if (data.type === 'router_stream_end') {
+    // Streaming done — finalise the card: remove dots, add action buttons.
+    // The full message with metadata will arrive via 'message' event after this.
+    // We pre-render the buttons from the stream-end payload so they appear instantly.
+    const el = document.getElementById(`msg-${data.messageId}`);
+    if (!el) return;
+    const card = el.querySelector('.proposal-card');
+    if (card) {
+      // Remove the streaming dots from the header
+      const dots = card.querySelector('.router-thinking-header');
+      if (dots) dots.remove();
+    }
+    // The 'message' event that follows will call renderProposalBubble and fully replace content.
+    return;
+  }
+
   if (data.type === 'router_proposal') {
-    // Server already persisted the proposal as a chat message; the
-    // standard 'message' broadcast that follows is what actually renders
-    // the bubble AND calls setTyping(false) — don't hide the video here
-    // or it will flicker for ~1s before the proposal card appears.
+    // Server persisted the proposal — the 'message' broadcast follows and
+    // renderProposalBubble will handle the full render (with buttons/pricing).
+    // Also remove the pending thinking card if it's still there.
+    const pending = document.getElementById('router-pending-card');
+    if (pending) pending.remove();
     return;
   }
 
@@ -2892,11 +3003,9 @@ function resultCardHtml(projectId, {changelogUrl, summary, commitNum, creditsCha
 /**
  * Build the result-card action row.
  * changelogUrl (optional) — if present, adds a compact icon button beside Run.
- * For Text Bot projects the "Run Test" preview is replaced with "Open Bot".
  */
 function resultActionsHtml(projectId, changelogUrl) {
   const proj = (projects || []).find(p => p.id === projectId) || (currentProject && currentProject.id === projectId ? currentProject : null);
-  const isTextBot = proj?.preferences?.kind === 'textBot';
   const hasBot = !!proj?.botUsername;
   const releaseBtn = hasBot
     ? `<button class="result-action-btn result-action-release" onclick="releaseLatest()">${t('chat_release_update')}</button>`
@@ -2905,19 +3014,6 @@ function resultActionsHtml(projectId, changelogUrl) {
   const changelogBtn = safeLog
     ? `<button class="result-action-btn result-action-changelog" onclick="tg.openLink('${safeLog}',{try_instant_view:true})" title="${t('version_change_log') || 'Changelog'}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></button>`
     : '';
-  if (isTextBot) {
-    if (hasBot) {
-      const botUrl = `https://t.me/${proj.botUsername}`;
-      return `<div class="result-actions" data-changelog="${safeLog}">
-        <div class="result-actions-row">
-          <button class="result-action-btn result-action-test" onclick="tg?.openTelegramLink('${botUrl}')">${t('chat_open_bot')}</button>
-          ${changelogBtn}
-        </div>
-        ${releaseBtn ? `<div class="result-actions-row">${releaseBtn}</div>` : ''}
-      </div>`;
-    }
-    return '';
-  }
   return `<div class="result-actions" data-changelog="${safeLog}">
     <div class="result-actions-row">
       <button class="result-action-btn result-action-test" onclick="openTestPreview('${projectId}')">▶ ${t('chat_run_test')}</button>
@@ -3522,21 +3618,27 @@ function renderProposalBubble(el, msg) {
 
   const FREE_KINDS = ['answer', 'suggestions'];
   if (!FREE_KINDS.includes(kind)) {
-    let label;
-    if (creditsCost > 0) {
-      const base = kind === 'bug-fix' ? 'Fix' : 'Start';
-      label = `${base} – ${creditsCost} Credits`;
+    let actionLabel;
+    if (kind === 'bug-fix') {
+      actionLabel = creditsCost > 0 ? `Fix – ${creditsCost.toLocaleString()} Credits` : 'Fix';
+    } else if (kind === 'build') {
+      actionLabel = creditsCost > 0 ? `Build – ${creditsCost.toLocaleString()} Credits` : 'Build';
+    } else if (kind === 'update-plan') {
+      actionLabel = creditsCost > 0 ? `Start – ${creditsCost.toLocaleString()} Credits` : 'Start';
     } else {
-      label = kind === 'bug-fix' ? 'Fix' : 'Start';
+      actionLabel = creditsCost > 0 ? `Start – ${creditsCost.toLocaleString()} Credits` : 'Start';
     }
+    const isBugFix = kind === 'bug-fix';
+    const isBuild = kind === 'build';
+    const btnIcon = isBugFix
+      ? `<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>`
+      : isBuild
+        ? `<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/>`
+        : `<polygon points="5 3 19 12 5 21 5 3"/>`;
     html += `<div class="proposal-actions">`;
     html += `<button class="proposal-btn-primary" data-proposal-id="${esc(msg.id)}" ${accepted ? 'disabled' : ''}>`;
-    html += `<svg class="proposal-btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">`;
-    html += kind === 'bug-fix'
-      ? `<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>`
-      : `<polygon points="5 3 19 12 5 21 5 3"/>`;
-    html += `</svg>`;
-    html += `<span>${esc(label)}</span>`;
+    html += `<svg class="proposal-btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">${btnIcon}</svg>`;
+    html += `<span>${esc(actionLabel)}</span>`;
     html += `</button>`;
     html += `</div>`;
   }
@@ -3559,6 +3661,11 @@ function renderProposalBubble(el, msg) {
 
 async function executeProposal(proposalId, btnEl) {
   if (!chatProjectId) return;
+  // Exit planning mode immediately — the build/update session is now underway
+  if (isPlanningMode) {
+    isPlanningMode = false;
+    switchChatMode('update');
+  }
   try {
     const res = await fetch(`${API_BASE}/chat/${chatProjectId}/execute-proposal`, {
       method: 'POST',
@@ -4080,22 +4187,17 @@ async function sendMessage() {
 
   document.getElementById('chat-welcome').classList.add('hidden');
 
-  // Planning mode (creating a brand-new project): keep using the legacy
-  // /plan flow which lives outside the in-project router.
-  if (isPlanningMode) {
-    const hasPlan = document.querySelector('.chat-bubble--plan');
-    if (hasPlan) {
-      await sendEditPlan(text);
-    } else {
-      await sendPlanRequest(text);
-    }
+  // If the user is editing an existing plan (plan bubble visible), keep the
+  // legacy edit-plan path so they can iterate on it with feedback.
+  if (isPlanningMode && document.querySelector('.chat-bubble--plan')) {
+    await sendEditPlan(text);
     return;
   }
 
-  // v4: every in-project chat message goes through the router. The router
-  // decides itself if this is speak / investigate / bug / update and emits a
-  // proposal card. The user message bubble + thinking events are added by
-  // the server over WS; we do NOT add them locally to avoid duplicates.
+  // Every other message — including the very first message on a new project —
+  // goes through the router. The router decides build / update / answer / etc.
+  // and emits the correct proposal card. The user bubble + thinking events
+  // are added by the server over WS so we do NOT add them locally.
   setTyping(true);
 
   try {
@@ -4152,39 +4254,14 @@ async function sendPlanRequest(description, opts = {}) {
   const welcome = document.getElementById('chat-welcome');
   welcome.classList.add('hidden');
 
-  // Optimistically render the user's prompt only on the first attempt — when
-  // we retry after the preferences modal saves we keep the existing bubble.
-  // We track the bubble id so a Back-out from the prefs modal can remove
-  // it and restore the chat to its pre-prompt "plan-ready" state.
-  let userBubbleId = opts.userBubbleId || null;
   if (!opts.skipUserBubble) {
-    userBubbleId = 'plan-user-' + Date.now();
-    appendMessage({ role: 'user', type: 'text', content: description, id: userBubbleId, timestamp: Date.now() });
-  }
-
-  // Before hitting /plan, make sure preferences exist. The server also
-  // enforces this with a 412 — this client check just avoids the round-trip.
-  if (!opts.skipPrefsCheck) {
-    try {
-      const prefsRes = await fetch(`${API_BASE}/chat/${chatProjectId}/preferences`, {
-        headers: { ...apiHeaders() },
-      });
-      if (prefsRes.ok) {
-        const prefsData = await prefsRes.json();
-        if (!prefsData.current) {
-          openPreferencesModal({
-            initial: null,
-            catalog: prefsData.catalog,
-            userBubbleId,
-            description,
-            onSaved: () => sendPlanRequest(description, { skipUserBubble: true, skipPrefsCheck: true, userBubbleId }),
-          });
-          return;
-        }
-      }
-    } catch (err) {
-      console.warn('[prefs] pre-flight check failed, will rely on 412:', err);
-    }
+    appendMessage({
+      role: 'user',
+      type: 'text',
+      content: description,
+      id: 'plan-user-' + Date.now(),
+      timestamp: Date.now(),
+    });
   }
 
   setTyping(true);
@@ -4201,17 +4278,6 @@ async function sendPlanRequest(description, opts = {}) {
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      if (res.status === 412 && err.error === 'preferences_required') {
-        // Server says we still don't have prefs — open the modal then retry.
-        setInputDisabled(false);
-        openPreferencesModal({
-          initial: null,
-          userBubbleId,
-          description,
-          onSaved: () => sendPlanRequest(description, { skipUserBubble: true, skipPrefsCheck: true, userBubbleId }),
-        });
-        return;
-      }
       if (res.status === 402) {
         appendMessage({ role: 'system', type: 'balance_error', content: 'Insufficient balance', id: 'plan-err-' + Date.now(), timestamp: Date.now(), metadata: { balance: 0 } });
       } else {
@@ -4240,1860 +4306,6 @@ async function sendPlanRequest(description, opts = {}) {
     setInputDisabled(false);
     appendMessage({ role: 'system', type: 'error', content: 'Network error: ' + err.message, id: 'plan-err-' + Date.now(), timestamp: Date.now() });
   }
-}
-
-// ═════════════════════════════════════════════════════════════════════
-// Preferences modal — full-screen pre-plan questionnaire.
-// Opens after the user's first prompt and BEFORE /plan can run.
-// Captures Style + Theme + Header + Density + Bottom-menu and persists
-// them on the project. The agent rules baked into each option become
-// hard constraints in the planner + build prompts.
-// ═════════════════════════════════════════════════════════════════════
-
-// `prefModalState` shape:
-//   { catalog, selection, onSaved, projectId, stepIndex, totalSteps,
-//     userBubbleId, description }
-//
-// `userBubbleId` is the optimistic chat bubble that was rendered for the
-// user's prompt that triggered the modal. Pressing Telegram BackButton
-// while the modal is open removes it and reverts the chat to the pre-prompt
-// "plan-ready" state.
-let prefModalState = null;
-let prefModalCatalogCache = null;
-const PREF_AUTO_ADVANCE_MS = 280;
-const PREF_AUTO_VALUE = '__auto__';
-// Mirrors GAME_KIND_FEE_CREDITS in src/services/runtime-config.service.ts.
-// Used to gate the Game card client-side so users can't even tap it
-// when they can't afford the one-time 100-credit fee — the server still
-// enforces the same rule for safety.
-const GAME_KIND_FEE_CREDITS = 100;
-
-async function loadPreferencesCatalog(projectId) {
-  if (prefModalCatalogCache) return prefModalCatalogCache;
-  const res = await fetch(`${API_BASE}/chat/${projectId}/preferences`, { headers: { ...apiHeaders() } });
-  if (!res.ok) throw new Error(`prefs fetch failed: ${res.status}`);
-  const data = await res.json();
-  prefModalCatalogCache = data;
-  return data;
-}
-
-async function openPreferencesModal({ initial, catalog, onSaved, userBubbleId, description } = {}) {
-  if (!chatProjectId) return;
-  const modal = document.getElementById('preferences-modal');
-  if (!modal) {
-    console.warn('[prefs] modal element missing');
-    return;
-  }
-
-  let payload;
-  if (catalog) {
-    payload = { catalog, current: initial };
-  } else {
-    try {
-      payload = await loadPreferencesCatalog(chatProjectId);
-    } catch (err) {
-      console.error('[prefs] failed to load catalog', err);
-      return;
-    }
-  }
-
-  // Default everything to AUTO so the user explicitly opts INTO opinions
-  // for the categories that matter to them, instead of the modal silently
-  // pre-picking some style they didn't ask for.
-  const selection = { ...(initial || payload.current || {}) };
-  for (const cat of payload.catalog) {
-    if (selection[cat.id] == null) selection[cat.id] = PREF_AUTO_VALUE;
-  }
-
-  prefModalState = {
-    catalog: payload.catalog,
-    selection,
-    // Snapshot of the kind that was already saved on the server (or null
-    // for fresh projects). Used to decide whether picking "Game" would
-    // trigger the one-time 100-credit transition fee — if the project is
-    // already kind=game, re-selecting it doesn't charge again.
-    originalKind: (payload.current && payload.current.kind) || null,
-    onSaved,
-    projectId: chatProjectId,
-    stepIndex: 0,
-    visibleCatalog: [],
-    totalSteps: 0,
-    userBubbleId: userBubbleId || null,
-    description: description || '',
-  };
-
-  // Drop any selections that don't belong under the current `kind` so the
-  // first render shows a clean state.
-  clearHiddenSelections();
-
-  // Always reset the submit button before rendering so stale busy/disabled
-  // state from a previous session (e.g. a failed or cancelled submit) never
-  // leaks into the freshly opened modal.
-  const _submitBtn = document.getElementById('pref-modal-submit');
-  if (_submitBtn) {
-    _submitBtn.disabled = false;
-    _submitBtn.classList.remove('busy', 'waiting-for-bot', 'ready');
-  }
-
-  renderPreferencesModal();
-  bindPrefModalChrome();
-  goToPrefStep(0, { animate: false });
-
-  modal.classList.remove('hidden');
-  modal.setAttribute('aria-hidden', 'false');
-  document.body.classList.add('pref-modal-open');
-  applyPrefModalChromeColors();
-}
-
-function closePreferencesModal() {
-  const modal = document.getElementById('preferences-modal');
-  if (!modal) return;
-  modal.classList.add('hidden');
-  modal.setAttribute('aria-hidden', 'true');
-  document.body.classList.remove('pref-modal-open');
-  prefModalState = null;
-  restoreChromeColors();
-}
-
-/**
- * Cancel the prefs modal (Telegram BackButton from step 0). Removes the
- * optimistically-rendered user bubble that triggered the prompt, restores
- * the chat input to a clean plan-ready state, and closes the modal without
- * persisting anything.
- */
-function cancelPreferencesModal() {
-  if (!prefModalState) return;
-  const { userBubbleId } = prefModalState;
-  closePreferencesModal();
-  if (userBubbleId) {
-    const bubbleEl = document.getElementById('msg-' + userBubbleId);
-    if (bubbleEl) bubbleEl.remove();
-  }
-  // If the chat is now empty, bring back the welcome screen.
-  const inner = document.getElementById('chat-messages-inner');
-  if (inner && inner.children.length === 0) {
-    const welcome = document.getElementById('chat-welcome');
-    if (welcome) welcome.classList.remove('hidden');
-  }
-  setInputDisabled(false);
-}
-
-const PREF_MODAL_CHROME = '#0F1011';
-const DEFAULT_CHROME = '#000000';
-
-function applyPrefModalChromeColors() {
-  if (!tg) return;
-  try { tg.setHeaderColor(PREF_MODAL_CHROME); } catch {}
-  try { tg.setBackgroundColor(PREF_MODAL_CHROME); } catch {}
-  try { if (typeof tg.setBottomBarColor === 'function') tg.setBottomBarColor(PREF_MODAL_CHROME); } catch {}
-}
-
-function restoreChromeColors() {
-  if (!tg) return;
-  try { tg.setHeaderColor(DEFAULT_CHROME); } catch {}
-  try { tg.setBackgroundColor(DEFAULT_CHROME); } catch {}
-  try { if (typeof tg.setBottomBarColor === 'function') tg.setBottomBarColor(DEFAULT_CHROME); } catch {}
-}
-
-/**
- * Resolve a gating value the same way the backend does (AUTO collapses to
- * the catalog default — see `resolveGatingValue` in
- * `src/services/preferences.catalog.ts`). Used by `isCatActive` below to
- * gate game-only / app-only categories on the live selection.
- */
-function prefDefaultFor(catId) {
-  const cat = (prefModalState && prefModalState.catalog.find((c) => c.id === catId));
-  if (!cat || !cat.options || !cat.options.length) return null;
-  // Prefer an explicit default; otherwise the first option keeps modal
-  // behaviour deterministic. The catalog ships `kind` first with `app`
-  // as its first option, which matches the backend default.
-  return cat.options[0].id;
-}
-
-function prefResolveGating(catId) {
-  if (!prefModalState) return null;
-  const v = prefModalState.selection[catId];
-  if (!v || v === PREF_AUTO_VALUE) return prefDefaultFor(catId);
-  return v;
-}
-
-function isCatActive(cat) {
-  if (!cat.appliesWhen) return true;
-  for (const [key, allowed] of Object.entries(cat.appliesWhen)) {
-    if (!Array.isArray(allowed) || allowed.length === 0) continue;
-    const actual = prefResolveGating(key);
-    if (!allowed.includes(actual)) return false;
-  }
-  return true;
-}
-
-/**
- * Returns the live list of categories the user is actually walking through.
- * Game-only categories disappear when Kind = App, and vice-versa.
- *
- * Caches on `prefModalState.visibleCatalog` so other helpers (step counter,
- * navigation, submit) all read off the same array.
- */
-function computeVisibleCatalog() {
-  if (!prefModalState) return [];
-  const visible = prefModalState.catalog.filter(isCatActive);
-  prefModalState.visibleCatalog = visible;
-  prefModalState.totalSteps = visible.length;
-  return visible;
-}
-
-function renderPreferencesModal() {
-  if (!prefModalState) return;
-  const stepsEl = document.getElementById('pref-steps');
-  const progressEl = document.getElementById('pref-modal-progress');
-  if (!stepsEl) return;
-
-  stepsEl.innerHTML = '';
-  if (progressEl) progressEl.innerHTML = '';
-
-  const visible = computeVisibleCatalog();
-  const total = visible.length;
-  visible.forEach((cat, idx) => {
-    const catLabel = prefCategoryLabel(cat);
-    const catPrompt = prefCategoryPrompt(cat);
-
-    const step = document.createElement('section');
-    step.className = 'pref-step';
-    step.dataset.cat = cat.id;
-    step.dataset.idx = String(idx);
-    step.setAttribute('aria-hidden', 'true');
-
-    const isAuto = prefModalState.selection[cat.id] === PREF_AUTO_VALUE;
-    step.innerHTML = `
-      <div class="pref-step-header">
-        <span class="pref-step-eyebrow">${escapeHtml(catLabel)}</span>
-        <h2 class="pref-step-title">${escapeHtml(catPrompt)}</h2>
-      </div>
-      <button type="button" class="pref-auto-btn ${isAuto ? 'selected' : ''}" data-cat="${cat.id}">
-        <span class="pref-auto-btn-icon" aria-hidden="true">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/><circle cx="12" cy="12" r="3"/></svg>
-        </span>
-        <span class="pref-auto-btn-text">
-          <span class="pref-auto-btn-title">${escapeHtml(t('pref_modal_auto'))}</span>
-          <span class="pref-auto-btn-sub">${escapeHtml(t('pref_modal_auto_desc'))}</span>
-        </span>
-        <span class="pref-auto-btn-check" aria-hidden="true">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>
-        </span>
-      </button>
-      <div class="pref-step-grid"></div>
-    `;
-
-    const grid = step.querySelector('.pref-step-grid');
-    grid.classList.add(`pref-step-grid--${cat.id}`);
-
-    const autoBtn = step.querySelector('.pref-auto-btn');
-    autoBtn.addEventListener('click', () => onPrefAutoPick(cat.id, step, idx));
-
-    for (const opt of cat.options) {
-      const optLabel = prefOptionLabel(cat.id, opt);
-      const optDesc = prefOptionDesc(cat.id, opt);
-
-      const card = document.createElement('button');
-      card.type = 'button';
-      card.className = 'pref-card';
-      card.dataset.cat = cat.id;
-      card.dataset.opt = opt.id;
-      if (prefModalState.selection[cat.id] === opt.id) card.classList.add('selected');
-
-      card.innerHTML = `
-        <div class="pref-card-preview">${renderPreferencePreview({ ...opt, label: optLabel })}</div>
-        <div class="pref-card-meta">
-          <div class="pref-card-label">${escapeHtml(optLabel)}</div>
-          <div class="pref-card-desc">${escapeHtml(optDesc)}</div>
-        </div>
-        <div class="pref-card-check" aria-hidden="true">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>
-        </div>
-      `;
-
-      card.addEventListener('click', () => onPrefCardPick(cat.id, opt.id, card, step, idx));
-      grid.appendChild(card);
-    }
-
-    // Append a non-interactive "AI Agent (soon)" teaser card in the kind step.
-    if (cat.id === 'kind') {
-      const agentLabel = t('pref_opt_kind_aiAgent_label') || 'AI Agent';
-      const agentDesc  = t('pref_opt_kind_aiAgent_desc')  || 'Autonomous agent that acts on its own. No UI — just results.';
-      const soonLabel  = t('pref_soon') || 'Soon';
-      const teaser = document.createElement('div');
-      teaser.className = 'pref-card pref-card--soon';
-      teaser.setAttribute('aria-disabled', 'true');
-      teaser.innerHTML = `
-        <div class="pref-card-preview">
-          ${renderAiAgentPreviewCard()}
-        </div>
-        <div class="pref-card-meta">
-          <div class="pref-card-label">
-            ${escapeHtml(agentLabel)}
-            <span class="pref-soon-badge">${escapeHtml(soonLabel)}</span>
-          </div>
-          <div class="pref-card-desc">${escapeHtml(agentDesc)}</div>
-        </div>
-      `;
-      grid.appendChild(teaser);
-    }
-
-    stepsEl.appendChild(step);
-
-    if (progressEl) {
-      const dot = document.createElement('span');
-      dot.className = 'pref-progress-dot';
-      dot.dataset.idx = String(idx);
-      dot.addEventListener('click', () => goToPrefStep(idx));
-      progressEl.appendChild(dot);
-    }
-  });
-
-  // Translate the static modal chrome (submit / back labels).
-  const submitBtn = document.getElementById('pref-modal-submit');
-  if (submitBtn && !submitBtn.classList.contains('busy')) {
-    submitBtn.textContent = textBotNeedsBotFirst() ? t('pref_modal_create_bot') : t('pref_modal_submit');
-  }
-  const backBtn = document.getElementById('pref-modal-back');
-  if (backBtn) backBtn.setAttribute('aria-label', t('pref_modal_back'));
-}
-
-// ── i18n lookups for catalog entries ────────────────────────────────
-// Catalog ships with English labels/descriptions baked in; the mini-app
-// looks for a matching i18n key first and falls back to the catalog
-// string so adding a new option doesn't require touching i18n.js.
-function prefCategoryLabel(cat) {
-  const key = `pref_cat_${cat.id}_label`;
-  const v = t(key);
-  return v === key ? (cat.label || cat.id) : v;
-}
-function prefCategoryPrompt(cat) {
-  const key = `pref_cat_${cat.id}_prompt`;
-  const v = t(key);
-  return v === key ? (cat.prompt || cat.label || '') : v;
-}
-function prefOptionLabel(catId, opt) {
-  const key = `pref_opt_${catId}_${opt.id}_label`;
-  const v = t(key);
-  return v === key ? (opt.label || opt.id) : v;
-}
-function prefOptionDesc(catId, opt) {
-  const key = `pref_opt_${catId}_${opt.id}_desc`;
-  const v = t(key);
-  return v === key ? (opt.description || '') : v;
-}
-
-function bindPrefModalChrome() {
-  const submitBtn = document.getElementById('pref-modal-submit');
-  if (submitBtn && !submitBtn.dataset.bound) {
-    submitBtn.dataset.bound = '1';
-    submitBtn.addEventListener('click', submitPreferences);
-  }
-  const backBtn = document.getElementById('pref-modal-back');
-  if (backBtn && !backBtn.dataset.bound) {
-    backBtn.dataset.bound = '1';
-    backBtn.addEventListener('click', () => {
-      if (!prefModalState) return;
-      goToPrefStep(prefModalState.stepIndex - 1);
-    });
-  }
-}
-
-/**
- * Categories whose `appliesWhen` references *this* category, i.e. which
- * categories' visibility might change when the user picks a different
- * value here. If a gating cat changes (e.g. `kind`), the whole modal must
- * re-render because steps appear/disappear and indexes shift.
- */
-function isGatingCategory(catId) {
-  if (!prefModalState) return false;
-  return prefModalState.catalog.some((c) => c.appliesWhen && Object.prototype.hasOwnProperty.call(c.appliesWhen, catId));
-}
-
-/**
- * Wipe selections for any category that's no longer visible under the
- * current gating, so they don't leak into the saved JSON or stale-cache
- * the modal next time it opens.
- */
-function clearHiddenSelections() {
-  if (!prefModalState) return;
-  const visible = prefModalState.catalog.filter(isCatActive);
-  const visibleIds = new Set(visible.map((c) => c.id));
-  for (const cat of prefModalState.catalog) {
-    if (!visibleIds.has(cat.id)) {
-      prefModalState.selection[cat.id] = PREF_AUTO_VALUE;
-    }
-  }
-}
-
-function onPrefCardPick(catId, optId, cardEl, stepEl, stepIdx) {
-  if (!prefModalState) return;
-
-  // Game-kind paywall: block the tap entirely when the user would be
-  // transitioning into kind=game (project's saved kind isn't already
-  // 'game') and they don't have enough credits to cover the one-time
-  // 100 cr fee. We don't apply the selection — instead we surface the
-  // same insufficient-funds + Topup flow used by the post-submit 402
-  // path, so the UX stays consistent across "click the card" and "click
-  // submit".
-  if (catId === 'kind' && optId === 'game') {
-    const alreadyGame = prefModalState.originalKind === 'game';
-    if (!alreadyGame && (typeof userCredits === 'number') && userCredits < GAME_KIND_FEE_CREDITS) {
-      hapticNotify('error');
-      const msg = (t('pref_game_insufficient_funds') || 'Game kind costs {required} credits. Your balance: {balance} cr.')
-        .replace('{required}', String(GAME_KIND_FEE_CREDITS))
-        .replace('{balance}', String(userCredits));
-      const goTopup = confirm(`${msg}\n\n${t('pref_topup_now') || 'Top up now?'}`);
-      if (goTopup) {
-        closePreferencesModal();
-        try { openTopup('list'); } catch (_) {}
-      }
-      return;
-    }
-  }
-
-  const previous = prefModalState.selection[catId];
-  prefModalState.selection[catId] = optId;
-  stepEl.querySelectorAll('.pref-card').forEach((el) => el.classList.remove('selected'));
-  cardEl.classList.add('selected');
-  const autoBtn = stepEl.querySelector('.pref-auto-btn');
-  if (autoBtn) autoBtn.classList.remove('selected');
-
-  // If this is a gating category (e.g. `kind`), the visible step list may
-  // have changed. Re-render and route to the next visible step.
-  if (isGatingCategory(catId) && previous !== optId) {
-    handleGatingChange(catId, stepIdx);
-    return;
-  }
-
-  scheduleAutoAdvance(stepIdx);
-}
-
-function onPrefAutoPick(catId, stepEl, stepIdx) {
-  if (!prefModalState) return;
-  const previous = prefModalState.selection[catId];
-  prefModalState.selection[catId] = PREF_AUTO_VALUE;
-  stepEl.querySelectorAll('.pref-card').forEach((el) => el.classList.remove('selected'));
-  const autoBtn = stepEl.querySelector('.pref-auto-btn');
-  if (autoBtn) autoBtn.classList.add('selected');
-
-  if (isGatingCategory(catId) && previous !== PREF_AUTO_VALUE) {
-    handleGatingChange(catId, stepIdx);
-    return;
-  }
-
-  scheduleAutoAdvance(stepIdx);
-}
-
-/**
- * The user just changed a gating category (e.g. flipped App → Game).
- * Wipe stale selections for newly-hidden categories, re-render the modal,
- * and auto-advance to whatever step now sits *after* the gating one.
- */
-function handleGatingChange(gatingCatId, currentStepIdx) {
-  clearHiddenSelections();
-  renderPreferencesModal();
-  // Find where the gating category now lives in the visible list, then
-  // schedule the same auto-advance UX so the user keeps moving forward.
-  const visible = prefModalState.visibleCatalog || [];
-  const newIdx = visible.findIndex((c) => c.id === gatingCatId);
-  const targetIdx = newIdx >= 0 ? newIdx : Math.min(currentStepIdx, visible.length - 1);
-  // Keep the user on the gating step (so they see the click landed) and
-  // then auto-advance into the freshly-revealed branch.
-  goToPrefStep(targetIdx, { animate: false });
-  scheduleAutoAdvance(targetIdx);
-}
-
-function scheduleAutoAdvance(stepIdx) {
-  const isLast = stepIdx >= prefModalState.totalSteps - 1;
-  if (isLast) {
-    // Last step: highlight the submit button instead of auto-submitting so
-    // users still get a chance to review/back out.
-    const submitBtn = document.getElementById('pref-modal-submit');
-    if (submitBtn) submitBtn.classList.add('ready');
-    return;
-  }
-
-  setTimeout(() => {
-    if (!prefModalState) return;
-    if (prefModalState.stepIndex !== stepIdx) return; // user already navigated
-    goToPrefStep(stepIdx + 1);
-  }, PREF_AUTO_ADVANCE_MS);
-}
-
-function goToPrefStep(idx, { animate = true } = {}) {
-  if (!prefModalState) return;
-  const visible = prefModalState.visibleCatalog || computeVisibleCatalog();
-  const total = visible.length || 1;
-  const clamped = Math.max(0, Math.min(total - 1, idx));
-  prefModalState.stepIndex = clamped;
-
-  const stepsEl = document.getElementById('pref-steps');
-  if (stepsEl) {
-    stepsEl.querySelectorAll('.pref-step').forEach((el) => {
-      const i = Number(el.dataset.idx);
-      const isActive = i === clamped;
-      const isBefore = i < clamped;
-      if (!animate) el.classList.add('no-anim');
-      el.classList.toggle('active', isActive);
-      el.classList.toggle('before', isBefore);
-      el.setAttribute('aria-hidden', isActive ? 'false' : 'true');
-      // Land at the top of every step so the header/prompt is always visible.
-      if (isActive) el.scrollTop = 0;
-      if (!animate) {
-        // Force reflow so removing `no-anim` doesn't restart the just-set transform.
-        void el.offsetWidth;
-        el.classList.remove('no-anim');
-      }
-    });
-  }
-
-  const progressEl = document.getElementById('pref-modal-progress');
-  if (progressEl) {
-    progressEl.querySelectorAll('.pref-progress-dot').forEach((el) => {
-      const i = Number(el.dataset.idx);
-      el.classList.toggle('done', i < clamped);
-      el.classList.toggle('active', i === clamped);
-    });
-  }
-
-  const counterEl = document.getElementById('pref-modal-step-counter');
-  if (counterEl) counterEl.textContent = `${clamped + 1}/${total}`;
-
-  const backBtn = document.getElementById('pref-modal-back');
-  if (backBtn) backBtn.classList.toggle('hidden', clamped === 0);
-
-  const submitBtn = document.getElementById('pref-modal-submit');
-  if (submitBtn) {
-    const isLast = clamped === total - 1;
-    submitBtn.classList.toggle('hidden', !isLast);
-    submitBtn.classList.remove('ready');
-  }
-}
-
-function renderPreferencePreview(opt) {
-  const spec = opt.preview || {};
-  switch (spec.kind) {
-    case 'style':
-      return renderStylePreviewCard(opt);
-    case 'theme':
-      return renderThemePreviewCard(opt);
-    case 'header':
-      return renderHeaderPreviewCard(opt);
-    case 'density':
-      return renderDensityPreviewCard(opt);
-    case 'bottomMenu':
-      return renderBottomMenuPreviewCard(opt);
-    case 'kind':
-      return renderKindPreviewCard(opt);
-    case 'gameDimension':
-      return renderGameDimensionPreviewCard(opt);
-    case 'gameGenre':
-      return renderGameGenrePreviewCard(opt);
-    case 'gameArtStyle':
-      return renderGameArtStylePreviewCard(opt);
-    case 'gameControls':
-      return renderGameControlsPreviewCard(opt);
-    case 'botKeyboardStyle':
-      return renderBotKeyboardStylePreviewCard(opt);
-    default:
-      return `<div class="pref-preview-fallback">${escapeHtml(opt.label)}</div>`;
-  }
-}
-
-// ── Kind / Game preview cards ───────────────────────────────────────
-// Static SVG/CSS mocks only — no live Three.js inside the modal so the
-// preferences screen stays light and snappy on low-end devices.
-
-function renderKindPreviewCard(opt) {
-  const variant = opt.preview.variant;
-  if (variant === 'app') {
-    return `
-      <div class="gp-card gp-card-kind gp-card-kind-app">
-        <div class="gp-phone">
-          <div class="gp-phone-header"><span class="gp-bar"></span><span class="gp-bar gp-bar-sm"></span></div>
-          <div class="gp-phone-body">
-            <div class="gp-row"></div>
-            <div class="gp-row"></div>
-            <div class="gp-row"></div>
-            <div class="gp-row"></div>
-          </div>
-          <div class="gp-phone-tabs">
-            <span class="gp-dot active"></span><span class="gp-dot"></span><span class="gp-dot"></span><span class="gp-dot"></span>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-  if (variant === 'textBot') {
-    // Mini Telegram chat exchange — bot welcome → user reply → bot answer →
-    // command chips. Fills the square card naturally so it doesn't look like
-    // an empty bubble floating in a void.
-    return `
-      <div class="gp-card gp-card-kind gp-card-kind-textbot">
-        <div class="tb-chat">
-          <div class="tb-msg tb-msg-bot">
-            <div class="tb-avatar">B</div>
-            <div class="tb-bubble">
-              <div class="tb-line tb-line-w-full"></div>
-              <div class="tb-line tb-line-w-md"></div>
-              <div class="tb-line tb-line-w-sm"></div>
-            </div>
-          </div>
-          <div class="tb-msg tb-msg-user">
-            <div class="tb-bubble tb-bubble-user">
-              <div class="tb-line tb-line-w-md"></div>
-              <div class="tb-line tb-line-w-sm"></div>
-            </div>
-          </div>
-          <div class="tb-msg tb-msg-bot">
-            <div class="tb-avatar">B</div>
-            <div class="tb-bubble">
-              <div class="tb-line tb-line-w-full"></div>
-              <div class="tb-line tb-line-w-md"></div>
-            </div>
-          </div>
-          <div class="tb-chips">
-            <span class="tb-chip">/start</span>
-            <span class="tb-chip">/help</span>
-            <span class="tb-chip tb-chip-accent">Buy</span>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-  // game variant — full-bleed canvas mock with iso cubes
-  // Gold "100 🪙" price tag in the corner so the one-time fee is visible
-  // before the user even taps. When the user can't afford it (and they'd
-  // be triggering a transition into game) we add `--locked` so the card
-  // reads as un-clickable; the click handler still surfaces an explanatory
-  // alert in case they hit it anyway.
-  const fee = GAME_KIND_FEE_CREDITS;
-  const alreadyGame = prefModalState?.originalKind === 'game';
-  const cantAfford = !alreadyGame && (typeof userCredits === 'number') && userCredits < fee;
-  const lockedCls = cantAfford ? ' pref-fee-badge--locked' : '';
-  const cardLockedCls = cantAfford ? ' gp-card-kind-game--locked' : '';
-  return `
-    <div class="gp-card gp-card-kind gp-card-kind-game${cardLockedCls}">
-      <div class="gp-canvas">
-        ${renderIsoScene()}
-        <span class="gp-score">SCORE 0042</span>
-        <span class="pref-fee-badge${lockedCls}">
-          <b>${fee}</b>${coinSvg(12, 9, '#fde68a')}
-        </span>
-      </div>
-    </div>
-  `;
-}
-
-// ── AI Agent teaser illustration ────────────────────────────────────
-// A "coming soon" card shown in the kind grid. Not selectable.
-function renderAiAgentPreviewCard() {
-  return `
-    <div class="gp-card gp-card-kind gp-card-kind-agent">
-      <svg class="gp-iso" viewBox="0 0 120 120" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <!-- Dark background -->
-        <rect width="120" height="120" fill="#0d1117"/>
-        <!-- Central "brain" hexagon ring -->
-        <polygon points="60,22 78,32 78,52 60,62 42,52 42,32" fill="none" stroke="rgba(139,92,246,0.55)" stroke-width="1.5"/>
-        <polygon points="60,30 72,37 72,51 60,58 48,51 48,37" fill="rgba(139,92,246,0.12)"/>
-        <!-- Pulsing center dot -->
-        <circle cx="60" cy="44" r="6" fill="#8b5cf6" opacity="0.9"/>
-        <circle cx="60" cy="44" r="10" fill="none" stroke="#8b5cf6" stroke-width="1" opacity="0.35"/>
-        <!-- Connector lines to outer nodes -->
-        <line x1="60" y1="44" x2="24" y2="30" stroke="rgba(139,92,246,0.4)" stroke-width="1"/>
-        <line x1="60" y1="44" x2="96" y2="30" stroke="rgba(139,92,246,0.4)" stroke-width="1"/>
-        <line x1="60" y1="44" x2="24" y2="80" stroke="rgba(139,92,246,0.4)" stroke-width="1"/>
-        <line x1="60" y1="44" x2="96" y2="80" stroke="rgba(139,92,246,0.4)" stroke-width="1"/>
-        <line x1="60" y1="44" x2="60" y2="90" stroke="rgba(139,92,246,0.4)" stroke-width="1"/>
-        <!-- Outer nodes -->
-        <circle cx="24" cy="30" r="4" fill="#a78bfa" opacity="0.75"/>
-        <circle cx="96" cy="30" r="4" fill="#a78bfa" opacity="0.75"/>
-        <circle cx="24" cy="80" r="4" fill="#6366f1" opacity="0.75"/>
-        <circle cx="96" cy="80" r="4" fill="#6366f1" opacity="0.75"/>
-        <circle cx="60" cy="90" r="4" fill="#a78bfa" opacity="0.75"/>
-        <!-- Tiny "task" pill rows at bottom -->
-        <rect x="28" y="100" width="42" height="6" rx="3" fill="rgba(139,92,246,0.22)"/>
-        <rect x="28" y="110" width="28" height="6" rx="3" fill="rgba(139,92,246,0.14)"/>
-      </svg>
-    </div>
-  `;
-}
-
-// ── Bot keyboard style previews ─────────────────────────────────────
-// Shown ONLY when kind === "textBot". Tiny static mocks of the four
-// Telegram-side UX patterns.
-function renderBotKeyboardStylePreviewCard(opt) {
-  const scheme = opt.preview.scheme;
-  if (scheme === 'reply') {
-    return `
-      <div class="gp-card gp-card-bks">
-        <div class="tb-chat tb-chat-compact">
-          <div class="tb-msg tb-msg-bot">
-            <div class="tb-bubble"><div class="tb-line"></div></div>
-          </div>
-          <div class="tb-replykb">
-            <div class="tb-replykb-row">
-              <span class="tb-replykb-btn">📦 Orders</span>
-              <span class="tb-replykb-btn">🛒 Catalog</span>
-            </div>
-            <div class="tb-replykb-row">
-              <span class="tb-replykb-btn">💰 Balance</span>
-              <span class="tb-replykb-btn">ℹ️ Help</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-  if (scheme === 'inline') {
-    return `
-      <div class="gp-card gp-card-bks">
-        <div class="tb-chat tb-chat-compact">
-          <div class="tb-msg tb-msg-bot">
-            <div class="tb-bubble">
-              <div class="tb-line"></div>
-              <div class="tb-line tb-line-sm"></div>
-              <div class="tb-inlinekb">
-                <span class="tb-inline-btn">🛒 Buy</span>
-                <span class="tb-inline-btn">← Back</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-  if (scheme === 'commands') {
-    return `
-      <div class="gp-card gp-card-bks">
-        <div class="tb-chat tb-chat-compact">
-          <div class="tb-cmdmenu">
-            <div class="tb-cmdmenu-row"><span class="tb-cmd">/start</span><span class="tb-cmd-desc">Start</span></div>
-            <div class="tb-cmdmenu-row"><span class="tb-cmd">/help</span><span class="tb-cmd-desc">Show all</span></div>
-            <div class="tb-cmdmenu-row"><span class="tb-cmd">/buy</span><span class="tb-cmd-desc">Buy item</span></div>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-  // mixed — reply keyboard at bottom, inline buttons on a message above
-  return `
-    <div class="gp-card gp-card-bks">
-      <div class="tb-chat tb-chat-compact">
-        <div class="tb-msg tb-msg-bot">
-          <div class="tb-bubble">
-            <div class="tb-line"></div>
-            <div class="tb-inlinekb">
-              <span class="tb-inline-btn">🛒 Buy</span>
-            </div>
-          </div>
-        </div>
-        <div class="tb-replykb">
-          <div class="tb-replykb-row">
-            <span class="tb-replykb-btn">📦 Orders</span>
-            <span class="tb-replykb-btn">ℹ️ Help</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-function renderIsoScene() {
-  // A tiny isometric scene: ground tile + 3 stacked cubes for "voxel" feel.
-  // `preserveAspectRatio="xMidYMid slice"` makes the SVG fill the entire
-  // container (cropping sides if needed) so there's no letterbox seam
-  // between the SVG sky and the parent card background.
-  return `
-    <svg class="gp-iso" viewBox="0 0 120 90" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <defs>
-        <linearGradient id="gpSky" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stop-color="#bde7ff"/>
-          <stop offset="1" stop-color="#88c8ff"/>
-        </linearGradient>
-      </defs>
-      <rect width="120" height="90" fill="url(#gpSky)"/>
-      <!-- ground tile — shifted up 10 units so the scene sits near vertical center -->
-      <polygon points="20,50 60,30 100,50 60,70" fill="#7cb342"/>
-      <polygon points="60,70 100,50 100,58 60,78" fill="#558b2f"/>
-      <polygon points="20,50 20,58 60,78 60,70" fill="#689f38"/>
-      <!-- voxel block -->
-      <polygon points="50,42 65,34 80,42 65,50" fill="#ffd54f"/>
-      <polygon points="65,50 80,42 80,52 65,60" fill="#f9a825"/>
-      <polygon points="50,42 50,52 65,60 65,50" fill="#fbc02d"/>
-      <!-- back tree -->
-      <polygon points="38,35 46,31 54,35 46,39" fill="#2e7d32"/>
-      <polygon points="46,39 54,35 54,42 46,46" fill="#1b5e20"/>
-      <polygon points="38,35 38,42 46,46 46,39" fill="#256527"/>
-    </svg>
-  `;
-}
-
-function renderGameDimensionPreviewCard(opt) {
-  const dim = opt.preview.dimension;
-  if (dim === '2d') {
-    return `
-      <div class="gp-card gp-card-dim gp-card-dim-2d">
-        <div class="gp-canvas">
-          <svg viewBox="0 0 120 90" xmlns="http://www.w3.org/2000/svg" class="gp-grid2d">
-            <rect width="120" height="90" fill="#0e1116"/>
-            ${gpGrid2dLines()}
-            <rect x="54" y="40" width="12" height="12" fill="#00e5ff"/>
-            <rect x="20" y="60" width="8" height="8" fill="#ff4081"/>
-            <rect x="92" y="20" width="8" height="8" fill="#ffeb3b"/>
-          </svg>
-          <span class="gp-tag">2D</span>
-        </div>
-      </div>
-    `;
-  }
-  return `
-    <div class="gp-card gp-card-dim gp-card-dim-3d">
-      <div class="gp-canvas">${renderIsoScene()}<span class="gp-tag">3D</span></div>
-    </div>
-  `;
-}
-
-function gpGrid2dLines() {
-  let out = '';
-  for (let x = 0; x <= 120; x += 12) {
-    out += `<line x1="${x}" y1="0" x2="${x}" y2="90" stroke="rgba(0,229,255,0.18)" stroke-width="0.5"/>`;
-  }
-  for (let y = 0; y <= 90; y += 12) {
-    out += `<line x1="0" y1="${y}" x2="120" y2="${y}" stroke="rgba(0,229,255,0.18)" stroke-width="0.5"/>`;
-  }
-  return out;
-}
-
-function renderGameGenrePreviewCard(opt) {
-  const genre = opt.preview.genre;
-  const palette = {
-    arcade: { bg: '#1a1a2e', fg: '#f9d342', accent: '#e94560' },
-    runner: { bg: '#88c8ff', fg: '#7cb342', accent: '#ff7043' },
-    puzzle: { bg: '#ede7f6', fg: '#5e35b1', accent: '#ff8a65' },
-    shooter: { bg: '#0e1116', fg: '#00e5ff', accent: '#ff4081' },
-    platformer: { bg: '#42a5f5', fg: '#43a047', accent: '#ffb300' },
-    sandbox: { bg: '#fff8e1', fg: '#6d4c41', accent: '#26a69a' },
-  }[genre] || { bg: '#222', fg: '#fff', accent: '#999' };
-
-  let inner = '';
-  if (genre === 'arcade') {
-    inner = `
-      <circle cx="60" cy="50" r="10" fill="${palette.fg}"/>
-      <circle cx="30" cy="30" r="4" fill="${palette.accent}"/>
-      <circle cx="92" cy="32" r="4" fill="${palette.accent}"/>
-      <circle cx="40" cy="68" r="4" fill="${palette.accent}"/>
-      <circle cx="84" cy="70" r="4" fill="${palette.accent}"/>
-    `;
-  } else if (genre === 'runner') {
-    inner = `
-      <rect x="0" y="60" width="120" height="30" fill="${palette.fg}"/>
-      <rect x="0" y="58" width="120" height="2" fill="rgba(0,0,0,0.18)"/>
-      <rect x="56" y="40" width="10" height="20" fill="${palette.accent}"/>
-      <rect x="22" y="48" width="10" height="12" fill="#5d4037"/>
-      <rect x="92" y="48" width="10" height="12" fill="#5d4037"/>
-    `;
-  } else if (genre === 'puzzle') {
-    inner = `
-      <rect x="20" y="20" width="20" height="20" fill="${palette.fg}" rx="3"/>
-      <rect x="50" y="20" width="20" height="20" fill="${palette.accent}" rx="3"/>
-      <rect x="80" y="20" width="20" height="20" fill="${palette.fg}" rx="3"/>
-      <rect x="20" y="50" width="20" height="20" fill="${palette.accent}" rx="3"/>
-      <rect x="50" y="50" width="20" height="20" fill="${palette.fg}" rx="3"/>
-      <rect x="80" y="50" width="20" height="20" fill="${palette.accent}" rx="3"/>
-    `;
-  } else if (genre === 'shooter') {
-    inner = `
-      <polygon points="60,68 56,76 64,76" fill="${palette.fg}"/>
-      <line x1="60" y1="60" x2="60" y2="20" stroke="${palette.accent}" stroke-width="2" stroke-dasharray="3 3"/>
-      <circle cx="30" cy="30" r="6" fill="${palette.accent}" opacity="0.7"/>
-      <circle cx="90" cy="40" r="6" fill="${palette.accent}" opacity="0.7"/>
-      <circle cx="60" cy="20" r="5" fill="${palette.accent}"/>
-    `;
-  } else if (genre === 'platformer') {
-    inner = `
-      <rect x="0" y="78" width="120" height="12" fill="${palette.fg}"/>
-      <rect x="20" y="58" width="24" height="6" fill="${palette.fg}"/>
-      <rect x="60" y="42" width="28" height="6" fill="${palette.fg}"/>
-      <rect x="92" y="60" width="20" height="6" fill="${palette.fg}"/>
-      <rect x="28" y="48" width="8" height="10" fill="${palette.accent}"/>
-    `;
-  } else if (genre === 'sandbox') {
-    inner = `
-      <rect x="20" y="50" width="14" height="14" fill="${palette.fg}"/>
-      <rect x="36" y="50" width="14" height="14" fill="${palette.accent}"/>
-      <rect x="52" y="50" width="14" height="14" fill="${palette.fg}"/>
-      <rect x="36" y="34" width="14" height="14" fill="${palette.accent}"/>
-      <rect x="76" y="44" width="14" height="20" fill="${palette.fg}"/>
-      <rect x="92" y="50" width="14" height="14" fill="${palette.accent}"/>
-    `;
-  }
-
-  return `
-    <div class="gp-card gp-card-genre">
-      <svg viewBox="0 0 120 90" xmlns="http://www.w3.org/2000/svg" class="gp-svg">
-        <rect width="120" height="90" fill="${palette.bg}"/>
-        ${inner}
-      </svg>
-    </div>
-  `;
-}
-
-function renderGameArtStylePreviewCard(opt) {
-  const art = opt.preview.art;
-  if (art === 'voxel') {
-    return `<div class="gp-card gp-card-art">${renderIsoScene()}</div>`;
-  }
-  if (art === 'low_poly') {
-    return `
-      <div class="gp-card gp-card-art">
-        <svg viewBox="0 0 120 90" xmlns="http://www.w3.org/2000/svg" class="gp-svg">
-          <rect width="120" height="90" fill="#a3c8e2"/>
-          <polygon points="0,90 40,60 80,80 120,55 120,90" fill="#3d7a3d"/>
-          <polygon points="40,60 70,30 100,55" fill="#6f4e37"/>
-          <polygon points="70,30 85,40 100,30 90,20" fill="#fff3d6"/>
-          <polygon points="20,80 30,68 40,80" fill="#2f5a2f"/>
-        </svg>
-      </div>
-    `;
-  }
-  if (art === 'flat') {
-    return `
-      <div class="gp-card gp-card-art">
-        <svg viewBox="0 0 120 90" xmlns="http://www.w3.org/2000/svg" class="gp-svg">
-          <rect width="120" height="90" fill="#0e1116"/>
-          <polygon points="60,20 78,55 42,55" fill="#00e5ff"/>
-          <circle cx="30" cy="68" r="10" fill="#ff4081"/>
-          <rect x="80" y="58" width="20" height="20" fill="#ffeb3b"/>
-        </svg>
-      </div>
-    `;
-  }
-  if (art === 'pixel') {
-    return `
-      <div class="gp-card gp-card-art">
-        <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg" class="gp-svg gp-pixel">
-          <rect width="16" height="12" fill="#1a1c2c"/>
-          <rect x="4" y="4" width="2" height="2" fill="#ffcd75"/>
-          <rect x="6" y="4" width="2" height="2" fill="#ef7d57"/>
-          <rect x="6" y="6" width="2" height="2" fill="#ef7d57"/>
-          <rect x="4" y="6" width="2" height="2" fill="#ef7d57"/>
-          <rect x="3" y="6" width="1" height="2" fill="#b13e53"/>
-          <rect x="8" y="6" width="1" height="2" fill="#b13e53"/>
-          <rect x="0" y="10" width="16" height="2" fill="#38b764"/>
-          <rect x="12" y="2" width="2" height="2" fill="#73eff7"/>
-        </svg>
-      </div>
-    `;
-  }
-  if (art === 'wireframe') {
-    return `
-      <div class="gp-card gp-card-art">
-        <svg viewBox="0 0 120 90" xmlns="http://www.w3.org/2000/svg" class="gp-svg">
-          <rect width="120" height="90" fill="#000"/>
-          <g stroke="#00ff66" stroke-width="1" fill="none">
-            <polygon points="60,20 90,40 90,70 60,80 30,70 30,40"/>
-            <line x1="60" y1="20" x2="60" y2="80"/>
-            <line x1="30" y1="40" x2="90" y2="70"/>
-            <line x1="90" y1="40" x2="30" y2="70"/>
-          </g>
-        </svg>
-      </div>
-    `;
-  }
-  return `<div class="pref-preview-fallback">${escapeHtml(opt.label)}</div>`;
-}
-
-function renderGameControlsPreviewCard(opt) {
-  const scheme = opt.preview.scheme;
-  let inner = '';
-  if (scheme === 'touch') {
-    inner = `
-      <circle cx="40" cy="50" r="14" fill="rgba(255,255,255,0.10)" stroke="rgba(255,255,255,0.5)" stroke-width="1"/>
-      <circle cx="40" cy="50" r="6" fill="#ffffff"/>
-      <circle cx="86" cy="38" r="10" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.3)"/>
-      <circle cx="86" cy="60" r="10" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.3)"/>
-    `;
-  } else if (scheme === 'swipe') {
-    inner = `
-      <circle cx="40" cy="55" r="6" fill="#ffffff"/>
-      <path d="M40 55 L92 30" stroke="#00e5ff" stroke-width="2" fill="none" stroke-linecap="round"/>
-      <polygon points="92,30 86,30 90,36" fill="#00e5ff"/>
-      <path d="M40 55 L40 80" stroke="rgba(0,229,255,0.4)" stroke-width="2" stroke-dasharray="3 3"/>
-    `;
-  } else if (scheme === 'dpad') {
-    inner = `
-      <rect x="22" y="44" width="14" height="14" rx="3" fill="rgba(255,255,255,0.18)"/>
-      <rect x="38" y="28" width="14" height="14" rx="3" fill="rgba(255,255,255,0.18)"/>
-      <rect x="38" y="60" width="14" height="14" rx="3" fill="rgba(255,255,255,0.18)"/>
-      <rect x="54" y="44" width="14" height="14" rx="3" fill="rgba(255,255,255,0.18)"/>
-      <circle cx="92" cy="55" r="12" fill="#ff4081"/>
-    `;
-  } else if (scheme === 'tilt') {
-    inner = `
-      <g transform="translate(60 50) rotate(-12) translate(-30 -20)">
-        <rect x="0" y="0" width="60" height="40" rx="6" fill="rgba(255,255,255,0.15)" stroke="rgba(255,255,255,0.4)"/>
-        <circle cx="30" cy="20" r="4" fill="#00e5ff"/>
-      </g>
-      <path d="M30 75 Q60 85 90 75" stroke="rgba(255,255,255,0.4)" stroke-width="1" fill="none"/>
-    `;
-  }
-  return `
-    <div class="gp-card gp-card-controls">
-      <svg viewBox="0 0 120 90" xmlns="http://www.w3.org/2000/svg" class="gp-svg">
-        <rect width="120" height="90" fill="#1a1a2e"/>
-        ${inner}
-      </svg>
-    </div>
-  `;
-}
-
-// Each preview is a tiny, fully-rendered phone mockup so the option's
-// look — fonts, palette, geometry, motion — is on display, not described.
-// All variables come straight from the catalog spec so there's a single
-// source of truth.
-
-function styleCssVars(p) {
-  return `
-    --pp-bg:${p.bg};
-    --pp-surface:${p.surface};
-    --pp-text:${p.text};
-    --pp-muted:${p.textMuted};
-    --pp-primary:${p.primary};
-    --pp-primary-text:${p.primaryText};
-    --pp-accent:${p.accent};
-    --pp-border:${p.border};
-    --pp-radius:${p.radius}px;
-    --pp-shadow:${p.shadow};
-    --pp-display:'${p.displayFont}', system-ui, sans-serif;
-    --pp-body:'${p.bodyFont}', system-ui, sans-serif;
-  `;
-}
-
-function renderStylePreviewCard(opt) {
-  const p = opt.preview;
-  const previewByStyle = {
-    basic: stylePreviewGeneric(p, opt.label),
-    neon: stylePreviewNeon(p, opt.label),
-    crypto: stylePreviewCrypto(p, opt.label),
-    minimal: stylePreviewMinimal(p, opt.label),
-    playful: stylePreviewPlayful(p, opt.label),
-    nature: stylePreviewNature(p, opt.label),
-    corporate: stylePreviewCorporate(p, opt.label),
-    paper: stylePreviewPaper(p, opt.label),
-    aurora: stylePreviewAurora(p, opt.label),
-    brutalist: stylePreviewBrutalist(p, opt.label),
-    liquid: stylePreviewLiquid(p, opt.label),
-    titanium: stylePreviewTitanium(p, opt.label),
-    signal: stylePreviewSignal(p, opt.label),
-    holo: stylePreviewHolo(p, opt.label),
-  };
-  return `<div class="pp pp-style" data-style="${opt.id}" style="${styleCssVars(p)}">${previewByStyle[opt.id] || stylePreviewGeneric(p, opt.label)}</div>`;
-}
-
-function ppNotch() {
-  return `<div class="pp-notch"></div>`;
-}
-
-function stylePreviewGeneric(p, label) {
-  return `
-    ${ppNotch()}
-    <div class="pp-screen">
-      <div class="pp-h">
-        <span class="pp-h-title">${escapeHtml(label)}</span>
-        <span class="pp-h-icon"></span>
-      </div>
-      <div class="pp-card pp-card-hero">
-        <div class="pp-card-eyebrow">Balance</div>
-        <div class="pp-card-amount">$12,480</div>
-      </div>
-      <div class="pp-row">
-        <div class="pp-row-dot"></div>
-        <div class="pp-row-lines"><i></i><i class="short"></i></div>
-      </div>
-      <div class="pp-cta">Continue</div>
-      <div class="pp-tabs">
-        <span></span><span></span><span class="on"></span><span></span>
-      </div>
-    </div>
-  `;
-}
-
-function stylePreviewNeon(p, label) {
-  return `
-    ${ppNotch()}
-    <div class="pp-screen pp-glass">
-      <div class="pp-glow"></div>
-      <div class="pp-h">
-        <span class="pp-h-title">${escapeHtml(label.toUpperCase())}</span>
-        <span class="pp-h-icon"></span>
-      </div>
-      <div class="pp-card pp-card-hero pp-card-glow">
-        <div class="pp-card-eyebrow">PORTFOLIO</div>
-        <div class="pp-card-amount">$24.8K</div>
-        <div class="pp-spark"></div>
-      </div>
-      <div class="pp-cta pp-cta-glow">LAUNCH</div>
-      <div class="pp-tabs">
-        <span></span><span class="on"></span><span></span><span></span>
-      </div>
-    </div>
-  `;
-}
-
-function stylePreviewCrypto(p, label) {
-  return `
-    ${ppNotch()}
-    <div class="pp-screen">
-      <div class="pp-h">
-        <span class="pp-h-title">${escapeHtml(label)}</span>
-        <span class="pp-h-pill">+2.4%</span>
-      </div>
-      <div class="pp-card pp-card-hero">
-        <div class="pp-card-eyebrow">USDT · TON</div>
-        <div class="pp-card-amount pp-mono">$8,124.50</div>
-      </div>
-      <div class="pp-row pp-row-mono">
-        <span class="pp-mono">0x9f...4e</span>
-        <span class="pp-mono pp-up">+0.42</span>
-      </div>
-      <div class="pp-row pp-row-mono">
-        <span class="pp-mono">0xab...19</span>
-        <span class="pp-mono pp-down">-0.18</span>
-      </div>
-      <div class="pp-cta">Trade</div>
-    </div>
-  `;
-}
-
-function stylePreviewMinimal(p, label) {
-  return `
-    ${ppNotch()}
-    <div class="pp-screen">
-      <div class="pp-h pp-h-thin">
-        <span class="pp-h-overline">EDITORIAL</span>
-      </div>
-      <div class="pp-card pp-card-hero pp-card-flat">
-        <div class="pp-card-amount pp-serif">${escapeHtml(label)}</div>
-        <div class="pp-card-eyebrow">Quiet, considered, calm.</div>
-      </div>
-      <div class="pp-rule"></div>
-      <div class="pp-row pp-row-flat"><i></i><i class="short"></i></div>
-      <div class="pp-cta pp-cta-square">Read</div>
-    </div>
-  `;
-}
-
-function stylePreviewPlayful(p, label) {
-  return `
-    ${ppNotch()}
-    <div class="pp-screen">
-      <div class="pp-h">
-        <span class="pp-h-emoji">✨</span>
-        <span class="pp-h-title">${escapeHtml(label)}</span>
-      </div>
-      <div class="pp-card pp-card-hero pp-card-gradient">
-        <div class="pp-card-eyebrow">Streak</div>
-        <div class="pp-card-amount">7 🔥</div>
-      </div>
-      <div class="pp-cta pp-cta-pill">Let's go!</div>
-      <div class="pp-tabs">
-        <span class="on"></span><span></span><span></span><span></span>
-      </div>
-    </div>
-  `;
-}
-
-function stylePreviewNature(p, label) {
-  return `
-    ${ppNotch()}
-    <div class="pp-screen pp-nature">
-      <div class="pp-h pp-h-nature">
-        <span class="pp-h-emoji">🌿</span>
-        <span class="pp-h-title">Eco</span>
-      </div>
-      <div class="pp-nature-hero">
-        <div class="pp-nature-hero-num">247</div>
-        <div class="pp-nature-hero-lbl">kg CO₂<br/>saved</div>
-      </div>
-      <div class="pp-nature-row"><span class="pp-nature-dot"></span><span>Transport</span><span class="pp-nature-val">−84</span></div>
-      <div class="pp-nature-row"><span class="pp-nature-dot"></span><span>Food</span><span class="pp-nature-val">−112</span></div>
-      <div class="pp-cta pp-cta-pill">Log impact</div>
-    </div>
-  `;
-}
-
-function stylePreviewCorporate(p, label) {
-  return `
-    ${ppNotch()}
-    <div class="pp-screen pp-corp">
-      <div class="pp-corp-h">
-        <div class="pp-corp-logo">AF</div>
-        <span class="pp-corp-title">Analytics</span>
-      </div>
-      <div class="pp-corp-section">OVERVIEW · Q2</div>
-      <div class="pp-corp-kpis">
-        <div class="pp-corp-kpi"><b>$48K</b><span>Revenue</span><i>▲ 12%</i></div>
-        <div class="pp-corp-kpi"><b>1,284</b><span>Users</span><i>▲ 8%</i></div>
-        <div class="pp-corp-kpi"><b>94%</b><span>Retention</span><i>▲ 3%</i></div>
-      </div>
-      <div class="pp-corp-list">
-        <div class="pp-corp-li">Invoice #4821<span class="pp-corp-badge">Pending</span></div>
-        <div class="pp-corp-li">Report exported<span class="pp-corp-badge">PDF</span></div>
-      </div>
-      <div class="pp-cta pp-cta-square">Export Report</div>
-    </div>
-  `;
-}
-
-function stylePreviewPaper(p, label) {
-  return `
-    ${ppNotch()}
-    <div class="pp-screen pp-paper">
-      <div class="pp-paper-noise"></div>
-      <div class="pp-paper-h">
-        <div>
-          <div class="pp-paper-issue">Invoice · #0042</div>
-          <div class="pp-paper-title">Order<br/>Summary</div>
-        </div>
-        <div class="pp-paper-stamp">Confirmed</div>
-      </div>
-      <div class="pp-paper-item"><span>Pro Plan</span><span class="pp-paper-price">$29.00</span></div>
-      <div class="pp-paper-item"><span>Workspace ×3</span><span class="pp-paper-price">$9.00</span></div>
-      <div class="pp-paper-item"><span>API Access</span><span class="pp-paper-price">$12.00</span></div>
-      <div class="pp-paper-total"><span>Total</span><span>$50.00</span></div>
-      <div class="pp-cta pp-cta-square">Pay Now</div>
-      <div class="pp-paper-bar">||||||  042-2025  ||||||</div>
-    </div>
-  `;
-}
-
-function stylePreviewAurora(p, label) {
-  return `
-    ${ppNotch()}
-    <div class="pp-screen pp-aurora">
-      <div class="pp-aurora-bg"></div>
-      <div class="pp-h">
-        <span class="pp-aurora-dot"></span>
-        <span class="pp-h-title">Pulse</span>
-        <span class="pp-aurora-badge">Live</span>
-      </div>
-      <div class="pp-card pp-card-hero pp-aurora-glass">
-        <div class="pp-card-eyebrow">EARNINGS</div>
-        <div class="pp-card-amount pp-aurora-grad">$12,480</div>
-        <div class="pp-card-sub">↑ 24% vs last month</div>
-      </div>
-      <div class="pp-aurora-mini">
-        <div class="pp-aurora-mini-c"><b>2,841</b><span>Users</span></div>
-        <div class="pp-aurora-mini-c"><b>48K</b><span>Sessions</span></div>
-        <div class="pp-aurora-mini-c"><b>1.4%</b><span>Churn</span></div>
-      </div>
-      <div class="pp-cta pp-aurora-cta">View Analytics</div>
-    </div>
-  `;
-}
-
-function stylePreviewBrutalist(p, label) {
-  return `
-    ${ppNotch()}
-    <div class="pp-screen pp-brut">
-      <div class="pp-brut-h">
-        <span class="pp-brut-title">APPS<i>.</i>FATHER</span>
-        <span class="pp-brut-num">#042</span>
-      </div>
-      <div class="pp-brut-ticker">BTC ▲2.4 · ETH ▼0.8 · SOL ▲11</div>
-      <div class="pp-brut-big">$48K</div>
-      <div class="pp-brut-big-lbl">MONTHLY REVENUE</div>
-      <div class="pp-brut-grid">
-        <div class="pp-brut-cell"><b>1,284</b><span>USERS</span></div>
-        <div class="pp-brut-cell pp-brut-hl"><b>94%</b><span>RETENTION</span></div>
-        <div class="pp-brut-cell"><b>+31%</b><span>GROWTH</span></div>
-        <div class="pp-brut-cell"><b>12ms</b><span>RESPONSE</span></div>
-      </div>
-      <div class="pp-cta pp-brut-cta">→ CONNECT NOW</div>
-    </div>
-  `;
-}
-
-function stylePreviewLiquid(p, label) {
-  return `
-    ${ppNotch()}
-    <div class="pp-screen pp-liq">
-      <div class="pp-liq-blob pp-liq-blob-1"></div>
-      <div class="pp-liq-blob pp-liq-blob-2"></div>
-      <div class="pp-h">
-        <span class="pp-h-title">Hydra</span>
-        <span class="pp-liq-tag">Live sync</span>
-      </div>
-      <div class="pp-liq-ring">
-        <div class="pp-liq-ring-inner">
-          <b>84%</b>
-          <span>HEALTH</span>
-        </div>
-      </div>
-      <div class="pp-liq-pills">
-        <span class="pp-liq-pill on">Network</span>
-        <span class="pp-liq-pill">Storage</span>
-        <span class="pp-liq-pill">Memory</span>
-      </div>
-      <div class="pp-cta pp-liq-cta">View Dashboard</div>
-    </div>
-  `;
-}
-
-function stylePreviewTitanium(p, label) {
-  return `
-    ${ppNotch()}
-    <div class="pp-screen pp-mag">
-      <div class="pp-mag-metal"></div>
-      <div class="pp-h">
-        <span class="pp-mag-icon"><i></i></span>
-        <span class="pp-h-title">Titanium</span>
-        <span class="pp-mag-live"><i></i>LIVE</span>
-      </div>
-      <div class="pp-mag-hero">
-        <div class="pp-card-eyebrow">TOTAL BALANCE</div>
-        <div class="pp-mag-amount">$284,500</div>
-        <div class="pp-mag-change">↑ $3,200 today · +1.14%</div>
-      </div>
-      <div class="pp-mag-divider"></div>
-      <div class="pp-mag-stats">
-        <div><b>14.2%</b><span>YTD</span></div>
-        <div><b>$2.1K</b><span>Dividends</span></div>
-        <div><b>0.82</b><span>Beta</span></div>
-      </div>
-      <div class="pp-cta pp-mag-cta">View Portfolio</div>
-    </div>
-  `;
-}
-
-function stylePreviewSignal(p, label) {
-  return `
-    ${ppNotch()}
-    <div class="pp-screen pp-sig">
-      <div class="pp-sig-scan"></div>
-      <div class="pp-sig-h">
-        <span class="pp-sig-prompt">root@af:~$</span>
-        <span class="pp-sig-clock">14:32</span>
-      </div>
-      <div class="pp-sig-line"><i>→</i> fetch --stats revenue</div>
-      <div class="pp-sig-big">
-        <b>$48,200</b>
-        <span>MONTHLY REVENUE</span>
-      </div>
-      <div class="pp-sig-line"><i>→</i> ping nodes --all</div>
-      <div class="pp-sig-line">  node-01 <em class="pp-sig-ok">OK</em> <i>3ms</i></div>
-      <div class="pp-sig-line">  node-02 <em class="pp-sig-ok">OK</em> <i>7ms</i></div>
-      <div class="pp-sig-line">  node-03 <em class="pp-sig-warn">WARN</em> <i>142ms</i></div>
-      <div class="pp-sig-bar"><div class="pp-sig-bar-fill" style="width:78%"></div></div>
-      <div class="pp-sig-cur"><i>→</i><span class="pp-sig-cursor"></span></div>
-    </div>
-  `;
-}
-
-function stylePreviewHolo(p, label) {
-  return `
-    ${ppNotch()}
-    <div class="pp-screen pp-holo">
-      <div class="pp-holo-grid"></div>
-      <div class="pp-holo-glow"></div>
-      <div class="pp-h pp-holo-h">
-        <span class="pp-holo-hex"><i></i></span>
-        <span class="pp-h-title">Nexus · Core</span>
-        <span class="pp-holo-corner"><i></i><i></i><i></i></span>
-      </div>
-      <div class="pp-card pp-holo-3d">
-        <div class="pp-card-eyebrow">NETWORK VALUE</div>
-        <div class="pp-card-amount pp-holo-grad">$2.48M</div>
-        <div class="pp-card-sub">↑ 24.8% · 2,841 nodes</div>
-      </div>
-      <div class="pp-holo-mini">
-        <div><b>14.2%</b><span>APY</span></div>
-        <div><b>99.98%</b><span>Uptime</span></div>
-        <div><b>3ms</b><span>Latency</span></div>
-      </div>
-      <div class="pp-holo-scan"></div>
-      <div class="pp-cta pp-holo-cta">Access Dashboard</div>
-    </div>
-  `;
-}
-
-function renderThemePreviewCard(opt) {
-  const mode = opt.preview.mode;
-  return `
-    <div class="pp pp-theme" data-mode="${mode}">
-      ${ppNotch()}
-      <div class="pp-theme-grid">
-        <div class="pp-theme-half pp-theme-light">
-          <div class="pp-theme-h"></div>
-          <div class="pp-theme-card"></div>
-          <div class="pp-theme-card sm"></div>
-          <div class="pp-theme-tag">Light</div>
-        </div>
-        <div class="pp-theme-half pp-theme-dark">
-          <div class="pp-theme-h"></div>
-          <div class="pp-theme-card"></div>
-          <div class="pp-theme-card sm"></div>
-          <div class="pp-theme-tag">Dark</div>
-        </div>
-      </div>
-      ${mode === 'auto' ? '<div class="pp-theme-auto-badge">AUTO</div>' : ''}
-    </div>
-  `;
-}
-
-function renderHeaderPreviewCard(opt) {
-  const layout = opt.preview.layout;
-  let header = '';
-  if (layout === 'minimal') {
-    header = `
-      <div class="pp-h pp-h-thin">
-        <span class="pp-h-title">Inbox</span>
-        <span class="pp-h-icon-sm"></span>
-      </div>
-    `;
-  } else if (layout === 'branded') {
-    header = `
-      <div class="pp-h pp-h-branded">
-        <span class="pp-h-logo"></span>
-        <span class="pp-h-title">App</span>
-        <span class="pp-h-icon"></span>
-      </div>
-    `;
-  } else {
-    header = `
-      <div class="pp-h-large">
-        <span class="pp-h-overline">SECTION</span>
-        <span class="pp-h-bigtitle">Discover</span>
-      </div>
-    `;
-  }
-  return `
-    <div class="pp pp-header">
-      ${ppNotch()}
-      <div class="pp-screen">
-        ${header}
-        <div class="pp-card pp-card-flat"><i></i><i class="short"></i></div>
-        <div class="pp-card pp-card-flat"><i></i><i class="short"></i></div>
-      </div>
-    </div>
-  `;
-}
-
-function renderDensityPreviewCard(opt) {
-  const isCompact = opt.id === 'compact';
-  const rows = isCompact ? 6 : 3;
-  let body = '';
-  for (let i = 0; i < rows; i++) {
-    body += `
-      <div class="pp-d-row ${isCompact ? 'compact' : 'comfy'}">
-        <div class="pp-d-avatar"></div>
-        <div class="pp-d-text"><i></i><i class="short"></i></div>
-      </div>
-    `;
-  }
-  return `
-    <div class="pp pp-density" data-density="${opt.id}">
-      ${ppNotch()}
-      <div class="pp-screen">
-        <div class="pp-h pp-h-thin"><span class="pp-h-title">${isCompact ? 'Compact' : 'Comfortable'}</span></div>
-        <div class="pp-d-list">${body}</div>
-      </div>
-    </div>
-  `;
-}
-
-function renderBottomMenuPreviewCard(opt) {
-  const layout = opt.preview.layout;
-  const renderers = {
-    tabbar: navPreviewFlat,
-    tabbar_pill: navPreviewPill,
-    tabbar_glass: navPreviewGlass,
-    tabbar_fab: navPreviewFab,
-    floating_cta: navPreviewFloatingCta,
-    action_grid: navPreviewActionGrid,
-    none: navPreviewNone,
-  };
-  const renderer = renderers[layout] || navPreviewFlat;
-  return `
-    <div class="pp pp-nav-card" data-nav="${layout}">
-      ${ppNotch()}
-      ${renderer()}
-    </div>
-  `;
-}
-
-// ── small SVG primitives reused across the nav previews ─────────────
-const NAV_ICONS = {
-  home: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3 3 10v11h6v-7h6v7h6V10z"/></svg>',
-  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>',
-  heart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8z"/></svg>',
-  user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a8 8 0 0 1 16 0v1"/></svg>',
-  compass: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></svg>',
-  bolt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>',
-  library: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
-  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
-};
-
-function navStatusBar() {
-  return `
-    <div class="pp-nav-status">
-      <span>9:41</span>
-      <span class="pp-nav-status-icons">
-        <svg width="10" height="6" viewBox="0 0 12 8"><path d="M1 7 L6 2 L11 7" stroke="currentColor" stroke-width="1.3" fill="none"/></svg>
-        <svg width="12" height="6" viewBox="0 0 14 8"><rect x="0.5" y="0.5" width="11" height="7" rx="1.5" stroke="currentColor" fill="none"/><rect x="2" y="2" width="8" height="4" fill="currentColor"/></svg>
-      </span>
-    </div>
-  `;
-}
-
-function navListRow(avatarBg, w1, w2) {
-  const bg = avatarBg || 'linear-gradient(135deg,#3a3a40,#24242a)';
-  return `
-    <div class="pp-nav-row">
-      <div class="pp-nav-avatar" style="background:${bg};"></div>
-      <div class="pp-nav-lines">
-        <div class="pp-nav-line" style="width:${w1}%"></div>
-        <div class="pp-nav-line short" style="width:${w2}%"></div>
-      </div>
-    </div>
-  `;
-}
-
-function navHomeIndicator() {
-  return `<div class="pp-nav-home-ind"></div>`;
-}
-
-// ── 1. Flat tab bar ─────────────────────────────────────────────────
-function navPreviewFlat() {
-  return `
-    <div class="pp-nav-screen pp-nav-screen-flat">
-      ${navStatusBar()}
-      <div class="pp-nav-header">
-        <span class="pp-nav-title pp-nav-title-serif">Messages</span>
-        <span class="pp-nav-icon-btn">${NAV_ICONS.search}</span>
-      </div>
-      <div class="pp-nav-body">
-        ${navListRow('linear-gradient(135deg,#4da2ff,#2d6bc7)', 60, 80)}
-        ${navListRow('linear-gradient(135deg,#ff8aa8,#c7506e)', 45, 60)}
-        ${navListRow('linear-gradient(135deg,#8affa0,#3cc768)', 60, 45)}
-        ${navListRow(null, 80, 45)}
-      </div>
-      <nav class="pp-nav-flat">
-        <div class="pp-nav-flat-item on" style="color:#4da2ff;">
-          <span class="pp-nav-flat-ico">${NAV_ICONS.home}</span>
-          <span class="pp-nav-flat-lbl">Chats</span>
-        </div>
-        <div class="pp-nav-flat-item">
-          <span class="pp-nav-flat-ico">${NAV_ICONS.search}</span>
-          <span class="pp-nav-flat-lbl">Search</span>
-        </div>
-        <div class="pp-nav-flat-item">
-          <span class="pp-nav-flat-ico">${NAV_ICONS.compass}</span>
-          <span class="pp-nav-flat-lbl">Discover</span>
-        </div>
-        <div class="pp-nav-flat-item">
-          <span class="pp-nav-flat-ico">${NAV_ICONS.bolt}</span>
-          <span class="pp-nav-flat-lbl">Activity</span>
-        </div>
-        <div class="pp-nav-flat-item">
-          <span class="pp-nav-flat-ico">${NAV_ICONS.user}</span>
-          <span class="pp-nav-flat-lbl">Me</span>
-        </div>
-      </nav>
-      ${navHomeIndicator()}
-    </div>
-  `;
-}
-
-// ── 2. Floating pill ────────────────────────────────────────────────
-function navPreviewPill() {
-  return `
-    <div class="pp-nav-screen pp-nav-screen-pill">
-      ${navStatusBar()}
-      <div class="pp-nav-header">
-        <span class="pp-nav-title pp-nav-title-sans">Library</span>
-        <span class="pp-nav-icon-btn pp-nav-icon-btn-purple">${NAV_ICONS.plus}</span>
-      </div>
-      <div class="pp-nav-body pp-nav-body-tight">
-        <div class="pp-nav-tile-grid">
-          <div class="pp-nav-tile" style="background:linear-gradient(135deg,#ff8aa8,#b784ff);"></div>
-          <div class="pp-nav-tile" style="background:linear-gradient(135deg,#6ae3ff,#b784ff);"></div>
-          <div class="pp-nav-tile" style="background:linear-gradient(135deg,#ffb347,#ff6b8a);"></div>
-          <div class="pp-nav-tile" style="background:linear-gradient(135deg,#8aff9e,#6ae3ff);"></div>
-        </div>
-      </div>
-      <nav class="pp-nav-pill">
-        <div class="pp-nav-pill-item on">${NAV_ICONS.home}</div>
-        <div class="pp-nav-pill-item">${NAV_ICONS.search}</div>
-        <div class="pp-nav-pill-item">${NAV_ICONS.library}</div>
-        <div class="pp-nav-pill-item">${NAV_ICONS.user}</div>
-      </nav>
-      ${navHomeIndicator()}
-    </div>
-  `;
-}
-
-// ── 3. Liquid glass ─────────────────────────────────────────────────
-function navPreviewGlass() {
-  return `
-    <div class="pp-nav-screen pp-nav-screen-glass">
-      <div class="pp-nav-glass-blobs"></div>
-      ${navStatusBar()}
-      <div class="pp-nav-header">
-        <span class="pp-nav-title pp-nav-title-serif" style="color:#fff;">Moments</span>
-        <span class="pp-nav-icon-btn pp-nav-icon-btn-glass">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
-        </span>
-      </div>
-      <div class="pp-nav-body pp-nav-body-tight">
-        <div class="pp-nav-tile-grid">
-          <div class="pp-nav-glass-tile"></div>
-          <div class="pp-nav-glass-tile"></div>
-          <div class="pp-nav-glass-tile"></div>
-          <div class="pp-nav-glass-tile"></div>
-        </div>
-      </div>
-      <nav class="pp-nav-glass">
-        <span class="pp-nav-glass-shine"></span>
-        <div class="pp-nav-glass-item on">${NAV_ICONS.home}</div>
-        <div class="pp-nav-glass-item">${NAV_ICONS.search}</div>
-        <div class="pp-nav-glass-item">${NAV_ICONS.heart}</div>
-        <div class="pp-nav-glass-item">${NAV_ICONS.user}</div>
-      </nav>
-      ${navHomeIndicator()}
-    </div>
-  `;
-}
-
-// ── 4. Flat + center FAB ────────────────────────────────────────────
-function navPreviewFab() {
-  return `
-    <div class="pp-nav-screen pp-nav-screen-flat">
-      ${navStatusBar()}
-      <div class="pp-nav-header">
-        <span class="pp-nav-title pp-nav-title-sans">Feed</span>
-        <span class="pp-nav-icon-btn pp-nav-icon-btn-pink">${NAV_ICONS.heart}</span>
-      </div>
-      <div class="pp-nav-body">
-        <div class="pp-nav-feed-card">
-          <div class="pp-nav-feed-head">
-            <span class="pp-nav-avatar small" style="background:linear-gradient(135deg,#ff7a7a,#ff4e8a);"></span>
-            <span class="pp-nav-line short" style="width:45%;"></span>
-          </div>
-          <span class="pp-nav-line" style="width:80%;"></span>
-          <span class="pp-nav-line" style="width:60%;"></span>
-        </div>
-        <div class="pp-nav-feed-card">
-          <div class="pp-nav-feed-head">
-            <span class="pp-nav-avatar small" style="background:linear-gradient(135deg,#8affa0,#3cc768);"></span>
-            <span class="pp-nav-line short" style="width:45%;"></span>
-          </div>
-          <span class="pp-nav-line" style="width:80%;"></span>
-          <span class="pp-nav-line" style="width:45%;"></span>
-        </div>
-      </div>
-      <nav class="pp-nav-fab-bar">
-        <div class="pp-nav-flat-item on" style="color:#ff6b8a;">
-          <span class="pp-nav-flat-ico">${NAV_ICONS.home}</span>
-          <span class="pp-nav-flat-lbl">Home</span>
-        </div>
-        <div class="pp-nav-flat-item">
-          <span class="pp-nav-flat-ico">${NAV_ICONS.search}</span>
-          <span class="pp-nav-flat-lbl">Search</span>
-        </div>
-        <div class="pp-nav-fab-center">${NAV_ICONS.plus}</div>
-        <div class="pp-nav-flat-item">
-          <span class="pp-nav-flat-ico">${NAV_ICONS.heart}</span>
-          <span class="pp-nav-flat-lbl">Likes</span>
-        </div>
-        <div class="pp-nav-flat-item">
-          <span class="pp-nav-flat-ico">${NAV_ICONS.user}</span>
-          <span class="pp-nav-flat-lbl">Me</span>
-        </div>
-      </nav>
-      ${navHomeIndicator()}
-    </div>
-  `;
-}
-
-// ── unchanged: keep simple shapes for the existing 3 ───────────────
-function navPreviewFloatingCta() {
-  return `
-    <div class="pp-nav-screen pp-nav-screen-flat">
-      ${navStatusBar()}
-      <div class="pp-nav-header">
-        <span class="pp-nav-title pp-nav-title-serif">Notes</span>
-        <span class="pp-nav-icon-btn">${NAV_ICONS.search}</span>
-      </div>
-      <div class="pp-nav-body">
-        ${navListRow(null, 80, 45)}
-        ${navListRow(null, 60, 80)}
-        ${navListRow(null, 45, 60)}
-      </div>
-      <button class="pp-nav-fab-corner">${NAV_ICONS.plus}</button>
-      ${navHomeIndicator()}
-    </div>
-  `;
-}
-
-function navPreviewActionGrid() {
-  return `
-    <div class="pp-nav-screen pp-nav-screen-flat">
-      ${navStatusBar()}
-      <div class="pp-nav-header">
-        <span class="pp-nav-title pp-nav-title-serif">Hello</span>
-      </div>
-      <div class="pp-nav-body">
-        <div class="pp-nav-action-grid">
-          <div class="pp-nav-action-card amber"><span class="num">01</span><span class="lbl">Send</span></div>
-          <div class="pp-nav-action-card slate"><span class="num">02</span><span class="lbl">Receive</span></div>
-          <div class="pp-nav-action-card ink"><span class="num">03</span><span class="lbl">Scan</span></div>
-          <div class="pp-nav-action-card cream"><span class="num">04</span><span class="lbl">History</span></div>
-        </div>
-      </div>
-      ${navHomeIndicator()}
-    </div>
-  `;
-}
-
-function navPreviewNone() {
-  return `
-    <div class="pp-nav-screen pp-nav-screen-flat">
-      ${navStatusBar()}
-      <div class="pp-nav-header">
-        <span class="pp-nav-back">${'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>'}</span>
-        <span class="pp-nav-title pp-nav-title-serif">Scan</span>
-        <span></span>
-      </div>
-      <div class="pp-nav-single-body">
-        <div class="pp-nav-qr"></div>
-        <span class="pp-nav-single-lbl">Point at any QR</span>
-      </div>
-      ${navHomeIndicator()}
-    </div>
-  `;
-}
-
-async function submitPreferences() {
-  if (!prefModalState) return;
-  const submitBtn = document.getElementById('pref-modal-submit');
-  if (submitBtn) {
-    submitBtn.disabled = true;
-    submitBtn.classList.add('busy');
-    submitBtn.textContent = t('pref_modal_submitting');
-  }
-  try {
-    const res = await fetch(`${API_BASE}/chat/${prefModalState.projectId}/preferences`, {
-      method: 'POST',
-      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify(prefModalState.selection),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      console.error('[prefs] save failed', err);
-      if (submitBtn) {
-        submitBtn.disabled = false;
-        submitBtn.classList.remove('busy');
-        submitBtn.textContent = textBotNeedsBotFirst() ? t('pref_modal_create_bot') : t('pref_modal_submit');
-      }
-      // Game-kind paywall: 402 with kind=game means user can't afford the
-      // one-time 100 cr fee. Show explanation + open Topup so they can fix it.
-      if (res.status === 402 && err?.error === 'insufficient_credits' && err?.kind === 'game') {
-        const msg = (t('pref_game_insufficient_funds') || 'Game kind costs {required} credits. Your balance: {balance} cr.')
-          .replace('{required}', String(err.required ?? 100))
-          .replace('{balance}', String(err.balance ?? 0));
-        const goTopup = confirm(`${msg}\n\n${t('pref_topup_now') || 'Top up now?'}`);
-        if (goTopup) {
-          closePreferencesModal();
-          openTopup('list');
-        }
-        return;
-      }
-      alert(t('pref_modal_save_failed'));
-      return;
-    }
-
-    // Text Bot fork: prefs persisted, but we cannot proceed to planning
-    // until the user actually creates the Telegram bot in BotFather.
-    // Open the deep link, switch the modal into a "waiting for bot..."
-    // state, and poll for the link. Once linked, close the modal and
-    // auto-resume planning with the user's original prompt.
-    if (textBotNeedsBotFirst()) {
-      const description = prefModalState.description || '';
-      const userBubbleId = prefModalState.userBubbleId || null;
-      const projectId = prefModalState.projectId;
-      const isDev = location.hostname === 'dev.apps-father.com';
-      const fatherBot = isDev ? 'apps_father_dev_bot' : 'apps_father_bot';
-      const newbotUrl = `https://t.me/newbot/${fatherBot}/username_bot`;
-      try { tg?.openTelegramLink(newbotUrl); } catch (e) { console.warn('[prefs] openTelegramLink failed', e); }
-      enterTextBotWaitingState();
-      startLinkBotPolling(projectId, () => {
-        closePreferencesModal();
-        resumePlanningAfterBotLink({ description, userBubbleId });
-      });
-      return;
-    }
-
-    const onSaved = prefModalState.onSaved;
-    closePreferencesModal();
-    if (typeof onSaved === 'function') onSaved();
-  } catch (err) {
-    console.error('[prefs] save error', err);
-    if (submitBtn) {
-      submitBtn.disabled = false;
-      submitBtn.classList.remove('busy');
-      submitBtn.textContent = textBotNeedsBotFirst() ? t('pref_modal_create_bot') : t('pref_modal_submit');
-    }
-  }
-}
-
-/**
- * True iff the modal is on a Text Bot project AND the bot hasn't been
- * linked yet. In that case the Submit button needs to launch BotFather
- * before any planning can happen — the agent needs `db.botToken` from
- * turn 1 because there's no Mini App fallback.
- */
-function textBotNeedsBotFirst() {
-  if (!prefModalState) return false;
-  if (prefModalState.selection?.kind !== 'textBot') return false;
-  // currentProject reflects the chat's project; botUsername is set the
-  // moment managed_bot fires.
-  if (currentProject?.botUsername) return false;
-  return true;
-}
-
-/**
- * Replace the Submit button label with the spinner-style "Waiting for
- * bot..." state. The button itself stays disabled — we wait for the
- * polling callback to close the modal.
- */
-function enterTextBotWaitingState() {
-  const submitBtn = document.getElementById('pref-modal-submit');
-  if (!submitBtn) return;
-  submitBtn.disabled = true;
-  submitBtn.classList.add('busy', 'waiting-for-bot');
-  submitBtn.textContent = t('pref_modal_waiting_for_bot');
-}
-
-/**
- * Re-emit the user's original prompt into the chat pipeline. Same path
- * as if the user had just hit Send, but with `skipUserBubble` so the
- * existing optimistic bubble is reused. Triggered after the bot has been
- * linked to a Text Bot project.
- */
-function resumePlanningAfterBotLink({ description, userBubbleId }) {
-  if (!description) return;
-  // sendPlanRequest will also re-check preferences (now persisted), and
-  // since `botUsername` is now set on `currentProject`, the textBot
-  // submit path is a no-op the next time around — planning runs normally.
-  sendPlanRequest(description, {
-    skipUserBubble: !!userBubbleId,
-    skipPrefsCheck: true,
-    userBubbleId,
-  });
 }
 
 function escapeHtml(s) {
@@ -6544,12 +4756,9 @@ async function openDetail(id) {
   tokenSection.style.display = 'none';
   fetchToken(p.id);
 
-  const isTextBot = p?.preferences?.kind === 'textBot';
   let appRows = '';
   if (isLive) {
-    if (!isTextBot) {
-      appRows += menuRowAction(t('detail_test_app'), 'af-icon-test', 'open-test-preview');
-    }
+    appRows += menuRowAction(t('detail_test_app'), 'af-icon-test', 'open-test-preview');
     if (p.botUsername) {
       appRows += menuRowAction(t('detail_open_bot'), 'af-icon-open', 'open-bot');
     }
@@ -9928,14 +8137,6 @@ async function init() {
         closeTestPreview();
         return;
       }
-      // Preferences modal: BackButton always cancels — drops the optimistic
-      // user bubble and reverts the chat to the pre-prompt plan-ready state,
-      // regardless of which step we're on. (The in-modal arrow handles
-      // step-by-step back navigation.)
-      if (prefModalState) {
-        cancelPreferencesModal();
-        return;
-      }
       if (currentView === 'version-detail') {
         openVersions(currentProject.id);
       } else if (currentView === 'versions') {
@@ -10180,6 +8381,7 @@ function maybeHandleReservedStartParam() {
 }
 
 // ── Tier Selector Modal ──────────────────────────────────────────────────────
+const DEFAULT_CHROME = '#000000';
 
 function openTierModal() {
   const modal = document.getElementById('tier-modal');
@@ -10187,9 +8389,9 @@ function openTierModal() {
   renderTierCards();
   modal.classList.remove('hidden');
   modal.setAttribute('aria-hidden', 'false');
-  try { tg.setHeaderColor(PREF_MODAL_CHROME); } catch {}
-  try { tg.setBackgroundColor(PREF_MODAL_CHROME); } catch {}
-  try { if (typeof tg.setBottomBarColor === 'function') tg.setBottomBarColor(PREF_MODAL_CHROME); } catch {}
+  try { tg.setHeaderColor(DEFAULT_CHROME); } catch {}
+  try { tg.setBackgroundColor(DEFAULT_CHROME); } catch {}
+  try { if (typeof tg.setBottomBarColor === 'function') tg.setBottomBarColor(DEFAULT_CHROME); } catch {}
 }
 
 function closeTierModal() {

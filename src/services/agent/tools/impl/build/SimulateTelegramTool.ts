@@ -31,9 +31,7 @@ export class SimulateTelegramTool implements AgentTool {
     if (update.callback_query?.from) update.callback_query = { ...update.callback_query, from: { ...update.callback_query.from, id: -100 } };
 
     const captured = await botRunnerService.simulateBotWebhook(ctx.projectId, update, { deployment: "development" });
-    const requiresTelegramReply =
-      ctx.runKind === "textBot" ||
-      (ctx.runKind === "app" && Array.isArray(ctx.technicalPlan?.botBehavior) && ctx.technicalPlan.botBehavior.length > 0);
+    const requiresTelegramReply = Array.isArray(ctx.technicalPlan?.botBehavior) && ctx.technicalPlan.botBehavior.length > 0;
     const ok = !requiresTelegramReply || captured.length > 0;
 
     let result: string;

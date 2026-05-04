@@ -6,8 +6,6 @@ import fs from "fs";
 import path from "path";
 import { projectService } from "./project.service";
 import { getProjectFeatures } from "./features.service";
-import { parseProjectPreferences, buildPreferencesPrompt } from "./preferences.catalog";
-import { normalizeProjectKind } from "./agent/types";
 import { config } from "../config";
 import { PROJECTS_DIR, KNOWLEDGE_DIR } from "./agent/paths";
 import { ConventionExtractor } from "./convention-extractor";
@@ -387,13 +385,10 @@ Keep suggestions practical and specific to THIS app.${langNote}`;
 export async function session_build(
   projectId: string,
   args: { description: string; plan: string; lang?: string },
-): Promise<{ userPrompt: string; kind: string }> {
+): Promise<{ userPrompt: string }> {
   const project: any = await projectService.getProject(projectId);
   const featureGating = await buildFeatureGating(projectId);
   const langNote = langAppInstruction(args.lang);
-  const prefs = parseProjectPreferences(project?.preferences ?? null);
-  const kind = normalizeProjectKind(prefs?.kind);
-  const prefsBlock = `${buildPreferencesPrompt(prefs)}\n\n`;
   const hasBotLinked = !!project?.botUsername;
   const simTelegramNote = hasBotLinked
     ? ""
@@ -412,14 +407,9 @@ Plan:
 ${args.plan}
 ${featureGating}`;
 
-  const kindTask =
-    kind === "textBot"
-      ? `Build a new Telegram Text Bot from scratch.\n\n${baseProjectInfo}\nCreate ONLY backend/routes.js. Do not create frontend files. The bot UX happens entirely in Telegram messages, keyboards, callbacks, and /bot-webhook. Use db.get/db.set for persistence, deploy_to_dev(), test with simulate_telegram/server_logs, then finish.${simTelegramNote}${langNote}`
-    : kind === "game"
-      ? `Build a new Telegram Mini App game from scratch.\n\n${baseProjectInfo}\nCreate a single-file Three.js game in frontend/index.html. Do not create frontend/app.js, frontend/styles.css, or backend/routes.js unless the game truly needs server-side multiplayer/shared persistence. Use deploy_to_dev(), then finish.${langNote}`
-    : `Build a complete Telegram Mini App from scratch.\n\n${baseProjectInfo}\nCreate all necessary files (frontend/index.html, frontend/styles.css, frontend/app.js, backend/routes.js) and configure the bot. Database is handled via db.get/db.set in routes.js — no schema setup needed. Make it beautiful and functional. Use deploy_to_dev() to deploy and test your code via the Dev URLs. In frontend code, use /api/${projectId}/ as the API base URL (this will be rewritten to /devapi/ in dev mode automatically).${simTelegramNote}${langNote}`;
+  const userPrompt = `Build a complete Telegram Mini App from scratch.\n\n${baseProjectInfo}\nCreate all necessary files (frontend/index.html, frontend/styles.css, frontend/app.js, backend/routes.js) and configure the bot. Database is handled via db.get/db.set in routes.js — no schema setup needed. Make it beautiful and functional. Use deploy_to_dev() to deploy and test your code via the Dev URLs. In frontend code, use /api/${projectId}/ as the API base URL (this will be rewritten to /devapi/ in dev mode automatically).${simTelegramNote}${langNote}`;
 
-  return { userPrompt: `${prefsBlock}${kindTask}`, kind };
+  return { userPrompt };
 }
 
 export async function session_update(
@@ -429,7 +419,7 @@ export async function session_update(
     lang?: string;
     attachments?: { localPath: string; projectPath: string; originalName: string; caption?: string }[];
   },
-): Promise<{ userPrompt: string; kind: string }> {
+): Promise<{ userPrompt: string }> {
   const project: any = await projectService.getProject(projectId);
   const contextParts: string[] = [];
   const latestContext = loadLatestContext(projectId);
@@ -449,9 +439,6 @@ export async function session_update(
 
   const featureGating = await buildFeatureGating(projectId);
   const langNote = langAppInstruction(args.lang);
-  const prefs = parseProjectPreferences(project?.preferences ?? null);
-  const kind = normalizeProjectKind(prefs?.kind);
-  const prefsBlock = `${buildPreferencesPrompt(prefs)}\n\n`;
   const hasBotLinked = !!project?.botUsername;
   const simNote = hasBotLinked
     ? ""
@@ -474,14 +461,9 @@ ${args.updateDescription}
 ${attachmentInfo}
 ${featureGating}`;
 
-  const kindTask =
-    kind === "textBot"
-      ? `Update an existing Telegram Text Bot.\n\n${projectInfo}\nUse targeted read_file on backend/routes.js only. Do not create frontend files. Use edit_file for targeted changes. Use deploy_to_dev(), simulate_telegram/server_logs for changed flows, then finish.${simNote}${langNote}`
-    : kind === "game"
-      ? `Update an existing Telegram game.\n\n${projectInfo}\nThe game should normally be a single file in frontend/index.html. Do not create frontend/app.js, frontend/styles.css, or backend/routes.js unless the user explicitly asked for server-side functionality. Use deploy_to_dev(), then finish.${langNote}`
-    : `Update an existing Telegram Mini App.\n\n${projectInfo}\nUse grep and read_file to verify current state before making changes. Use edit_file for targeted modifications. Use deploy_to_dev(), simulate_api/server_logs for changed backend behavior, simulate_ws for changed real-time behavior, then finish.${simNote}${langNote}`;
+  const userPrompt = `Update an existing Telegram Mini App.\n\n${projectInfo}\nUse grep and read_file to verify current state before making changes. Use edit_file for targeted modifications. Use deploy_to_dev(), simulate_api/server_logs for changed backend behavior, simulate_ws for changed real-time behavior, then finish.${simNote}${langNote}`;
 
-  return { userPrompt: `${prefsBlock}${kindTask}`, kind };
+  return { userPrompt };
 }
 
 export async function session_context(

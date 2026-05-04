@@ -3,7 +3,6 @@ import fs from "fs";
 import type { AgentTool } from "../../../AgentTool";
 import type { RunContext } from "../../../RunContext";
 import { validateBackendRoutes, validateFinishReadiness } from "../../../validation";
-import type { ProjectKind } from "../../../types";
 import { commitService } from "../../../../../services/commit.service";
 import { projectService } from "../../../../../services/project.service";
 import { config } from "../../../../../config";
@@ -30,9 +29,7 @@ async function setRuntimeMenuButton(ctx: RunContext): Promise<void> {
     const project = await projectService.getProject(ctx.projectId);
     menuButtonText = ((project as any)?.appMenuButtonText || menuButtonText).toString().substring(0, 32);
   } catch {}
-  const menuButton = ctx.runKind === "textBot"
-    ? { type: "default" as const }
-    : { type: "web_app" as const, text: menuButtonText, web_app: { url: `${config.baseUrl}/app/${ctx.projectId}/` } };
+  const menuButton = { type: "web_app" as const, text: menuButtonText, web_app: { url: `${config.baseUrl}/app/${ctx.projectId}/` } };
   await fetch(`https://api.telegram.org/bot${ctx.botToken}/setChatMenuButton`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -88,7 +85,7 @@ export class FinishTool implements AgentTool {
     try { await setRuntimeMenuButton(ctx); } catch {}
 
     const readinessError = validateFinishReadiness(
-      ctx.runKind as ProjectKind, ctx.mode, ctx.technicalPlan, ctx.testsRun,
+      ctx.mode, ctx.technicalPlan, ctx.testsRun,
       ctx.deployed, ctx.testResults, ctx.wsCoverage, !!ctx.botToken,
     );
 
@@ -99,7 +96,7 @@ export class FinishTool implements AgentTool {
       return `Error: ${readinessError}`;
     }
 
-    const routeError = validateBackendRoutes(ctx.projectDir, ctx.projectId, ctx.runKind as ProjectKind, ctx.technicalPlan);
+    const routeError = validateBackendRoutes(ctx.projectDir, ctx.projectId, ctx.technicalPlan);
     ctx.validatorResults.push({ stage: "finish", ok: !routeError, message: routeError || undefined });
     if (routeError) {
       if (ctx.deployLocked) {

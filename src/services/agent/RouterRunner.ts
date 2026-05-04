@@ -10,6 +10,8 @@ export interface RouterRunnerOpts {
   ctx: RouterContext;
   /** Streamed assistant text (for "thinking" UX bubble). */
   onChunk?: (delta: string, full: string) => void;
+  /** Called when the router invokes a tool (before the result is available). */
+  onToolCall?: (toolName: string) => void;
   telegramId?: string;
   sessionId?: string;
 }
@@ -34,7 +36,7 @@ export interface RouterRunnerResult {
  */
 export class RouterRunner {
   async run(opts: RouterRunnerOpts): Promise<RouterRunnerResult> {
-    const { modelCfg, systemPrompt, tools, ctx, onChunk } = opts;
+    const { modelCfg, systemPrompt, tools, ctx, onChunk, onToolCall } = opts;
 
     const toolMap = new Map<string, RouterTool>(tools.map(t => [t.name, t]));
     const openAiTools = tools.map(t => t.definition);
@@ -105,6 +107,7 @@ export class RouterRunner {
         let argsObj: any = {};
         try { argsObj = JSON.parse(tc.function?.arguments || "{}"); } catch {}
         const tool = toolMap.get(tc.function?.name || "");
+        if (onToolCall && tc.function?.name) onToolCall(tc.function.name);
         const toolResult = tool
           ? await tool.execute(argsObj, ctx).catch(err => `Tool error: ${err.message}`)
           : `Unknown tool: ${tc.function?.name}`;

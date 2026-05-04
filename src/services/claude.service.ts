@@ -2,7 +2,6 @@ import { getOpenRouterClient } from "./openrouter.service";
 import { runtimeConfig } from "./runtime-config.service";
 import { config } from "../config";
 import { GeneratedApp, GeneratedFile } from "../types";
-import { ProjectPreferences, buildPreferencesPrompt } from "./preferences.catalog";
 
 const SYSTEM_PROMPT = `You are Apps Father AI — an expert developer that creates Telegram Mini Apps.
 
@@ -283,8 +282,6 @@ export class ClaudeService {
     description: string,
     assets?: string[],
     lang?: string,
-    prefs?: ProjectPreferences | null,
-    _legacyTierId?: string,
     onChunk?: (delta: string, full: string) => void,
   ): Promise<{
     plan: string;
@@ -293,8 +290,7 @@ export class ClaudeService {
   }> {
     const _sessionCfg = runtimeConfig.getSessionConfig("build");
     const modelCfg = { modelId: _sessionCfg.model, provider: _sessionCfg.provider, maxTokens: _sessionCfg.max_tokens };
-    const prefsBlock = prefs ? `${buildPreferencesPrompt(prefs)}\n\n` : "";
-    let prompt = `${prefsBlock}Create a plan for a Telegram Mini App based on this description:\n\n${description}`;
+    let prompt = `Create a plan for a Telegram Mini App based on this description:\n\n${description}`;
     if (assets && assets.length > 0) {
       prompt += `\n\nThe user has provided ${assets.length} image(s) as reference for the app design.`;
     }

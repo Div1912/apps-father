@@ -1183,32 +1183,6 @@
     </div>
   </div>
 
-  <!-- ═══ PREFERENCES MODAL (full-screen, blocking, step-by-step wizard) ═══ -->
-  <!-- Opens after the user's first prompt and BEFORE /plan. One question
-       per slide; tapping a card auto-advances. Last slide submits. -->
-  <div id="preferences-modal" class="pref-modal hidden" aria-hidden="true">
-    <div class="pref-modal-backdrop"></div>
-    <div class="pref-modal-sheet" role="dialog" aria-labelledby="pref-modal-title">
-      <header class="pref-modal-header">
-        <button id="pref-modal-back" class="pref-modal-back" type="button" aria-label="Back">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
-        </button>
-        <div class="pref-modal-progress" id="pref-modal-progress"></div>
-        <div class="pref-modal-step-counter" id="pref-modal-step-counter">1/5</div>
-      </header>
-      <div class="pref-modal-body">
-        <div class="pref-steps" id="pref-steps">
-          <!-- One .pref-step per category injected here -->
-        </div>
-      </div>
-      <footer class="pref-modal-footer">
-        <button id="pref-modal-submit" class="pref-modal-submit" type="button">
-          Build with these preferences
-        </button>
-      </footer>
-    </div>
-  </div>
-
   <script src="i18n.js?r=340" defer></script>
   <script src="app.js?r=340" defer></script>
   <script>

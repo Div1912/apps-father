@@ -11,9 +11,7 @@ export interface RunContextParams {
   commitDir: string;
   commitNum: number;
   mode: AgentMode;
-  runKind: string;
   botToken: string;
-  runPrefs: any;
   tierConfig: any;
   taskId: string;
   selectedWorkflow: string;
@@ -30,9 +28,7 @@ export class RunContext {
   readonly commitDir: string;
   readonly commitNum: number;
   readonly mode: AgentMode;
-  readonly runKind: string;
   readonly botToken: string;
-  readonly runPrefs: any;
   readonly tierConfig: any;
   readonly taskId: string;
   readonly selectedWorkflow: string;
@@ -88,9 +84,7 @@ export class RunContext {
     this.commitDir = params.commitDir;
     this.commitNum = params.commitNum;
     this.mode = params.mode;
-    this.runKind = params.runKind;
     this.botToken = params.botToken;
-    this.runPrefs = params.runPrefs;
     this.tierConfig = params.tierConfig;
     this.taskId = params.taskId;
     this.selectedWorkflow = params.selectedWorkflow;
@@ -190,7 +184,6 @@ export class RunContext {
           projectId: this.projectId,
           commitNum: this.commitNum,
           mode: this.mode,
-          kind: this.runKind,
           selectedWorkflow: this.selectedWorkflow,
           reason,
           loadedSkills: [...this.loadedSkills],

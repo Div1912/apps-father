@@ -3,31 +3,19 @@ import path from "path";
 import { config } from "../../config";
 import { getEnabledLessonsBlock as getAgentLessonsBlock } from "../agent-lessons.service";
 import { INSTRUCTIONS_DIR, SKILLS_DIR } from "./paths";
-import { AgentMode, ProjectKind, normalizeProjectKind } from "./types";
-
-const NEW_WORKFLOW_BY_KIND: Record<ProjectKind, string> = {
-  app: "workflow-new-app.md",
-  game: "workflow-new-game.md",
-  textBot: "workflow-new-textbot.md",
-};
-
-const UPDATE_WORKFLOW_BY_KIND: Record<ProjectKind, string> = {
-  app: "workflow-update-app.md",
-  game: "workflow-update-game.md",
-  textBot: "workflow-update-textbot.md",
-};
+import { AgentMode } from "./types";
 
 // What the agent knows depends on the build mode. Most instruction files are
 // loaded for every run; only workflow-* files are mode-specific. Order matters.
-const INSTRUCTION_MANIFEST: Array<{ file: string; modes?: AgentMode[]; kinds?: ProjectKind[] }> = [
+const INSTRUCTION_MANIFEST: Array<{ file: string; modes?: AgentMode[] }> = [
   { file: "identity.md" },
   { file: "architecture.md" },
-  { file: "frontend-rules.md", kinds: ["app"] },
-  { file: "backend-rules.md", kinds: ["app", "textBot"] },
-  { file: "database-design.md", kinds: ["app", "textBot"] },
-  { file: "routes-hot-reload.md", kinds: ["app", "textBot"] },
-  { file: "bot-webhook.md", kinds: ["app", "textBot"] },
-  { file: "technology-choice.md", kinds: ["app"] },
+  { file: "frontend-rules.md" },
+  { file: "backend-rules.md" },
+  { file: "database-design.md" },
+  { file: "routes-hot-reload.md" },
+  { file: "bot-webhook.md" },
+  { file: "technology-choice.md" },
 
   { file: "best-practices.md" },
   { file: "efficiency.md" },
@@ -36,11 +24,11 @@ const INSTRUCTION_MANIFEST: Array<{ file: string; modes?: AgentMode[]; kinds?: P
   { file: "workflow-update.md", modes: ["update"] },
   { file: "finish-tool.md" },
   { file: "telegram-api.md" },
-  { file: "bot-side-updates.md", kinds: ["app", "textBot"] },
+  { file: "bot-side-updates.md" },
   { file: "after-writing.md" },
   { file: "ask-user.md" },
   { file: "skills-index.md" },
-  { file: "frontend-design.md", kinds: ["app"] },
+  { file: "frontend-design.md" },
   { file: "server-tools.md" },
 ];
 
@@ -49,13 +37,6 @@ const instructionCache = new Map<string, string>();
 const TEMPLATE_KEYS = ["domain", "baseUrl", "wsBaseUrl", "wsScheme"] as const;
 type TemplateKey = typeof TEMPLATE_KEYS[number];
 const TEMPLATE_KEY_RE = new RegExp(`\\{(${TEMPLATE_KEYS.join("|")})\\}`, "g");
-
-export function workflowFileFor(mode: AgentMode, kind?: string | null): string {
-  const normalized = normalizeProjectKind(kind);
-  return mode === "new"
-    ? NEW_WORKFLOW_BY_KIND[normalized]
-    : UPDATE_WORKFLOW_BY_KIND[normalized];
-}
 
 export function buildTemplateVars(): Record<TemplateKey, string> {
   const baseUrl = config.baseUrl;
@@ -89,28 +70,17 @@ function loadInstruction(file: string): string {
   }
 }
 
-export async function buildSystemPrompt(mode: AgentMode, kind?: string): Promise<string> {
+export async function buildSystemPrompt(mode: AgentMode): Promise<string> {
   const parts: string[] = [];
   const missing: string[] = [];
   const vars = buildTemplateVars();
-  const normalizedKind = normalizeProjectKind(kind);
 
   for (const entry of INSTRUCTION_MANIFEST) {
     if (entry.modes && !entry.modes.includes(mode)) continue;
-    if (entry.kinds && !entry.kinds.includes(normalizedKind)) continue;
 
-    let file = entry.file;
-    if ((file === "workflow-new.md" && mode === "new") || (file === "workflow-update.md" && mode === "update")) {
-      const kindFile = workflowFileFor(mode, normalizedKind);
-      const kindContent = loadInstruction(kindFile);
-      if (kindContent) {
-        file = kindFile;
-      }
-    }
-
-    const content = loadInstruction(file);
+    const content = loadInstruction(entry.file);
     if (content) parts.push(renderTemplate(content, vars));
-    else missing.push(file);
+    else missing.push(entry.file);
   }
 
   try {
@@ -129,7 +99,7 @@ export async function buildSystemPrompt(mode: AgentMode, kind?: string): Promise
     );
   }
   if (missing.length > 0) {
-    console.warn(`[Agent] buildSystemPrompt(${mode}, kind=${kind ?? "?"}): ${missing.length} instruction file(s) missing: ${missing.join(", ")}`);
+    console.warn(`[Agent] buildSystemPrompt(${mode}): ${missing.length} instruction file(s) missing: ${missing.join(", ")}`);
   }
   return prompt;
 }

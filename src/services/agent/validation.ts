@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { AgentMode, DEFAULT_PROJECT_KIND, ProjectKind } from "./types";
+import { AgentMode } from "./types";
 
 export interface TestRunFlags {
   telegram: boolean;
@@ -141,7 +141,7 @@ export function validateWsSimulation(sim: any, plan: any): string | null {
   return null;
 }
 
-export function validateFrontendMarkup(frontendText: string, projectDir?: string, kind?: string): string[] {
+export function validateFrontendMarkup(frontendText: string, projectDir?: string): string[] {
   const errors: string[] = [];
   if (!frontendText.trim()) return errors;
 
@@ -162,7 +162,7 @@ export function validateFrontendMarkup(frontendText: string, projectDir?: string
     errors.push(`Frontend JS queries a malformed quoted selector. Use document.querySelector("#game-canvas"), not document.querySelector("#\\"game-canvas\\"").`);
   }
 
-  if (kind !== "textBot" && projectDir) {
+  if (projectDir) {
     const frontendDir = path.join(projectDir, "frontend");
     const indexPath = path.join(frontendDir, "index.html");
     if (fs.existsSync(indexPath)) {
@@ -177,9 +177,7 @@ export function validateFrontendMarkup(frontendText: string, projectDir?: string
         errors.push('frontend/index.html does not load the Telegram Mini App SDK. Add <script src="https://telegram.org/js/telegram-web-app.js"></script> in <head>. Required for Mini Apps AND Games — without it Telegram.WebApp is undefined and theme/safe-area/back-button/haptics/payments break.');
       }
     }
-  }
 
-  if (projectDir) {
     const appJsPath = path.join(projectDir, "frontend", "app.js");
     if (fs.existsSync(appJsPath)) {
       const appJsContent = fs.readFileSync(appJsPath, "utf-8");
@@ -200,7 +198,6 @@ export function validateFrontendMarkup(frontendText: string, projectDir?: string
 export function validateBackendRoutes(
   projectDir: string,
   projectId: string,
-  kind: ProjectKind = DEFAULT_PROJECT_KIND,
   technicalPlan?: any,
 ): string | null {
   const errors: string[] = [];
@@ -215,35 +212,12 @@ export function validateBackendRoutes(
     .join("\n");
   const routesText = fs.existsSync(routesPath) ? fs.readFileSync(routesPath, "utf-8") : "";
 
-  const hasFrontendFiles = dirHasFiles(frontendDir);
-  errors.push(...validateFrontendMarkup(frontendText, projectDir, kind));
+  errors.push(...validateFrontendMarkup(frontendText, projectDir));
   if (/\bprocess\s*\.\s*env\b/.test(routesText + "\n" + frontendText)) {
     errors.push("Generated app code must not read process.env. Project code cannot access platform environment variables; if a feature needs an API key or credential, call ask_user before coding or use a public no-key API.");
   }
 
-  if (kind === "textBot" && hasFrontendFiles) {
-    errors.push("Text Bot builds must not contain frontend files. Delete frontend/ files and keep only backend/routes.js.");
-  }
-  if (kind === "game") {
-    if (!fs.existsSync(frontendApp)) {
-      errors.push("Game builds require frontend/app.js. Move game logic out of index.html into app.js.");
-    }
-    if (!fs.existsSync(frontendStyles)) {
-      errors.push("Game builds require frontend/styles.css. Move inline styles out of index.html into styles.css.");
-    }
-    if (fs.existsSync(routesPath)) {
-      const gameBackend = routesText.trim();
-      const gameNeedsBackend = plannedEndpoints(technicalPlan).length > 0 || plannedWsTypes(technicalPlan).length > 0;
-      if (gameBackend.length > 0 && !gameNeedsBackend) {
-        errors.push("Game builds must not include backend/routes.js unless the game truly needs server-side multiplayer or shared persistence.");
-      }
-    }
-  }
-
   if (!fs.existsSync(routesPath)) {
-    if (kind === "textBot") {
-      errors.push("Text Bot builds must create backend/routes.js with router.post(\"/bot-webhook\", ...).");
-    }
     if (plannedEndpoints(technicalPlan).length > 0 || plannedWsTypes(technicalPlan).length > 0) {
       errors.push("Technical plan includes backend endpoints or WebSocket messages, but backend/routes.js does not exist.");
     }
@@ -285,31 +259,11 @@ export function validateBackendRoutes(
     errors.push(`backend/routes.js hardcodes /api/{projectId}. Backend routes must be relative, for example router.get('/videos', ...).`);
   }
 
-  if (kind === "textBot") {
-    if (!/router\.post\s*\(\s*["']\/bot-webhook["']/.test(content)) {
-      errors.push(`Text Bot backend must register router.post("/bot-webhook", ...).`);
-    }
-    if (/Telegram\.WebApp/.test(content + "\n" + frontendText)) {
-      errors.push("Text Bot code must not reference Telegram.WebApp because there is no Mini App frontend.");
-    }
-    if (/\b(?:setWebhook|deleteWebhook)\b/.test(content)) {
-      errors.push("Project code must not call setWebhook/deleteWebhook; the platform owns the webhook.");
-    }
-    if (/db\.[A-Za-z_$][\w$]*\s*=/.test(content)) {
-      errors.push("Text Bot state must use db.get/db.set, not direct db.property assignments.");
-    }
-    if (/state\.step\s*=/.test(content) && !/\b(?:saveState|setState)\s*\(/.test(content)) {
-      errors.push("Text Bot changes state.step but has no saveState/setState helper call.");
-    }
+  if (/\b(?:const|let|var)\s+db\s*=\s*\{[\s\S]{0,800}\bget\s*\([^)]*\)[\s\S]{0,800}\bset\s*\([^)]*\)/.test(frontendText)) {
+    errors.push("Frontend contains a fake client-side db mock. Mini App frontend must use REST/WS APIs for persisted state, not a local db object.");
   }
-
-  if (kind === "app") {
-    if (/\b(?:const|let|var)\s+db\s*=\s*\{[\s\S]{0,800}\bget\s*\([^)]*\)[\s\S]{0,800}\bset\s*\([^)]*\)/.test(frontendText)) {
-      errors.push("Frontend contains a fake client-side db mock. Mini App frontend must use REST/WS APIs for persisted state, not a local db object.");
-    }
-    if (/text\.split\s*\(\s*\/\\t\/\s*\)|text\.split\s*\(\s*["']\\t["']\s*\)/.test(content)) {
-      errors.push("Bot /start parsing splits only on tabs. Use text.split(/\\s+/) so deep-link parameters work from normal Telegram messages.");
-    }
+  if (/text\.split\s*\(\s*\/\\t\/\s*\)|text\.split\s*\(\s*["']\\t["']\s*\)/.test(content)) {
+    errors.push("Bot /start parsing splits only on tabs. Use text.split(/\\s+/) so deep-link parameters work from normal Telegram messages.");
   }
 
   const frontendUsesWs = /new\s+WebSocket\s*\(/.test(frontendText);
@@ -317,7 +271,7 @@ export function validateBackendRoutes(
   if (frontendUsesWs && !backendHasWs) {
     errors.push("Frontend opens a WebSocket, but backend/routes.js does not export module.exports.ws.");
   }
-  if (backendHasWs && kind !== "textBot") {
+  if (backendHasWs) {
     if (!frontendUsesWs) errors.push("Backend exports module.exports.ws, but frontend does not create a WebSocket client.");
     if (frontendUsesWs && !/onclose\s*=|addEventListener\(\s*["']close/.test(frontendText)) {
       errors.push("WebSocket frontend must implement reconnect/onclose handling.");
@@ -363,7 +317,6 @@ export function validateBackendRoutes(
 }
 
 export function validateFinishReadiness(
-  kind: ProjectKind,
   mode: AgentMode,
   technicalPlan: any,
   testsRun: TestRunFlags,
@@ -382,16 +335,11 @@ export function validateFinishReadiness(
   if (!deployed) {
     return "deploy_to_dev() must succeed before finish().";
   }
-  if (hasBotToken) {
-    if (kind === "textBot" && !testsRun.telegram) {
-      return `Text Bot builds must pass simulate_telegram before finish().${latestResult("simulate_telegram")}`;
-    }
-    if (kind === "app" && Array.isArray(technicalPlan?.botBehavior) && technicalPlan.botBehavior.length > 0 && !testsRun.telegram) {
-      return `App builds with planned bot behavior must pass simulate_telegram before finish().${latestResult("simulate_telegram")}`;
-    }
+  if (hasBotToken && Array.isArray(technicalPlan?.botBehavior) && technicalPlan.botBehavior.length > 0 && !testsRun.telegram) {
+    return `Builds with planned bot behavior must pass simulate_telegram before finish().${latestResult("simulate_telegram")}`;
   }
-  if (kind === "app" && plannedEndpoints(technicalPlan).length > 0 && !testsRun.api) {
-    return `App builds with planned REST endpoints must pass simulate_api before finish().${latestResult("simulate_api")}`;
+  if (plannedEndpoints(technicalPlan).length > 0 && !testsRun.api) {
+    return `Builds with planned REST endpoints must pass simulate_api before finish().${latestResult("simulate_api")}`;
   }
   if (plannedWsTypes(technicalPlan).length > 0) {
     const wsScenarioIds = plannedWsScenarioIds(technicalPlan);

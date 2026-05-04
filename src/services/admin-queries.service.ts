@@ -490,7 +490,6 @@ export async function getProjectDetail(projectId: string) {
     botUsername: p.botUsername,
     botUserId: p.botUserId ? p.botUserId.toString() : null,
     features: p.features,
-    preferences: p.preferences,
     totalCost: Number(p.totalCostUsd),
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,
@@ -508,7 +507,6 @@ export async function patchProject(
     description?: string | null;
     status?: string;
     features?: string | null;
-    preferences?: string | null;
     totalCost?: number;
   },
 ) {
@@ -517,7 +515,6 @@ export async function patchProject(
   if (body.description !== undefined) data.description = body.description || null;
   if (body.status      !== undefined) data.status = String(body.status);
   if (body.features    !== undefined) data.features    = body.features    || null;
-  if (body.preferences !== undefined) data.preferences = body.preferences || null;
   if (body.totalCost   !== undefined) {
     const n = Number(body.totalCost);
     if (!Number.isFinite(n) || n < 0) throw new Error("totalCost must be >= 0");

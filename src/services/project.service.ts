@@ -199,10 +199,6 @@ export class ProjectService {
     const appDescription = rawAppDescription ? String(rawAppDescription).substring(0, 120) : null;
     const appLongDescription = rawAppLongDescription ? String(rawAppLongDescription).substring(0, 512) : null;
     const rawMenuButtonText = ((project as any).appMenuButtonText ?? "Launch App").toString().substring(0, 32);
-    let isTextBot = false;
-    try {
-      isTextBot = JSON.parse((project as any).preferences || "{}")?.kind === "textBot";
-    } catch {}
 
     const appUrl = `${config.baseUrl}/app/${projectId}/`;
     const base = `https://api.telegram.org/bot${token}`;
@@ -215,7 +211,7 @@ export class ProjectService {
       return { method, status: resp.status, body: await resp.text() };
     };
 
-    const menuButtonPayload = isTextBot || rawMenuButtonText === ""
+    const menuButtonPayload = rawMenuButtonText === ""
       ? { menu_button: { type: "default" as const } }
       : { menu_button: { type: "web_app" as const, text: rawMenuButtonText, web_app: { url: appUrl } } };
     const calls: Array<Promise<{ method: string; status: number; body: string }>> = [
