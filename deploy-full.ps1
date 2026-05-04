@@ -31,6 +31,7 @@ npx tsc --project tsconfig.json
 if ($LASTEXITCODE -ne 0) { Write-Host "Build failed!" -ForegroundColor Red; exit 1 }
 # Copy non-TS assets that tsc doesn't handle
 Copy-Item "src/web/routes/af-devtools.js" "dist/web/routes/af-devtools.js" -Force
+Copy-Item "src/web/routes/af-sdk.js"      "dist/web/routes/af-sdk.js"      -Force
 Write-Host "Build OK" -ForegroundColor Green
 
 # ── Upload dist ───────────────────────────────────────────
@@ -46,6 +47,8 @@ scp -r mini_app/* "${SERVER}:${APP_DIR}/mini_app/"
 Write-Host "Mini App OK" -ForegroundColor Green
 
 # ── Landing ───────────────────────────────────────────────
+# Keep af-sdk.js in sync (source lives in src/web/routes/, served from landing/)
+Copy-Item "src\web\routes\af-sdk.js" "landing\af-sdk.js" -Force
 Write-Host "=== [$ENV_NAME] Uploading landing ===" -ForegroundColor $COLOR
 ssh $SERVER "mkdir -p ${APP_DIR}/landing/samples"
 scp -r landing/* "${SERVER}:${APP_DIR}/landing/"

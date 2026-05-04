@@ -192,6 +192,9 @@ function showStopButton() {
   }
   const chatView = document.getElementById('view-chat');
   if (chatView) chatView.classList.add('is-processing');
+  // Fade in processing video (display:none → block needs a frame before opacity transition)
+  const vid = document.getElementById('processing-video');
+  if (vid) { vid.style.display = 'block'; requestAnimationFrame(() => { vid.style.opacity = '1'; }); }
 }
 
 function hideStopButton() {
@@ -200,6 +203,9 @@ function hideStopButton() {
   }
   const chatView = document.getElementById('view-chat');
   if (chatView) chatView.classList.remove('is-processing');
+  // Fade out processing video
+  const vid = document.getElementById('processing-video');
+  if (vid) { vid.style.opacity = '0'; setTimeout(() => { vid.style.display = 'none'; }, 400); }
 }
 
 function setProcessing(active) {
@@ -694,8 +700,6 @@ let topupReturnView = null;
 let featuresReturnView = null;
 let userBalance = 0;
 let userCredits = 0;
-let userTierId = 'tier_1';        // current effective tier (may be per-project)
-let accountTierId = 'tier_1';    // account-level default (from DB, never changed by chat selection)
 let userTierData = null;
 let allTiers = [];
 const projectTierMap = {};        // { [projectId]: tierId } — per-chat overrides
@@ -1913,6 +1917,8 @@ function openChat(projectId) {
 function enterPlanningMode(active) {
   isPlanningMode = active;
   const welcome = document.getElementById('chat-welcome');
+  // v4: chat-mode-pills + btn-get-suggestions removed from the DOM. Look
+  // them up null-safe so older built CSS / lingering layouts still work.
   const pills = document.getElementById('chat-mode-pills');
   const inputBar = document.querySelector('.chat-input-bar');
   const suggestBtn = document.getElementById('btn-get-suggestions');
@@ -1921,23 +1927,23 @@ function enterPlanningMode(active) {
 
   if (active) {
     welcome.classList.remove('hidden');
-    pills.classList.add('hidden');
-    suggestBtn.classList.add('hidden');
-    inputBar.style.display = '';
-    attachBtn.style.display = 'none';
+    pills?.classList.add('hidden');
+    suggestBtn?.classList.add('hidden');
+    if (inputBar) inputBar.style.display = '';
+    if (attachBtn) attachBtn.style.display = 'none';
     input.placeholder = t('chat_placeholder_new');
     loadTgsAnimation();
     renderPromptSamples();
   } else {
     welcome.classList.add('hidden');
-    pills.classList.remove('hidden');
-    attachBtn.style.display = '';
+    pills?.classList.remove('hidden');
+    if (attachBtn) attachBtn.style.display = '';
     if (planAnimInstance) {
       planAnimInstance.destroy();
       planAnimInstance = null;
     }
     clearPromptSamples();
-    switchChatMode(chatMode);
+    if (input) input.placeholder = t('chat_placeholder');
   }
 }
 
@@ -2604,7 +2610,9 @@ function handleWSMessage(data) {
       hidePlanActions();
       renderProgressBubble(msg);
     } else {
-      setTyping(false);
+      // Don't hide the video when the server echoes the user's own message —
+      // we're still waiting for the assistant response at that point.
+      if (msg.role !== 'user') setTyping(false);
       appendMessage(msg);
     }
     scrollToBottom();
@@ -2628,6 +2636,52 @@ function handleWSMessage(data) {
       timestamp: Date.now(),
     });
     scrollToBottom();
+    return;
+  }
+
+  // ── v4 router events ──────────────────────────────────────────────
+  if (data.type === 'router_thinking') {
+    // Lightweight UX hint — keep typing dots visible so the user knows
+    // the router is still working. We deliberately don't render a bubble
+    // for every detail to avoid chat noise.
+    setTyping(true);
+    return;
+  }
+
+  if (data.type === 'router_question') {
+    // Same shape as the build agent's question, just sourced by the router.
+    setTyping(false);
+    appendMessage({
+      id: data.messageId,
+      role: 'assistant',
+      type: 'question',
+      content: data.question,
+      metadata: { options: data.options || [], source: 'router' },
+      timestamp: Date.now(),
+    });
+    scrollToBottom();
+    return;
+  }
+
+  if (data.type === 'router_proposal') {
+    // Server already persisted the proposal as a chat message; the
+    // standard 'message' broadcast that follows is what actually renders
+    // the bubble AND calls setTyping(false) — don't hide the video here
+    // or it will flicker for ~1s before the proposal card appears.
+    return;
+  }
+
+  if (data.type === 'proposal_accepted') {
+    // Disable the Build/Fix button on the existing proposal bubble so the
+    // user can't double-fire after the build is in flight.
+    const el = document.getElementById(`msg-${data.proposalId}`);
+    if (el) {
+      const btn = el.querySelector('.proposal-btn-primary');
+      if (btn) {
+        btn.disabled = true;
+        btn.classList.add('accepted');
+      }
+    }
     return;
   }
 
@@ -2700,20 +2754,19 @@ function handleWSMessage(data) {
     if (data.status === 'done') {
       const el = document.getElementById(`msg-${data.messageId}`);
       const isProgressBubble = el && el.classList.contains('chat-bubble--progress');
+
       const swap = () => {
         setTyping(false);
         setHeaderWorking(false);
         setProcessing(false);
         if (isPlanningMode) enterPlanningMode(false);
-        // Read step count BEFORE clearing proc state
+
         const _proc = agentProcState.get(data.messageId);
         const _stepCount = _proc ? ((_proc.steps?.length || 0) + (_proc.narrations?.length || 0)) : 0;
         progressBubbleState.delete(data.messageId);
         clearAgentProcState(data.messageId);
-        if (!el) return;
-        el.className = 'chat-bubble chat-bubble--result';
-        el.removeAttribute('style'); // clear any stale inline styles from the progress bubble
-        el.innerHTML = resultCardHtml(chatProjectId, {
+
+        const completionHtml = resultCardHtml(chatProjectId, {
           changelogUrl: data.changelogUrl,
           summary: data.summary || '',
           commitNum: data.commitNum,
@@ -2723,6 +2776,39 @@ function handleWSMessage(data) {
           stepCount: _stepCount,
           durationMs: data.durationMs,
         });
+
+        // If this result came from a proposal card, merge both into the
+        // proposal bubble so the user sees one seamless card.
+        const proposalEl = data.sourceProposalId
+          ? document.getElementById(`msg-${data.sourceProposalId}`)
+          : null;
+
+        if (proposalEl) {
+          // Style the top card (proposal) to join with the bottom card.
+          const proposalCard = proposalEl.querySelector('.proposal-card');
+          if (proposalCard) {
+            proposalCard.classList.add('proposal-card--merged-top');
+            // Remove the action button row — build already started.
+            const actions = proposalCard.querySelector('.proposal-actions');
+            if (actions) actions.remove();
+          }
+          // Drop the proposal's own timestamp — the completion card has one.
+          const proposalTime = proposalEl.querySelector('.chat-bubble-time');
+          if (proposalTime) proposalTime.remove();
+          // Append the completion card and re-classify the proposal bubble
+          // as a result so history replay treats it correctly.
+          proposalEl.className = 'chat-bubble chat-bubble--result';
+          proposalEl.insertAdjacentHTML('beforeend', completionHtml);
+          // Remove the now-redundant progress bubble from the DOM.
+          if (el) el.remove();
+        } else {
+          // Fallback: no proposal bubble to merge into — just replace the
+          // progress bubble with a standalone result card (original behaviour).
+          if (!el) return;
+          el.className = 'chat-bubble chat-bubble--result';
+          el.removeAttribute('style');
+          el.innerHTML = completionHtml;
+        }
         scrollToBottom();
       };
 
@@ -2881,7 +2967,8 @@ function linkBotCardHtml(projectId) {
   if (currentProject?.botUsername) return '';
   const safeId = (projectId || '').replace(/'/g, '');
   const fee = LINK_BOT_FEE_CREDITS;
-  const paid = linkBotPaidProjects.has(projectId);
+  // const paid = linkBotPaidProjects.has(projectId);
+  const paid = true;
   const feeBadge = paid
     ? ''
     : `<span class="link-bot-fee" data-link-bot-fee="${escAttr(safeId)}">${coinSvg(13, 9, '#fbbf24')}<b>${fee}</b></span>`;
@@ -3139,7 +3226,7 @@ async function refireUpdate(text) {
     const res = await fetch(`${API_BASE}/chat/${chatProjectId}/send`, {
       method: 'POST',
       headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, type: 'update', tierId: userTierId }),
+      body: JSON.stringify({ text, type: 'update' }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -3299,8 +3386,14 @@ function appendMessage(msg, animate = true) {
       }
     });
   } else if (msg.type === 'result') {
-    el.className = 'chat-bubble chat-bubble--result';
-    el.innerHTML = resultCardHtml(msg.metadata?.projectId || chatProjectId, {
+    // When this result was spawned by a proposal card, merge both visually
+    // into the proposal bubble instead of rendering a standalone result card.
+    const srcProposalId = msg.metadata?.sourceProposalId;
+    const proposalEl = srcProposalId
+      ? document.getElementById(`msg-${srcProposalId}`)
+      : null;
+
+    const completionHtml = resultCardHtml(msg.metadata?.projectId || chatProjectId, {
       changelogUrl: msg.metadata?.changelogUrl,
       summary: msg.content,
       commitNum: msg.commitNum,
@@ -3309,8 +3402,28 @@ function appendMessage(msg, animate = true) {
       cashbackClaimed: msg.cashbackClaimed,
       stepCount: msg.metadata?.stepCount || 0,
       durationMs: msg.metadata?.durationMs || 0,
-    });
-    el.innerHTML += `<div class="chat-bubble-time">${timeStr(msg.timestamp)}</div>`;
+    }) + `<div class="chat-bubble-time">${timeStr(msg.timestamp)}</div>`;
+
+    if (proposalEl) {
+      // Apply the "top card" join styling and drop the action button.
+      const proposalCard = proposalEl.querySelector('.proposal-card');
+      if (proposalCard) {
+        proposalCard.classList.add('proposal-card--merged-top');
+        const actions = proposalCard.querySelector('.proposal-actions');
+        if (actions) actions.remove();
+      }
+      // Drop the proposal's own timestamp — the completion card has one.
+      const proposalTime = proposalEl.querySelector('.chat-bubble-time');
+      if (proposalTime) proposalTime.remove();
+      proposalEl.className = 'chat-bubble chat-bubble--result';
+      proposalEl.insertAdjacentHTML('beforeend', completionHtml);
+      // Skip appending the stub `el` — the content now lives in proposalEl.
+      if (!animate) proposalEl.style.animation = 'none';
+      return;
+    }
+
+    el.className = 'chat-bubble chat-bubble--result';
+    el.innerHTML = completionHtml;
   } else if (msg.type === 'plan') {
     el.className = 'chat-bubble chat-bubble--assistant chat-bubble--plan';
     let html = `<div class="chat-plan-content">${formatContent(msg.content)}</div>`;
@@ -3327,6 +3440,8 @@ function appendMessage(msg, animate = true) {
   } else if (msg.type === 'progress') {
     renderProgressBubble(msg, true);
     return;
+  } else if (msg.metadata?.proposal === true) {
+    renderProposalBubble(el, msg);
   } else {
     const cls = msg.role === 'system' ? 'chat-bubble--system' : 'chat-bubble--assistant';
     el.className = `chat-bubble ${cls}`;
@@ -3364,6 +3479,114 @@ function appendMessage(msg, animate = true) {
         collapsible.parentNode.insertBefore(btn, collapsible.nextSibling);
       }
     });
+  }
+}
+
+// ── v4 router proposal bubble ────────────────────────────────────────────────
+// The router emits proposals as text messages with metadata.proposal=true.
+// They have one of four kinds:
+//   answer       → no action button, just the answer
+// Proposal kinds (new session-based):
+//   answer       → no action button (free, already shown)
+//   suggestions  → no action button (free, already shown)
+//   build        → "Start – 100 Credits" button
+//   update       → "Start – 85 Credits" button
+//   update-plan  → plan list + "Start – N Credits" button
+//   bug-fix      → "Fix – 30 Credits" button
+function renderProposalBubble(el, msg) {
+  const meta = msg.metadata || {};
+  const kind = String(meta.kind || 'answer');
+  const title = String(meta.title || '').trim();
+  const plan = Array.isArray(meta.plan) ? meta.plan : [];
+  const creditsCost = typeof meta.creditsCost === 'number' ? meta.creditsCost : 0;
+  const accepted = !!meta.accepted;
+
+  el.className = `chat-bubble chat-bubble--assistant chat-bubble--proposal proposal-${kind}`;
+
+  let html = `<div class="proposal-card proposal-card--${esc(kind)}">`;
+  if (title) {
+    html += `<div class="proposal-head">`;
+    html += `<span class="proposal-kind-badge proposal-kind-badge--${esc(kind)}">${esc(kind)}</span>`;
+    html += `<div class="proposal-title">${esc(title)}</div>`;
+    html += `</div>`;
+  }
+  html += `<div class="proposal-body">${formatContent(msg.content || '')}</div>`;
+
+  if (kind === 'update-plan' && plan.length > 0) {
+    html += `<ol class="proposal-plan">`;
+    for (const item of plan) {
+      html += `<li>${esc(item)}</li>`;
+    }
+    html += `</ol>`;
+  }
+
+  const FREE_KINDS = ['answer', 'suggestions'];
+  if (!FREE_KINDS.includes(kind)) {
+    let label;
+    if (creditsCost > 0) {
+      const base = kind === 'bug-fix' ? 'Fix' : 'Start';
+      label = `${base} – ${creditsCost} Credits`;
+    } else {
+      label = kind === 'bug-fix' ? 'Fix' : 'Start';
+    }
+    html += `<div class="proposal-actions">`;
+    html += `<button class="proposal-btn-primary" data-proposal-id="${esc(msg.id)}" ${accepted ? 'disabled' : ''}>`;
+    html += `<svg class="proposal-btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">`;
+    html += kind === 'bug-fix'
+      ? `<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>`
+      : `<polygon points="5 3 19 12 5 21 5 3"/>`;
+    html += `</svg>`;
+    html += `<span>${esc(label)}</span>`;
+    html += `</button>`;
+    html += `</div>`;
+  }
+  html += `</div>`;
+  html += `<div class="chat-bubble-time">${timeStr(msg.timestamp)}</div>`;
+
+  el.innerHTML = html;
+
+  if (accepted) return;
+
+  const btn = el.querySelector('.proposal-btn-primary');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      btn.disabled = true;
+      btn.classList.add('loading');
+      executeProposal(msg.id, btn);
+    });
+  }
+}
+
+async function executeProposal(proposalId, btnEl) {
+  if (!chatProjectId) return;
+  try {
+    const res = await fetch(`${API_BASE}/chat/${chatProjectId}/execute-proposal`, {
+      method: 'POST',
+      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proposalId }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      console.error('execute-proposal failed:', err);
+      if (btnEl) {
+        btnEl.disabled = false;
+        btnEl.classList.remove('loading');
+      }
+      if (res.status === 402) {
+        appendMessage({
+          role: 'system', type: 'balance_error',
+          content: 'Insufficient balance',
+          id: 'exec-bal-' + Date.now(), timestamp: Date.now(),
+          metadata: { balance: 0 },
+        });
+      }
+    }
+  } catch (err) {
+    console.error('Failed to execute proposal:', err);
+    if (btnEl) {
+      btnEl.disabled = false;
+      btnEl.classList.remove('loading');
+    }
   }
 }
 
@@ -3857,6 +4080,8 @@ async function sendMessage() {
 
   document.getElementById('chat-welcome').classList.add('hidden');
 
+  // Planning mode (creating a brand-new project): keep using the legacy
+  // /plan flow which lives outside the in-project router.
   if (isPlanningMode) {
     const hasPlan = document.querySelector('.chat-bubble--plan');
     if (hasPlan) {
@@ -3867,34 +4092,35 @@ async function sendMessage() {
     return;
   }
 
-  const type = chatMode === 'update' ? 'update' : 'question';
-
-  if (type === 'update') {
-    setTyping(true);
-    setProcessing(true);
-    setInputDisabled(true);
-  } else {
-    setTyping(true);
-  }
+  // v4: every in-project chat message goes through the router. The router
+  // decides itself if this is speak / investigate / bug / update and emits a
+  // proposal card. The user message bubble + thinking events are added by
+  // the server over WS; we do NOT add them locally to avoid duplicates.
+  setTyping(true);
 
   try {
-    const body = { text, type, tierId: userTierId };
-    if (pendingFiles.length > 0 && type === 'update') {
-      body.attachmentIds = pendingFiles.map(f => ({ name: f.name, path: f.name, type: f.type }));
-    }
-
-    const res = await fetch(`${API_BASE}/chat/${chatProjectId}/send`, {
+    const res = await fetch(`${API_BASE}/chat/${chatProjectId}/route`, {
       method: 'POST',
       headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ text }),
     });
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      console.error('Send failed:', err);
+      console.error('Route failed:', err);
+      setTyping(false);
+      if (res.status === 402) {
+        appendMessage({
+          role: 'system', type: 'balance_error',
+          content: 'Insufficient balance',
+          id: 'route-bal-' + Date.now(), timestamp: Date.now(),
+          metadata: { balance: 0 },
+        });
+      }
     }
   } catch (err) {
     console.error('Failed to send message:', err);
+    setTyping(false);
   }
 
   pendingFiles = [];
@@ -3968,7 +4194,7 @@ async function sendPlanRequest(description, opts = {}) {
     const res = await fetch(`${API_BASE}/chat/${chatProjectId}/plan`, {
       method: 'POST',
       headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ description, tierId: userTierId }),
+      body: JSON.stringify({ description }),
     });
 
     setTyping(false);
@@ -5916,9 +6142,10 @@ async function approvePlan() {
     }
 
     isPlanningMode = false;
-    const pills = document.getElementById('chat-mode-pills');
-    pills.classList.remove('hidden');
-    document.getElementById('btn-attach').style.display = '';
+    // v4: chat-mode-pills removed; null-safe lookup keeps cached HTML happy.
+    document.getElementById('chat-mode-pills')?.classList.remove('hidden');
+    const _attachBtn = document.getElementById('btn-attach');
+    if (_attachBtn) _attachBtn.style.display = '';
     switchChatMode('update');
   } catch (err) {
     showToast('Error: ' + err.message, 'error');
@@ -5975,8 +6202,22 @@ async function sendEditPlan(feedback) {
 }
 
 function setTyping(visible) {
-  document.getElementById('chat-typing').classList.toggle('hidden', !visible);
-  if (visible) scrollToBottom();
+  // Typing dots bubble is replaced by the processing video — keep it hidden always.
+  // document.getElementById('chat-typing').classList.toggle('hidden', !visible);
+
+  const inputArea = document.getElementById('chat-input-area');
+  const vid = document.getElementById('processing-video');
+
+  if (visible) {
+    // Hide input bar, show video
+    if (inputArea) inputArea.style.display = 'none';
+    if (vid) { vid.style.display = 'block'; requestAnimationFrame(() => { vid.style.opacity = '1'; }); }
+    scrollToBottom();
+  } else if (!isProcessing) {
+    // Only restore when not still in an agent run
+    if (inputArea) inputArea.style.display = '';
+    if (vid) { vid.style.opacity = '0'; setTimeout(() => { if (!isProcessing) vid.style.display = 'none'; }, 400); }
+  }
 }
 
 async function releaseLatest() {
@@ -8905,94 +9146,24 @@ function getChatPlaceholder(mode) {
   return isPlanningMode ? t('chat_placeholder_new') : t('chat_placeholder');
 }
 
+// v4: chat-mode-pills + btn-get-suggestions removed from the UI.
+// switchChatMode / fetchSuggestions are kept as inert no-ops so any stale
+// callers (legacy switchChatMode('update') after a suggestion card click,
+// onboarding flows, etc.) don't throw.
 function switchChatMode(mode) {
   chatMode = mode;
-  document.querySelectorAll('.chat-pill').forEach(p => {
-    p.classList.toggle('active', p.dataset.mode === mode);
-  });
-
-  const inputBar = document.querySelector('.chat-input-bar');
-  const suggestBtn = document.getElementById('btn-get-suggestions');
-
-  if (mode === 'suggestion') {
-    inputBar.style.display = 'none';
-    suggestBtn.classList.remove('hidden');
-  } else {
-    inputBar.style.display = '';
-    suggestBtn.classList.add('hidden');
-    const input = document.getElementById('chat-input');
-    if (input) {
-      input.placeholder = getChatPlaceholder(mode);
-      input.focus();
-    }
+  const input = document.getElementById('chat-input');
+  if (input) {
+    input.placeholder = getChatPlaceholder(mode);
+    input.focus();
   }
 }
 
 async function fetchSuggestions() {
-  if (!chatProjectId) return;
-
-  const btn = document.getElementById('btn-get-suggestions');
-  btn.disabled = true;
-  btn.textContent = '...';
-  btn.classList.add('loading');
-
-  const processingEl = document.createElement('div');
-  processingEl.className = 'chat-bubble chat-bubble--assistant';
-  processingEl.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
-  processingEl.id = 'suggestions-processing';
-  document.getElementById('chat-messages-inner').appendChild(processingEl);
-  scrollToBottom();
-
-  try {
-    const res = await fetch(`${API_BASE}/chat/${chatProjectId}/suggestions`, {
-      method: 'POST',
-      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tierId: userTierId }),
-    });
-    const data = await res.json();
-
-    const proc = document.getElementById('suggestions-processing');
-    if (proc) proc.remove();
-
-    if (data.suggestions && data.suggestions.length > 0) {
-      const el = document.createElement('div');
-      el.className = 'chat-bubble chat-bubble--assistant suggestions-result';
-      let html = '<div class="suggestions-title">Here are some ideas for your next update:</div>';
-      html += '<div class="suggestions-cards">';
-      data.suggestions.forEach((s, i) => {
-        html += `<button class="suggestion-card" data-index="${i}">
-          <div class="suggestion-card-title">${esc(s.title)}</div>
-          <div class="suggestion-card-desc">${esc(s.description)}</div>
-        </button>`;
-      });
-      html += '</div>';
-      el.innerHTML = html;
-      document.getElementById('chat-messages-inner').appendChild(el);
-      scrollToBottom();
-
-      el.querySelectorAll('.suggestion-card').forEach(card => {
-        card.addEventListener('click', () => {
-          const idx = parseInt(card.dataset.index);
-          const suggestion = data.suggestions[idx];
-          selectSuggestion(suggestion, el);
-        });
-      });
-
-    }
-  } catch (err) {
-    console.error('Failed to fetch suggestions:', err);
-    const proc = document.getElementById('suggestions-processing');
-    if (proc) proc.remove();
-    const errEl = document.createElement('div');
-    errEl.className = 'chat-bubble chat-bubble--assistant';
-    errEl.innerHTML = `<div class="chat-bubble-text">Failed to get suggestions. Please try again.</div>`;
-    document.getElementById('chat-messages-inner').appendChild(errEl);
-    scrollToBottom();
-  }
-
-  btn.disabled = false;
-  btn.textContent = t('chat_get_suggestions');
-  btn.classList.remove('loading');
+  // No-op: the suggestions feature is replaced by the router's
+  // 'investigate' / 'speak' intents. Calling it is a no-op so any cached
+  // build that still wires the button doesn't crash.
+  return;
 }
 
 function selectSuggestion(suggestion, cardsContainer) {
@@ -9177,6 +9348,174 @@ function initVoiceRecorder() {
   setMicState('idle');
 }
 
+/* ─── Canvas editor ──────────────────────────────────────────── */
+function openCanvasEditor(imageFile) {
+  const editor = document.getElementById('canvas-editor');
+  const canvas = document.getElementById('draw-canvas');
+  const ctx = canvas.getContext('2d');
+
+  let drawing = false;
+  let erasing = false;
+  let brushColor = '#000000';
+  let brushSize = 3;
+
+  // Remove previous event listeners by cloning
+  const freshCanvas = canvas.cloneNode(true);
+  canvas.parentNode.replaceChild(freshCanvas, canvas);
+  const dc = document.getElementById('draw-canvas');
+  const cx = dc.getContext('2d');
+
+  function setupCanvas(w, h, bg) {
+    dc.width = w;
+    dc.height = h;
+    if (bg) {
+      cx.drawImage(bg, 0, 0, w, h);
+    } else {
+      cx.fillStyle = '#ffffff';
+      cx.fillRect(0, 0, w, h);
+    }
+  }
+
+  if (imageFile) {
+    const img = new Image();
+    const url = URL.createObjectURL(imageFile);
+    img.onload = () => {
+      const maxW = window.innerWidth - 24;
+      const maxH = window.innerHeight - 160;
+      const scale = Math.min(1, maxW / img.naturalWidth, maxH / img.naturalHeight);
+      setupCanvas(Math.round(img.naturalWidth * scale), Math.round(img.naturalHeight * scale), img);
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  } else {
+    // Blank 9:16 mockup canvas, fits screen
+    const maxW = window.innerWidth - 24;
+    const maxH = window.innerHeight - 160;
+    const ratio = 9 / 16;
+    let w = Math.min(405, maxW);
+    let h = Math.round(w / ratio);
+    if (h > maxH) { h = maxH; w = Math.round(h * ratio); }
+    setupCanvas(w, h, null);
+  }
+
+  editor.classList.remove('hidden');
+
+  // ── Toolbar wiring ──
+  let activeColorBtn = editor.querySelector('.ce-color.active');
+  let activeSizeBtn = editor.querySelector('.ce-size.active');
+  const eraserBtn = document.getElementById('ce-eraser');
+  const clearBtn = document.getElementById('ce-clear');
+
+  editor.querySelectorAll('.ce-color').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeColorBtn?.classList.remove('active');
+      btn.classList.add('active');
+      activeColorBtn = btn;
+      brushColor = btn.dataset.color;
+      erasing = false;
+      eraserBtn.classList.remove('active');
+    });
+  });
+
+  editor.querySelectorAll('.ce-size').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeSizeBtn?.classList.remove('active');
+      btn.classList.add('active');
+      activeSizeBtn = btn;
+      brushSize = parseInt(btn.dataset.size, 10);
+    });
+  });
+
+  eraserBtn.addEventListener('click', () => {
+    erasing = !erasing;
+    eraserBtn.classList.toggle('active', erasing);
+  });
+
+  clearBtn.addEventListener('click', () => {
+    const c = document.getElementById('draw-canvas');
+    const ct = c.getContext('2d');
+    if (imageFile) {
+      const img = new Image();
+      const url = URL.createObjectURL(imageFile);
+      img.onload = () => { ct.clearRect(0, 0, c.width, c.height); ct.drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url); };
+      img.src = url;
+    } else {
+      ct.fillStyle = '#ffffff';
+      ct.fillRect(0, 0, c.width, c.height);
+    }
+  });
+
+  // ── Drawing ──
+  function getPos(e) {
+    const rect = dc.getBoundingClientRect();
+    const scaleX = dc.width / rect.width;
+    const scaleY = dc.height / rect.height;
+    const src = e.touches ? e.touches[0] : e;
+    return { x: (src.clientX - rect.left) * scaleX, y: (src.clientY - rect.top) * scaleY };
+  }
+
+  function startDraw(e) {
+    e.preventDefault();
+    drawing = true;
+    const { x, y } = getPos(e);
+    cx.beginPath();
+    cx.moveTo(x, y);
+  }
+  function moveDraw(e) {
+    if (!drawing) return;
+    e.preventDefault();
+    const { x, y } = getPos(e);
+    cx.globalCompositeOperation = erasing ? 'destination-out' : 'source-over';
+    cx.strokeStyle = erasing ? 'rgba(0,0,0,1)' : brushColor;
+    cx.lineWidth = erasing ? brushSize * 3 : brushSize;
+    cx.lineCap = 'round';
+    cx.lineJoin = 'round';
+    cx.lineTo(x, y);
+    cx.stroke();
+    cx.beginPath();
+    cx.moveTo(x, y);
+  }
+  function endDraw() {
+    drawing = false;
+    cx.beginPath();
+    cx.globalCompositeOperation = 'source-over';
+  }
+
+  dc.addEventListener('pointerdown', startDraw);
+  dc.addEventListener('pointermove', moveDraw);
+  dc.addEventListener('pointerup', endDraw);
+  dc.addEventListener('pointerleave', endDraw);
+  dc.addEventListener('touchstart', startDraw, { passive: false });
+  dc.addEventListener('touchmove', moveDraw, { passive: false });
+  dc.addEventListener('touchend', endDraw);
+
+  // ── Footer buttons ──
+  function closeEditor() {
+    editor.classList.add('hidden');
+    dc.removeEventListener('pointerdown', startDraw);
+    dc.removeEventListener('pointermove', moveDraw);
+    dc.removeEventListener('pointerup', endDraw);
+    dc.removeEventListener('pointerleave', endDraw);
+    dc.removeEventListener('touchstart', startDraw);
+    dc.removeEventListener('touchmove', moveDraw);
+    dc.removeEventListener('touchend', endDraw);
+  }
+
+  document.getElementById('canvas-cancel').onclick = () => closeEditor();
+
+  document.getElementById('canvas-submit').onclick = () => {
+    const c = document.getElementById('draw-canvas');
+    c.toBlob((blob) => {
+      if (!blob) return;
+      const file = new File([blob], `drawing-${Date.now()}.png`, { type: 'image/png' });
+      pendingFiles.push(file);
+      updateAttachPreview();
+      uploadFiles([file]);
+      closeEditor();
+    }, 'image/png');
+  };
+}
+
 function initChatInput() {
   const input = document.getElementById('chat-input');
   const sendBtn = document.getElementById('btn-send');
@@ -9199,7 +9538,24 @@ function initChatInput() {
     if (sendBtn.classList.contains('active')) sendMessage();
   });
 
-  document.getElementById('btn-attach').addEventListener('click', () => fileInput.click());
+  // Attach menu toggle
+  const attachBtn = document.getElementById('btn-attach');
+  const attachMenu = document.getElementById('attach-menu');
+
+  attachBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    attachMenu.classList.toggle('hidden');
+  });
+  document.addEventListener('click', () => attachMenu?.classList.add('hidden'));
+
+  document.getElementById('btn-attach-file').addEventListener('click', () => {
+    attachMenu.classList.add('hidden');
+    fileInput.click();
+  });
+  document.getElementById('btn-draw-mockup').addEventListener('click', () => {
+    attachMenu.classList.add('hidden');
+    openCanvasEditor(null);
+  });
 
   initVoiceRecorder();
 
@@ -9227,17 +9583,34 @@ function initChatInput() {
 
   fileInput.addEventListener('change', () => {
     const files = Array.from(fileInput.files || []);
-    pendingFiles.push(...files);
-    updateAttachPreview();
-    if (pendingFiles.length > 0) uploadFiles(files);
+    const images = files.filter(f => f.type.startsWith('image/'));
+    const others = files.filter(f => !f.type.startsWith('image/'));
+
+    if (others.length) {
+      pendingFiles.push(...others);
+      updateAttachPreview();
+      uploadFiles(others);
+    }
+
+    if (images.length === 1) {
+      openCanvasEditor(images[0]);
+    } else if (images.length > 1) {
+      pendingFiles.push(...images);
+      updateAttachPreview();
+      uploadFiles(images);
+    }
+
     fileInput.value = '';
   });
 
+  // v4: chat-pill buttons + btn-get-suggestions removed from index.html.
+  // The router classifies intent from free text. Both lookups below are
+  // null-safe so older cached HTML doesn't crash, but normally the loops
+  // run on empty NodeLists and the suggestBtn lookup returns null.
   document.querySelectorAll('.chat-pill').forEach(pill => {
     pill.addEventListener('click', () => switchChatMode(pill.dataset.mode));
   });
-
-  document.getElementById('btn-get-suggestions').addEventListener('click', () => fetchSuggestions());
+  document.getElementById('btn-get-suggestions')?.addEventListener('click', () => fetchSuggestions());
 
   const inputArea = document.querySelector('.chat-input-area');
   inputArea.addEventListener('touchmove', (e) => {

@@ -141,8 +141,20 @@ async function getOwnerTelegramId(projectId: string): Promise<number | null> {
   }
 }
 
+const AF_SDK_TAG = `<script src="/af-sdk.js"></script>`;
+
 async function injectSplash(projectId: string, htmlPath: string): Promise<string> {
   let html = fs.readFileSync(htmlPath, "utf-8");
+
+  // Inject AF SDK at the very start of <head> so it's available before any
+  // user script runs. Skip if the page already includes it.
+  if (!html.includes("/af-sdk.js")) {
+    if (html.includes("<head>")) {
+      html = html.replace("<head>", "<head>\n" + AF_SDK_TAG);
+    } else {
+      html = AF_SDK_TAG + "\n" + html;
+    }
+  }
 
   try {
     const splashDisabled = await hasFeature(projectId, "disable_splash");

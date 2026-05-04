@@ -284,14 +284,15 @@ export class ClaudeService {
     assets?: string[],
     lang?: string,
     prefs?: ProjectPreferences | null,
-    tierId?: string,
+    _legacyTierId?: string,
     onChunk?: (delta: string, full: string) => void,
   ): Promise<{
     plan: string;
     inputTokens: number;
     outputTokens: number;
   }> {
-    const modelCfg = runtimeConfig.getModelConfig("plan", tierId);
+    const _sessionCfg = runtimeConfig.getSessionConfig("build");
+    const modelCfg = { modelId: _sessionCfg.model, provider: _sessionCfg.provider, maxTokens: _sessionCfg.max_tokens };
     const prefsBlock = prefs ? `${buildPreferencesPrompt(prefs)}\n\n` : "";
     let prompt = `${prefsBlock}Create a plan for a Telegram Mini App based on this description:\n\n${description}`;
     if (assets && assets.length > 0) {
@@ -326,7 +327,8 @@ IMPORTANT: Keep the plan CONCISE. The user-facing summary must fit in a Telegram
     projectId: string,
     assets?: string[]
   ): Promise<GeneratedApp> {
-    const modelCfg = runtimeConfig.getModelConfig("codegen");
+    const _scfg = runtimeConfig.getSessionConfig("build");
+    const modelCfg = { modelId: _scfg.model, provider: _scfg.provider, maxTokens: _scfg.max_tokens };
     let prompt = `Generate the complete Telegram Mini App code based on this plan.
 
 Project ID: ${projectId}
@@ -379,7 +381,8 @@ ${plan}`;
     updateDescription: string,
     projectId: string
   ): Promise<GeneratedApp> {
-    const modelCfg = runtimeConfig.getModelConfig("codegen");
+    const _scfg2 = runtimeConfig.getSessionConfig("update");
+    const modelCfg = { modelId: _scfg2.model, provider: _scfg2.provider, maxTokens: _scfg2.max_tokens };
     const prompt = `Update the existing Telegram Mini App code based on the user's request.
 
 Project ID: ${projectId}
@@ -428,7 +431,8 @@ Return the COMPLETE updated code as valid JSON matching the specified structure.
     inputTokens: number;
     outputTokens: number;
   }> {
-    const modelCfg = runtimeConfig.getModelConfig("suggestions");
+    const _s3 = runtimeConfig.getSessionConfig("suggestions");
+    const modelCfg = { modelId: _s3.model, provider: _s3.provider, maxTokens: _s3.max_tokens };
     const langInstruction = lang && lang !== "en"
       ? `\n\nIMPORTANT: Write all suggestions in ${lang === "ru" ? "Russian" : lang === "ua" ? "Ukrainian" : "English"}. The suggestions must be in that language.`
       : "";

@@ -243,8 +243,7 @@ export async function getUserDetail(userId: number) {
       inputTokens: l.inputTokens,
       outputTokens: l.outputTokens,
       cost: Number(l.costUsd),                          // raw USD cost (admin transparency)
-      creditsCharged: (l as any).creditsCharged ?? null, // credits deducted from user
-      tierId: (l as any).tierId ?? null,
+      creditsCharged: (l as any).creditsCharged ?? null,
       createdAt: l.createdAt,
     })),
   };

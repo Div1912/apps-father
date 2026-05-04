@@ -4,50 +4,10 @@ import crypto from "crypto";
 import { Decimal } from "@prisma/client/runtime/library";
 import { Cell } from "@ton/core";
 import { runtimeConfig } from "./runtime-config.service";
+import type { AgentSessionType } from "./runtime-config.service";
 import { getModelPricing } from "./openrouter.service";
 import { notifyDeposit, notifyReferralBonus } from "./notify.service";
 import { trackEvent } from "./analytics.service";
-
-export const MODEL_PRICING: Record<string, { input: number; output: number; cache_write: number; cache_read: number }> = {
-  // OpenRouter slugs (current default models)
-  "anthropic/claude-sonnet-4-5": {
-    input: 3.00 / 1_000_000,
-    output: 15.00 / 1_000_000,
-    cache_write: 3.75 / 1_000_000,
-    cache_read: 0.30 / 1_000_000,
-  },
-  "anthropic/claude-opus-4-5": {
-    input: 15.00 / 1_000_000,
-    output: 75.00 / 1_000_000,
-    cache_write: 18.75 / 1_000_000,
-    cache_read: 1.50 / 1_000_000,
-  },
-  "anthropic/claude-haiku-4-5": {
-    input: 0.80 / 1_000_000,
-    output: 4.00 / 1_000_000,
-    cache_write: 1.00 / 1_000_000,
-    cache_read: 0.08 / 1_000_000,
-  },
-  // Legacy short-form aliases (for backward compatibility with old usage logs)
-  "claude-sonnet-4-6": {
-    input: 3.00 / 1_000_000,
-    output: 15.00 / 1_000_000,
-    cache_write: 3.75 / 1_000_000,
-    cache_read: 0.30 / 1_000_000,
-  },
-  "claude-opus-4-7": {
-    input: 15.00 / 1_000_000,
-    output: 75.00 / 1_000_000,
-    cache_write: 18.75 / 1_000_000,
-    cache_read: 1.50 / 1_000_000,
-  },
-  "claude-haiku-4-5-20251001": {
-    input: 0.80 / 1_000_000,
-    output: 4.00 / 1_000_000,
-    cache_write: 1.00 / 1_000_000,
-    cache_read: 0.08 / 1_000_000,
-  },
-};
 
 export interface TokenUsage {
   input_tokens: number;
@@ -148,11 +108,6 @@ export class BillingService {
     return inputCost + outputCost + cacheWrite + cacheRead;
   }
 
-  calculateCost(model: string, usage: TokenUsage): number {
-    const p = MODEL_PRICING[model] || MODEL_PRICING["anthropic/claude-sonnet-4-5"] || { input: 0, output: 0, cache_write: 0, cache_read: 0 };
-    return this.calculateCostWithPricing(p, usage);
-  }
-
   async calculateCostAsync(model: string, usage: TokenUsage): Promise<number> {
     const livePricing = await getModelPricing(model);
     if (livePricing) {
@@ -163,22 +118,12 @@ export class BillingService {
         cache_read: livePricing.cacheReadPerToken || livePricing.promptPerToken * 0.1,
       }, usage);
     }
-    return this.calculateCost(model, usage);
-  }
-
-  /** Map an operation string to a tier pricing key. */
-  private operationToPricingKey(operation: string): keyof import("./runtime-config.service").TierPricing {
-    if (operation === "build") return "create";
-    if (operation === "update") return "update";
-    if (operation === "plan") return "plan";
-    if (operation === "ask") return "ask";
-    if (operation === "suggestions") return "suggestions";
-    if (operation === "passport") return "passport";
-    return "update"; // default for any other op
+    console.warn(`[Billing] No live pricing for model "${model}", cost recorded as 0`);
+    return 0;
   }
 
   /**
-   * Immediately deduct the fixed credit cost for an action from the user's
+   * Immediately deduct the flat credit cost for a session type from the user's
    * balance so the balance update is visible before the agent finishes.
    * Returns the credits charged and the new balance.
    * Call recordUsage afterwards with preCharged=true to log without double-deducting.
@@ -186,15 +131,14 @@ export class BillingService {
   async preChargeAction(
     userId: number,
     projectId: string | null,
-    operation: string,
-    tierId?: string,
+    sessionType: AgentSessionType,
+    planLength?: number,
   ): Promise<{ creditsCharged: number; newCredits: number }> {
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { performanceTier: true } });
-    const resolvedTierId = tierId || user?.performanceTier || "tier_1";
-    const tier = runtimeConfig.getPerformanceTier(resolvedTierId);
-    const pricingKey = this.operationToPricingKey(operation);
-    const creditsCharged = tier.pricing[pricingKey] ?? 0;
-    if (creditsCharged <= 0) return { creditsCharged: 0, newCredits: 0 };
+    const creditsCharged = runtimeConfig.getSessionCost(sessionType, planLength);
+    if (creditsCharged <= 0) {
+      const u = await prisma.user.findUnique({ where: { id: userId }, select: { credits: true } });
+      return { creditsCharged: 0, newCredits: u?.credits ?? 0 };
+    }
 
     const updatedUser = await prisma.user.update({
       where: { id: userId },
@@ -203,7 +147,7 @@ export class BillingService {
     if (projectId) {
       await prisma.project.update({
         where: { id: projectId },
-        data: { totalCostUsd: { increment: new Decimal("0") } }, // placeholder; real cost logged later
+        data: { totalCostUsd: { increment: new Decimal("0") } },
       }).catch(() => {});
     }
     return { creditsCharged, newCredits: updatedUser.credits };
@@ -244,7 +188,6 @@ export class BillingService {
           costUsd: new Decimal("0"),
           operation: `refund_${operation}`,
           creditsCharged: -credits,
-          tierId: null,
           taskId: taskId ?? null,
         },
       });
@@ -298,18 +241,15 @@ export class BillingService {
     model: string,
     usage: TokenUsage,
     operation: string,
-    tierId?: string,
+    _legacyTierId?: string,
     preCharged = false,
     taskId?: string,
   ): Promise<UsageResult> {
     const costUsd = await this.calculateCostAsync(model, usage);
 
-    // Resolve tier and credits to charge
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { performanceTier: true, credits: true } });
-    const resolvedTierId = tierId || user?.performanceTier || "tier_1";
-    const tier = runtimeConfig.getPerformanceTier(resolvedTierId);
-    const pricingKey = this.operationToPricingKey(operation);
-    const creditsCharged = tier.pricing[pricingKey] ?? 0;
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { credits: true } });
+    // When preCharged the credits were already deducted at session start; pass 0 here.
+    const creditsCharged = preCharged ? 0 : 0;
 
     const result = await prisma.$transaction(async (tx) => {
       await tx.usageLog.create({
@@ -321,18 +261,9 @@ export class BillingService {
           costUsd: new Decimal(costUsd.toFixed(6)),
           operation,
           creditsCharged,
-          tierId: resolvedTierId,
           taskId: taskId || null,
         },
       });
-
-      // Skip credit deduction if already pre-charged at process start
-      const updatedUser = preCharged
-        ? await tx.user.findUnique({ where: { id: userId }, select: { credits: true } })
-        : await tx.user.update({
-            where: { id: userId },
-            data: { credits: { decrement: creditsCharged } },
-          });
 
       if (projectId) {
         await tx.project.update({
@@ -341,7 +272,7 @@ export class BillingService {
         });
       }
 
-      const newCredits = updatedUser?.credits ?? (user?.credits ?? 0);
+      const newCredits = user?.credits ?? 0;
       return { costUsd, creditsCharged, newCredits, newBalance: newCredits };
     });
 

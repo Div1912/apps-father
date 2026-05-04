@@ -17,6 +17,9 @@ if ($choice -match '^[Dd]') {
 
 Write-Host ">>> Deploying landing to $ENV_NAME <<<" -ForegroundColor $COLOR
 
+# Keep af-sdk.js in sync (source lives in src/web/routes/, served from landing/)
+Copy-Item "src\web\routes\af-sdk.js" "landing\af-sdk.js" -Force
+
 ssh $SERVER "mkdir -p ${APP_DIR}/landing/samples"
 scp -r landing/* "${SERVER}:${APP_DIR}/landing/"
 if ($LASTEXITCODE -ne 0) { Write-Host "Upload failed!" -ForegroundColor Red; exit 1 }

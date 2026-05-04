@@ -1,63 +1,124 @@
 # Frontend Skill — Telegram Mini App Patterns
 
-## Telegram WebApp API
+## HTML head — always include both scripts
+
+```html
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>App</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="/af-sdk.js"></script>  <!-- AF SDK — must come before app.js -->
+</head>
+```
+
+## Initialization — always use AF.init()
 
 ```js
-// Initialize (ALWAYS include all of these)
+// ✅ CORRECT — single call handles everything
+AF.init({
+  project_id: 'YOUR_PROJECT_ID',
+  colors: { header: '#0a0e1a', bottom: '#0a0e1a', background: '#0a0e1a' }
+});
+// AF.init() internally calls: tg.ready(), tg.expand(), tg.disableVerticalSwipes(),
+// tg.requestFullscreen() on mobile, and sets all three color bars.
+
+// ❌ WRONG — never call these manually, AF.init() already does it
 Telegram.WebApp.ready();
 Telegram.WebApp.expand();
-Telegram.WebApp.setHeaderColor("#000000");
-Telegram.WebApp.setBottomBarColor("#000000");
-Telegram.WebApp.setBackgroundColor("#000000");
+Telegram.WebApp.setHeaderColor('#000');
 Telegram.WebApp.disableVerticalSwipes();
-if (Telegram.WebApp.platform === "ios" || Telegram.WebApp.platform === "android") {
-  Telegram.WebApp.requestFullscreen();
-}
+```
 
-// Theme
-const theme = Telegram.WebApp.themeParams;
-// theme.bg_color, theme.text_color, theme.hint_color, theme.button_color, theme.button_text_color
+## API calls — always use AF.api()
 
-// Haptic feedback
-Telegram.WebApp.HapticFeedback.impactOccurred('light'); // light | medium | heavy | rigid | soft
-Telegram.WebApp.HapticFeedback.notificationOccurred('success'); // success | error | warning
-Telegram.WebApp.HapticFeedback.selectionChanged();
+```js
+// ✅ CORRECT — no manual headers, no API_BASE variable, no leading slash on endpoint
+const data = await AF.api('rates').then(r => r.json());
+const res  = await AF.api('convert?amount=100&from=USD&to=EUR');
+await AF.api('favorites', { method: 'POST', body: JSON.stringify({ code: 'USD' }) });
 
-// Main button (bottom CTA)
-Telegram.WebApp.MainButton.setText('Submit');
-Telegram.WebApp.MainButton.show();
-Telegram.WebApp.MainButton.onClick(() => { /* action */ });
-Telegram.WebApp.MainButton.showProgress();
-Telegram.WebApp.MainButton.hideProgress();
-Telegram.WebApp.MainButton.hide();
+// AF.api() automatically:
+//  - adds Content-Type: application/json
+//  - adds x-telegram-init-data header
+//  - routes to /devapi/{id}/ in dev, /api/{id}/ in production
 
-// Back button
-Telegram.WebApp.BackButton.show();
-Telegram.WebApp.BackButton.onClick(() => { showScreen('main'); });
-Telegram.WebApp.BackButton.hide();
+// ❌ WRONG — never define your own apiCall() or API_BASE
+const API_BASE = `/api/${projectId}/`;
+function apiCall(endpoint, options = {}) { ... }  // delete this, use AF.api()
 
-// Popup / confirm
-Telegram.WebApp.showPopup({
-  title: 'Confirm',
-  message: 'Are you sure?',
-  buttons: [
-    { id: 'yes', type: 'destructive', text: 'Delete' },
-    { id: 'no', type: 'cancel' }
-  ]
-}, (buttonId) => { if (buttonId === 'yes') doDelete(); });
+// ❌ WRONG — leading slash on endpoint produces double slash → 404
+AF.api('/rates');          // → /api/<id>//rates  (404)
+AF.api('rates');           // → /api/<id>/rates   ✓
+```
 
-// Share
-Telegram.WebApp.switchInlineQuery('check this out', ['users', 'groups']);
+## Haptic feedback — use AF.haptic()
 
-// Close
-Telegram.WebApp.close();
+```js
+// ✅ CORRECT
+AF.haptic('light');      // tap feedback (light | medium | heavy | rigid | soft)
+AF.haptic('success');    // notification (success | error | warning)
+AF.haptic('selection');  // tab/picker selection change
 
-// Get user info
+// ❌ WRONG
+Telegram.WebApp.HapticFeedback.impactOccurred('light');
+```
+
+## Current user — use AF.user
+
+```js
+// ✅ CORRECT
+const user = AF.user;  // → { id, first_name, last_name, username, photo_url } | null
+if (user) console.log('Hello', user.first_name);
+
+// ❌ WRONG
 const user = Telegram.WebApp.initDataUnsafe?.user;
-// user.id, user.first_name, user.last_name, user.username, user.photo_url
+```
 
-// Platform detection
-const platform = Telegram.WebApp.platform; // 'android' | 'ios' | 'tdesktop' | 'web'
+## Local storage — use AF.storage (prevents key collisions)
+
+```js
+// ✅ CORRECT — automatically namespaced as "af:{projectId}:{key}"
+AF.storage.set('theme', 'dark');
+const theme = AF.storage.get('theme');   // → 'dark' | null
+AF.storage.remove('theme');
+
+// ❌ WRONG — keys collide across projects on the same domain
+localStorage.setItem('theme', 'dark');
+```
+
+## Back button — use AF.back()
+
+```js
+// ✅ CORRECT — manages show/hide and prevents listener leaks
+AF.back(() => showScreen('main'));  // shows BackButton, registers handler
+AF.back(null);                      // hides BackButton, clears handler
+
+// ❌ WRONG — easy to leak event listeners
+Telegram.WebApp.BackButton.show();
+Telegram.WebApp.BackButton.onClick(() => showScreen('main'));
+```
+
+## WebSocket — use AF.openWS()
+
+```js
+// ✅ CORRECT — routes to /devws/ or /ws/ automatically
+const ws = AF.openWS({
+  onMessage: (data) => { /* data is already parsed JSON */ },
+  onOpen:    ()     => console.log('connected'),
+  onClose:   ()     => console.log('disconnected'),
+  onError:   (e)    => console.error(e)
+});
+```
+
+## Environment detection
+
+```js
+if (AF.isDev) {
+  console.log('Running in development mode');
+}
+// AF.isDev is true when URL contains /dev/{projectId}/
 ```
 
 ## CSS Safe Areas (ALWAYS use for mobile)
@@ -82,93 +143,17 @@ const platform = Telegram.WebApp.platform; // 'android' | 'ios' | 'tdesktop' | '
 }
 ```
 
-## API Call Helper (always use this pattern)
-
-CRITICAL — `API_BASE` MUST end with a trailing slash, and endpoint strings
-MUST NOT start with a slash. Otherwise fetch produces a malformed URL like
-`/api/<id>convert` (no separator) or `/api/<id>//convert` (double slash),
-both of which 404 silently and the agent only finds out via runtime errors.
-
-```js
-// ✅ CORRECT — API_BASE ends with "/", endpoints have no leading "/"
-const API_BASE = '/api/{PROJECT_ID}/';
-
-async function apiCall(endpoint, options = {}) {
-  const headers = {
-    'Content-Type': 'application/json',
-    'x-telegram-init-data': Telegram.WebApp?.initData || '',
-    ...(options.headers || {})
-  };
-  const response = await fetch(API_BASE + endpoint, { ...options, headers });
-  if (!response.ok) throw new Error(await response.text());
-  return response.json();
-}
-
-// Usage:
-apiCall('convert?amount=100&from=USD&to=EUR'); // → /api/<id>/convert?...
-apiCall('preferences');                        // → /api/<id>/preferences
-```
-
-```js
-// ❌ WRONG — missing trailing slash on API_BASE produces /api/<id>convert
-const API_BASE = '/api/{PROJECT_ID}';
-fetch(API_BASE + 'convert'); // → /api/<id>convert  (404)
-
-// ❌ WRONG — leading slash on endpoint produces /api/<id>//convert
-const API_BASE = '/api/{PROJECT_ID}/';
-fetch(API_BASE + '/convert'); // → /api/<id>//convert  (404)
-```
-
-## Direct External API Calls (no backend needed)
-
-For read-only public APIs, call directly from frontend:
-
-```js
-// Pattern: fetch external API directly
-async function fetchExternalData(query) {
-  try {
-    const response = await fetch(`https://api.example.com/data?q=${encodeURIComponent(query)}`);
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('API error:', error);
-    showToast('Failed to load data');
-    return null;
-  }
-}
-```
-
-## Search with Debounce
-
-```js
-let searchTimeout = null;
-
-function setupSearch(inputEl, resultsEl, searchFn) {
-  inputEl.addEventListener('input', () => {
-    clearTimeout(searchTimeout);
-    const query = inputEl.value.trim();
-    if (query.length < 2) { resultsEl.innerHTML = ''; return; }
-    searchTimeout = setTimeout(async () => {
-      resultsEl.innerHTML = '<div class="loading">Searching...</div>';
-      const results = await searchFn(query);
-      renderResults(resultsEl, results);
-    }, 300);
-  });
-}
-```
-
 ## Screen Navigation (SPA pattern)
 
 ```js
 function showScreen(screenId) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById(screenId).classList.add('active');
-  
+
   if (screenId === 'main') {
-    Telegram.WebApp.BackButton.hide();
+    AF.back(null);                          // hide back button on root screen
   } else {
-    Telegram.WebApp.BackButton.show();
-    Telegram.WebApp.BackButton.onClick(() => showScreen('main'));
+    AF.back(() => showScreen('main'));      // show back button on sub-screens
   }
 }
 
@@ -180,51 +165,39 @@ function showScreen(screenId) {
 */
 ```
 
-## Bottom Sheet / Modal
+## Telegram WebApp — advanced APIs (access via AF.tg)
 
 ```js
-function openModal(modalEl) {
-  modalEl.classList.add('open');
-  Telegram.WebApp.HapticFeedback.impactOccurred('light');
-}
+// AF.tg is the raw Telegram.WebApp object for things not wrapped by AF SDK
+const tg = AF.tg;
 
-function closeModal(modalEl) {
-  modalEl.classList.remove('open');
-}
+// Popup / confirm
+tg.showPopup({
+  title: 'Confirm',
+  message: 'Are you sure?',
+  buttons: [
+    { id: 'yes', type: 'destructive', text: 'Delete' },
+    { id: 'no', type: 'cancel' }
+  ]
+}, (buttonId) => { if (buttonId === 'yes') doDelete(); });
 
-/* HTML structure:
-<div class="modal-overlay" id="myModal" onclick="if(event.target===this)closeModal(this)">
-  <div class="modal-sheet">
-    <div class="modal-handle"></div>
-    <div class="modal-content">...</div>
-  </div>
-</div>
-*/
+// Main button (bottom CTA)
+tg.MainButton.setText('Submit');
+tg.MainButton.show();
+tg.MainButton.onClick(() => { /* action */ });
+tg.MainButton.showProgress();
+tg.MainButton.hideProgress();
+tg.MainButton.hide();
 
-/* CSS:
-.modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.5); backdrop-filter:blur(4px); z-index:100; display:none; }
-.modal-overlay.open { display:flex; align-items:flex-end; }
-.modal-sheet { width:100%; background:#141414; border-radius:24px 24px 0 0; padding:16px; max-height:85vh; overflow-y:auto; animation:slideUp 0.3s ease-out; }
-.modal-handle { width:36px; height:5px; border-radius:9999px; background:rgba(255,255,255,0.4); margin:0 auto 16px; }
-@keyframes slideUp { from { transform:translateY(100%); } to { transform:translateY(0); } }
-*/
-```
+// Share
+tg.switchInlineQuery('check this out', ['users', 'groups']);
 
-## Pull to Refresh
+// Close
+tg.close();
 
-```js
-function setupPullToRefresh(containerEl, refreshFn) {
-  let startY = 0, pulling = false;
-  containerEl.addEventListener('touchstart', (e) => {
-    if (containerEl.scrollTop === 0) { startY = e.touches[0].clientY; pulling = true; }
-  });
-  containerEl.addEventListener('touchmove', (e) => {
-    if (!pulling) return;
-    const diff = e.touches[0].clientY - startY;
-    if (diff > 80) { pulling = false; refreshFn(); }
-  });
-  containerEl.addEventListener('touchend', () => { pulling = false; });
-}
+// Theme
+const theme = tg.themeParams;
+// theme.bg_color, theme.text_color, theme.hint_color, theme.button_color
 ```
 
 ## Toast Notification
@@ -247,6 +220,52 @@ function showToast(message, duration = 2000) {
 */
 ```
 
+## Tab Navigation
+
+```js
+function setupTabs(tabsContainer, contentContainer) {
+  tabsContainer.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      tabsContainer.querySelector('.tab.active')?.classList.remove('active');
+      tab.classList.add('active');
+      const target = tab.dataset.tab;
+      contentContainer.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      contentContainer.querySelector(`[data-tab-content="${target}"]`)?.classList.add('active');
+      AF.haptic('selection');
+    });
+  });
+}
+```
+
+## Bottom Sheet / Modal
+
+```js
+function openModal(modalEl) {
+  modalEl.classList.add('open');
+  AF.haptic('light');
+}
+function closeModal(modalEl) {
+  modalEl.classList.remove('open');
+}
+
+/* HTML structure:
+<div class="modal-overlay" id="myModal" onclick="if(event.target===this)closeModal(this)">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-content">...</div>
+  </div>
+</div>
+*/
+
+/* CSS:
+.modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.5); backdrop-filter:blur(4px); z-index:100; display:none; }
+.modal-overlay.open { display:flex; align-items:flex-end; }
+.modal-sheet { width:100%; background:#141414; border-radius:24px 24px 0 0; padding:16px; max-height:85vh; overflow-y:auto; animation:slideUp 0.3s ease-out; }
+.modal-handle { width:36px; height:5px; border-radius:9999px; background:rgba(255,255,255,0.4); margin:0 auto 16px; }
+@keyframes slideUp { from { transform:translateY(100%); } to { transform:translateY(0); } }
+*/
+```
+
 ## Loading Skeleton
 
 ```js
@@ -264,23 +283,6 @@ function showSkeleton(container, count = 3) {
 .skeleton-line { height:14px; background:rgba(255,255,255,0.08); border-radius:4px; margin-bottom:8px; animation:shimmer 1.5s infinite; }
 @keyframes shimmer { 0%{opacity:0.3} 50%{opacity:0.6} 100%{opacity:0.3} }
 */
-```
-
-## Tab Navigation
-
-```js
-function setupTabs(tabsContainer, contentContainer) {
-  tabsContainer.querySelectorAll('.tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      tabsContainer.querySelector('.tab.active')?.classList.remove('active');
-      tab.classList.add('active');
-      const target = tab.dataset.tab;
-      contentContainer.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-      contentContainer.querySelector(`[data-tab-content="${target}"]`)?.classList.add('active');
-      Telegram.WebApp.HapticFeedback.selectionChanged();
-    });
-  });
-}
 ```
 
 ## Infinite Scroll

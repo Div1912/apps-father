@@ -24,7 +24,8 @@ import { parseAgentLog } from "../services/agent-logger";
 import { decryptToken } from "../services/crypto.service";
 import { billingService } from "../services/billing.service";
 import { chatService, ChatMessage } from "../services/chat.service";
-import { agentService, AgentProgress, AgentAbortedError } from "../services/agent.service";
+import { AgentProgress, AgentAbortedError } from "../services/agent.service";
+import { agentSessionService } from "../services/agent-session.service";
 import { processingProjects, abortedProjects } from "../bot/processing";
 import { commitService } from "../services/commit.service";
 import * as adminQueries from "../services/admin-queries.service";
@@ -41,7 +42,6 @@ import { runtimeConfig, GAME_KIND_FEE_CREDITS, PREVIEW_UNLOCK_FEE_CREDITS, LINK_
 import { Decimal } from "@prisma/client/runtime/library";
 import { t, Lang } from "../bot/i18n";
 import { notifyProcessDone } from "../services/notify.service";
-import { signDesktopToken, verifyDesktopToken } from "./desktop-auth";
 import { sendBotWelcome } from "../services/welcome.service";
 
 let expressApp: express.Application | null = null;
@@ -180,8 +180,6 @@ export function createWebServer() {
   function validateAuth(req: express.Request): { valid: boolean; telegramId?: number; username?: string; firstName?: string } {
     const initData = (req.headers["x-telegram-init-data"] || "") as string;
     if (initData) return validateMiniAppInitData(initData);
-    const desktopToken = (req.headers["x-desktop-auth"] || "") as string;
-    if (desktopToken) return verifyDesktopToken(desktopToken);
     return { valid: false };
   }
 
@@ -255,12 +253,6 @@ export function createWebServer() {
     );
   }
 
-  // ── Desktop config (public, no auth) ──
-  app.get("/telegram-mini-app/api/desktop-config", (_req, res) => {
-    const botId = config.botToken.split(":")[0];
-    res.json({ botId });
-  });
-
   // ── Collaboration check (public, no auth) ──
   // Allows partners / external integrations to verify a Telegram user's
   // funnel state without needing initData. The {user-id} is the user's
@@ -307,91 +299,6 @@ export function createWebServer() {
     }
   });
 
-  // ── Desktop Web Auth (Telegram Login Widget) ──
-  app.post("/telegram-mini-app/api/web-auth", async (req, res) => {
-    try {
-      const { id, first_name, username, photo_url, auth_date, hash, startParam } = req.body;
-      if (!id || !hash || !auth_date) { res.status(400).json({ error: "Missing fields" }); return; }
-
-      const now = Math.floor(Date.now() / 1000);
-      if (now - Number(auth_date) > 86400) { res.status(401).json({ error: "Auth data expired" }); return; }
-
-      // startParam is passed in by the desktop login form so it can carry
-      // attribution (utm_source / referrer / partner-tag) — it's NOT part
-      // of Telegram's signed payload, so we must EXCLUDE it from the hash
-      // check to avoid breaking auth. Everything else stays in.
-      const checkData: Record<string, string> = {};
-      for (const key of Object.keys(req.body).sort()) {
-        if (key === "hash" || key === "startParam") continue;
-        checkData[key] = String(req.body[key]);
-      }
-      const dataCheckString = Object.entries(checkData).map(([k, v]) => `${k}=${v}`).join("\n");
-      const secretKey = crypto.createHash("sha256").update(config.botToken).digest();
-      const computedHash = crypto.createHmac("sha256", secretKey).update(dataCheckString).digest("hex");
-
-      if (computedHash !== hash) { res.status(401).json({ error: "Invalid hash" }); return; }
-
-      // Mirror the /api/init attribution flow: parse the start param,
-      // resolve referrer / partner tag / plain source, and forward to
-      // getOrCreateUser. Without this every desktop-Login user is Direct.
-      const parsed = parseStartParam(typeof startParam === "string" ? startParam : null);
-      let { source, referrerId } = parsed;
-      let referredBy = referrerId ? Number(referrerId) : undefined;
-      let partnerBonus: number | null = null;
-      let partnerTag: string | null = null;
-      if (!referredBy && source && !source.startsWith("v_")) {
-        try {
-          const partner = await prisma.user.findUnique({ where: { partnerTag: source } });
-          if (partner && partner.isPartner) {
-            referredBy = Number(partner.telegramId);
-            referrerId = String(partner.telegramId);
-            partnerTag = source;
-            if (partner.partnerReferralBonus && Number(partner.partnerReferralBonus) > 0) {
-              partnerBonus = Number(partner.partnerReferralBonus);
-            }
-          }
-        } catch (err) {
-          console.error("[Web Auth] Partner tag lookup error:", err);
-        }
-      }
-
-      const { user, isNew, attributedNow } = await projectService.getOrCreateUser(
-        Number(id),
-        username,
-        first_name,
-        referredBy,
-        source,
-      );
-
-      if ((isNew || attributedNow) && partnerBonus && user.referredBy && Number(user.balance) <= 0.2) {
-        try {
-          await prisma.user.update({
-            where: { id: user.id },
-            data: { balance: { increment: new Decimal(partnerBonus.toFixed(4)) } },
-          });
-          console.log(`[Web Auth] Partner bonus $${partnerBonus.toFixed(2)} credited to user ${user.id} via tag ${partnerTag}`);
-        } catch (err) {
-          console.error("[Web Auth] Partner bonus credit error:", err);
-        }
-      }
-
-      if (isNew || attributedNow) {
-        void trackEvent(Number(id), "user_registered", {
-          source,
-          referrer_id: referrerId,
-          telegram_id: Number(id),
-          channel: "web_login",
-        });
-      }
-
-      const token = signDesktopToken({ telegramId: Number(id), username, firstName: first_name });
-
-      res.json({ token, user: { id: user.id, telegramId: Number(id), username, firstName: first_name, photoUrl: photo_url } });
-    } catch (err) {
-      console.error("[Web Auth] Error:", err);
-      res.status(500).json({ error: "Auth failed" });
-    }
-  });
 
   // Analytics init — called on every Mini App load; records utm_source on first-time users
   app.post("/telegram-mini-app/api/init", async (req, res) => {
@@ -636,24 +543,7 @@ export function createWebServer() {
     }
   });
 
-  app.post("/telegram-mini-app/api/user/performance-tier", async (req, res) => {
-    try {
-      const auth = validateAuth(req);
-      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await getOrCreateUserFromReq(req, auth);
-      const { tierId } = req.body;
-      const allTiers = runtimeConfig.getAllTiers();
-      if (!tierId || !allTiers.find(t => t.id === tierId)) {
-        res.status(400).json({ error: "Invalid tierId" });
-        return;
-      }
-      await prisma.user.update({ where: { id: user.id }, data: { performanceTier: tierId } });
-      res.json({ ok: true, tierId });
-    } catch (err) {
-      console.error("[MiniApp API] Performance tier error:", err);
-      res.status(500).json({ error: "Internal server error" });
-    }
-  });
+  // Performance-tier endpoint removed — tiers are replaced by Agent Session Configuration.
 
   // ── Project .env variables editor ──
   const _PROJECTS_DIR_ENV = path.join(process.cwd(), "projects");
@@ -905,23 +795,17 @@ export function createWebServer() {
       const [credits, paymentCount, fullUser] = await Promise.all([
         billingService.getUserCredits(user.id),
         prisma.payment.count({ where: { userId: user.id, status: "confirmed" } }),
-        prisma.user.findUnique({ where: { id: user.id }, select: { firstDepositBonusGiven: true, performanceTier: true } }),
+        prisma.user.findUnique({ where: { id: user.id }, select: { firstDepositBonusGiven: true } }),
       ]);
       const firstDepositBonusEligible = paymentCount === 0 && !fullUser?.firstDepositBonusGiven;
       const firstDepositBonusPercent = Number(runtimeConfig.get().firstTopupBonusPercent) || 0;
       const creditsPerDollar = runtimeConfig.getCreditsPerDollar();
-      const tierId = fullUser?.performanceTier || "tier_1";
-      const tier = runtimeConfig.getPerformanceTier(tierId);
-      const allTiers = runtimeConfig.getAllTiers();
       const slotPriceCredits = runtimeConfig.get().slotPriceCredits || 30;
       const cashbackPercent = Math.max(0, Math.min(100, runtimeConfig.get().cashbackPercent ?? 50));
       const cashbackEnabled = runtimeConfig.get().cashbackEnabled !== false;
       res.json({
-        balance: credits,         // credits is the main UI balance
+        balance: credits,
         credits,
-        tierId,
-        tier,
-        allTiers,
         paymentCount,
         firstDepositBonusEligible,
         firstDepositBonusPercent,
@@ -1234,19 +1118,18 @@ export function createWebServer() {
           return;
         }
 
-        const userForBuild = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true, performanceTier: true } });
-        const userTierId = req.body.tierId || userForBuild?.performanceTier || "tier_1";
-        const userTier = runtimeConfig.getPerformanceTier(userTierId);
+        const userForBuild = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true } });
         const userCredits = userForBuild?.credits ?? 0;
-        if (userCredits < userTier.pricing.update) {
-          const errMsg = chatService.addMessage(projectId, { role: "system", type: "balance_error", content: t(lang, "insufficient_balance_amount", { balance: `${userCredits} cr`, min: `${userTier.pricing.update} cr` }), metadata: { balance: userCredits, minCost: userTier.pricing.update } });
+        const updateCost = runtimeConfig.getSessionCost("update");
+        if (userCredits < updateCost) {
+          const errMsg = chatService.addMessage(projectId, { role: "system", type: "balance_error", content: t(lang, "insufficient_balance_amount", { balance: `${userCredits} cr`, min: `${updateCost} cr` }), metadata: { balance: userCredits, minCost: updateCost } });
           broadcastToProject(projectId, { type: "message", message: errMsg });
           res.json({ messageId: userMsg.id, status: "error", error: "insufficient_balance" });
           return;
         }
 
         // Pre-charge credits immediately so balance updates before agent finishes
-        const preCharge = await billingService.preChargeAction(user.id, projectId, "update", userTierId).catch(() => ({ creditsCharged: 0, newCredits: userCredits }));
+        const preCharge = await billingService.preChargeAction(user.id, projectId, "update").catch(() => ({ creditsCharged: 0, newCredits: userCredits }));
         if (preCharge.creditsCharged > 0) {
           broadcastToProject(projectId, { type: "balance_update", newCredits: preCharge.newCredits });
         }
@@ -1270,11 +1153,7 @@ export function createWebServer() {
             content: t(lang, "sys_starting"),
             percent: 0,
             metadata: {
-              // Refund-on-error metadata: see /approve-plan for details.
-              // `originalText` is the user's update prompt so the client
-              // can re-fire the same request via the Try-again button.
               creditsPreCharged: preCharge.creditsCharged,
-              tierId: userTierId,
               taskKind: "update",
               originalText: text,
             },
@@ -1344,9 +1223,9 @@ export function createWebServer() {
               originalName: a.name,
             }));
 
-            const result = await agentService.updateApp(
+            const result = await agentSessionService.session_update(
               projectId, text.trim(), onProgress, attachments,
-              onAskUser, lang, userCredits, userTierId,
+              onAskUser, lang, userCredits,
             );
 
             const project = await projectService.getProject(projectId);
@@ -1354,7 +1233,7 @@ export function createWebServer() {
             const usage = await billingService.recordUsage(
               user.id, projectId, result.model,
               { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: result.cacheWriteTokens, cache_read_input_tokens: result.cacheReadTokens },
-              "update", userTierId, preCharge.creditsCharged > 0, completedTaskId,
+              "update", undefined, preCharge.creditsCharged > 0, completedTaskId,
             );
 
             await projectService.updateProjectStatus(projectId, "deployed");
@@ -1416,7 +1295,7 @@ export function createWebServer() {
             broadcastToProject(projectId, { type: "message", message: { role: "system", content: "preparing_next_update", metadata: { preparing: true } } });
             (async () => {
               try {
-                await agentService.compactContext(projectId, result.commitDir!, result.summary, result.commitNum!, project?.description || undefined, project?.plan || undefined, result.contextDiff || undefined);
+                await agentSessionService.compactContext(projectId, result.commitDir!, result.summary, result.commitNum!, project?.description || undefined, project?.plan || undefined, result.contextDiff || undefined);
               } catch (err) {
                 console.error("[Chat API] Background passport error:", err);
               } finally {
@@ -1434,7 +1313,7 @@ export function createWebServer() {
               await billingService.recordUsage(
                 user.id, projectId, err.model,
                 { input_tokens: err.inputTokens, output_tokens: err.outputTokens, cache_creation_input_tokens: err.cacheWriteTokens, cache_read_input_tokens: err.cacheReadTokens },
-                "update", userTierId, false, abortedTaskId,
+                "update", undefined, false, abortedTaskId,
               );
               await projectService.updateProjectStatus(projectId, "deployed");
               processingProjects.delete(projectId);
@@ -1497,16 +1376,7 @@ export function createWebServer() {
       }
 
       if (msgType === "question") {
-        const askUserData = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true, performanceTier: true } });
-        const askTierId = req.body.tierId || askUserData?.performanceTier || "tier_1";
-        const askTier = runtimeConfig.getPerformanceTier(askTierId);
-        const askCredits = askUserData?.credits ?? 0;
-        if (askCredits < askTier.pricing.ask) {
-          const errMsg = chatService.addMessage(projectId, { role: "system", type: "balance_error", content: t(lang, "insufficient_balance_amount", { balance: `${askCredits} cr`, min: `${askTier.pricing.ask} cr` }), metadata: { balance: askCredits } });
-          broadcastToProject(projectId, { type: "message", message: errMsg });
-          res.json({ messageId: userMsg.id, status: "error", error: "insufficient_balance" });
-          return;
-        }
+        // Answer sessions are free (0 credits)
 
         const streamMsgId = crypto.randomBytes(8).toString("hex");
         res.json({ messageId: userMsg.id, streamMsgId, status: "processing" });
@@ -1530,18 +1400,18 @@ export function createWebServer() {
               .slice(-10)
               .map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
 
-            const answer = await agentService.answerQuestionStream(
+            const answer = await agentSessionService.session_answer(
               projectId, text.trim(),
               (_chunk, fullText) => {
                 broadcastToProject(projectId, { type: "stream_chunk", projectId, messageId: streamMsgId, text: fullText });
               },
-              lastUpdate, proj?.description || undefined, askHistory, lang, askTierId,
+              lastUpdate, proj?.description || undefined, askHistory, lang,
             );
 
             const usage = await billingService.recordUsage(
-              user.id, projectId, runtimeConfig.getModelConfig("ask", askTierId).modelId,
+              user.id, projectId, runtimeConfig.getSessionConfig("answer").model,
               { input_tokens: answer.inputTokens, output_tokens: answer.outputTokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-              "ask", askTierId,
+              "answer",
             );
 
             const ansMsg = chatService.addMessage(projectId, {
@@ -1637,11 +1507,10 @@ export function createWebServer() {
       if (!owner) return;
       const ownerLang = (owner.language as Lang) || "en";
 
-      const ownerData = await prisma.user.findUnique({ where: { id: owner.id }, select: { credits: true, performanceTier: true } });
-      const ownerTierId = ownerData?.performanceTier || "tier_1";
-      const ownerTier = runtimeConfig.getPerformanceTier(ownerTierId);
+      const ownerData = await prisma.user.findUnique({ where: { id: owner.id }, select: { credits: true } });
       const ownerCredits = ownerData?.credits ?? 0;
-      if (ownerCredits < ownerTier.pricing.update) {
+      const autoFixCost = runtimeConfig.getSessionCost("bug-fix");
+      if (ownerCredits < autoFixCost) {
         const errMsg = chatService.addMessage(projectId, {
           role: "system", type: "balance_error",
           content: t(ownerLang, "autofix_insufficient_balance", { balance: `${ownerCredits} cr` }),
@@ -1672,14 +1541,14 @@ export function createWebServer() {
             broadcastToProject(projectId, { type: "progress", projectId, messageId: progressMsgId, percent: p.percent, message: `${p.action} ${p.detail}`, checklist: items, costUsd: p.costUsd, balance: p.balance });
           };
 
-          const result = await agentService.updateApp(projectId, errorText, onProgress, [], undefined, ownerLang, ownerCredits, ownerTierId);
+          const result = await agentSessionService.session_update(projectId, errorText, onProgress, [], undefined, ownerLang, ownerCredits);
 
           const fixedProject = await projectService.getProject(projectId).catch(() => null);
           const fixTaskId = (fixedProject as any)?.lastTaskId || undefined;
           const usage = await billingService.recordUsage(
             owner.id, projectId, result.model,
             { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: result.cacheWriteTokens, cache_read_input_tokens: result.cacheReadTokens },
-            "update", ownerTierId, false, fixTaskId,
+            "bug-fix", undefined, false, fixTaskId,
           );
 
           await projectService.updateProjectStatus(projectId, "deployed");
@@ -1701,7 +1570,7 @@ export function createWebServer() {
 
           broadcastToProject(projectId, { type: "message", message: { role: "system", content: "preparing_next_update", metadata: { preparing: true } } });
           (async () => {
-            try { await agentService.compactContext(projectId, result.commitDir!, result.summary, result.commitNum!, project?.description || undefined, project?.plan || undefined, result.contextDiff || undefined); } catch {}
+            try { await agentSessionService.compactContext(projectId, result.commitDir!, result.summary, result.commitNum!, project?.description || undefined, project?.plan || undefined, result.contextDiff || undefined); } catch {}
             finally {
               broadcastToProject(projectId, { type: "finalizing_done", projectId });
               processingProjects.delete(projectId);
@@ -1714,7 +1583,7 @@ export function createWebServer() {
             await billingService.recordUsage(
               owner.id, projectId, err.model,
               { input_tokens: err.inputTokens, output_tokens: err.outputTokens, cache_creation_input_tokens: err.cacheWriteTokens, cache_read_input_tokens: err.cacheReadTokens },
-              "update", ownerTierId,
+              "bug-fix",
             );
             await projectService.updateProjectStatus(projectId, "deployed");
             processingProjects.delete(projectId);
@@ -1742,23 +1611,13 @@ export function createWebServer() {
       const project = await projectService.getProject(req.params.projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
-      const suggUserData = await prisma.user.findUnique({ where: { id: user.id }, select: { performanceTier: true, credits: true } });
-      const suggTierId = req.body.tierId || suggUserData?.performanceTier || "tier_1";
-      const suggCredits = suggUserData?.credits ?? 0;
+      // Suggestions are free (0 credits)
+      const suggestions = await agentSessionService.session_suggestions(req.params.projectId, suggestLang);
 
-      // Pre-charge suggestions credits immediately
-      const suggPreCharge = await billingService.preChargeAction(user.id, req.params.projectId, "suggestions", suggTierId).catch(() => ({ creditsCharged: 0, newCredits: suggCredits }));
-      if (suggPreCharge.creditsCharged > 0) {
-        broadcastToProject(req.params.projectId, { type: "balance_update", newCredits: suggPreCharge.newCredits });
-      }
-
-      const suggestions = await agentService.getSuggestions(req.params.projectId, suggestLang, suggTierId);
-
-      const suggModelId = runtimeConfig.getModelConfig("suggestions", suggTierId).modelId;
       await billingService.recordUsage(
-        user.id, req.params.projectId, suggModelId,
+        user.id, req.params.projectId, runtimeConfig.getSessionConfig("suggestions").model,
         { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-        "suggestions", suggTierId, suggPreCharge.creditsCharged > 0,
+        "suggestions",
       ).catch(() => {});
 
       res.json({ suggestions });
@@ -1839,8 +1698,7 @@ export function createWebServer() {
                 costUsd: new Decimal("0"),
                 operation: "game_kind_fee",
                 creditsCharged: GAME_KIND_FEE_CREDITS,
-                tierId: null,
-              },
+                },
             });
             return u.credits;
           });
@@ -1883,14 +1741,7 @@ export function createWebServer() {
         return;
       }
 
-      const planUserData = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true, performanceTier: true } });
-      const planTierId = req.body.tierId || planUserData?.performanceTier || "tier_1";
-      const planTier = runtimeConfig.getPerformanceTier(planTierId);
-      const planCredits = planUserData?.credits ?? 0;
-      if (planCredits < planTier.pricing.plan) {
-        res.status(402).json({ error: "Insufficient credits" });
-        return;
-      }
+      // Plan generation is part of the build flow — free at this step (charged at approve-plan/build)
 
       await projectService.updateProjectDescription(projectId, description.trim());
 
@@ -1911,7 +1762,7 @@ export function createWebServer() {
           const assets = await projectService.getProjectAssets(projectId);
           const assetPaths = assets.map((a: any) => a.filePath).filter(Boolean) as string[];
           const result = await claudeService.generatePlan(
-            description.trim(), assetPaths, planLang, projectPrefs, planTierId,
+            description.trim(), assetPaths, planLang, projectPrefs, undefined,
             (_delta, full) => {
               broadcastToProject(projectId, { type: "plan_stream_chunk", projectId, messageId: streamMsgId, text: full });
             },
@@ -1919,9 +1770,9 @@ export function createWebServer() {
           await projectService.updateProjectPlan(projectId, result.plan);
 
           const usage = await billingService.recordUsage(
-            user.id, projectId, runtimeConfig.getModelConfig("plan", planTierId).modelId,
+            user.id, projectId, runtimeConfig.getSessionConfig("build").model,
             { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-            "plan", planTierId,
+            "plan",
           );
 
           const planMsg = chatService.addMessage(projectId, {
@@ -1969,17 +1820,16 @@ export function createWebServer() {
       if (!project.plan) { res.status(400).json({ error: "No plan to approve" }); return; }
       if (processingProjects.has(projectId)) { res.status(409).json({ error: "Already processing" }); return; }
 
-      const buildUserData = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true, performanceTier: true } });
-      const buildTierId = req.body.tierId || buildUserData?.performanceTier || "tier_1";
-      const buildTier = runtimeConfig.getPerformanceTier(buildTierId);
+      const buildUserData = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true } });
       const buildCredits = buildUserData?.credits ?? 0;
-      if (buildCredits < buildTier.pricing.create) {
-        res.status(402).json({ error: t(buildLang, "insufficient_balance_amount", { balance: `${buildCredits} cr`, min: `${buildTier.pricing.create} cr` }) });
+      const buildCost = runtimeConfig.getSessionCost("build");
+      if (buildCredits < buildCost) {
+        res.status(402).json({ error: t(buildLang, "insufficient_balance_amount", { balance: `${buildCredits} cr`, min: `${buildCost} cr` }) });
         return;
       }
 
       // Pre-charge credits immediately
-      const buildPreCharge = await billingService.preChargeAction(user.id, projectId, "build", buildTierId).catch(() => ({ creditsCharged: 0, newCredits: buildCredits }));
+      const buildPreCharge = await billingService.preChargeAction(user.id, projectId, "build").catch(() => ({ creditsCharged: 0, newCredits: buildCredits }));
       if (buildPreCharge.creditsCharged > 0) {
         broadcastToProject(projectId, { type: "balance_update", newCredits: buildPreCharge.newCredits });
       }
@@ -2004,7 +1854,6 @@ export function createWebServer() {
             // pre-charges after a server restart, and the catch block below
             // know how much to refund / what to retry.
             creditsPreCharged: buildPreCharge.creditsCharged,
-            tierId: buildTierId,
             taskKind: "build",
           },
         });
@@ -2045,15 +1894,15 @@ export function createWebServer() {
             });
           };
 
-          const result = await agentService.buildApp(
+          const result = await agentSessionService.session_build(
             projectId, project.description || "", project.plan!,
-            onProgress, onAskUser, buildLang, buildCredits, buildTierId,
+            onProgress, onAskUser, buildLang, buildCredits,
           );
 
           const usage = await billingService.recordUsage(
             user.id, projectId, result.model,
             { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: result.cacheWriteTokens, cache_read_input_tokens: result.cacheReadTokens },
-            "build", buildTierId, buildPreCharge.creditsCharged > 0,
+            "build", undefined, buildPreCharge.creditsCharged > 0,
           );
 
           await projectService.updateProjectStatus(projectId, "deployed");
@@ -2108,7 +1957,7 @@ export function createWebServer() {
           broadcastToProject(projectId, { type: "message", message: { role: "system", content: "preparing_next_update", metadata: { preparing: true } } });
           (async () => {
             try {
-              await agentService.compactContext(projectId, result.commitDir!, result.summary, result.commitNum!, project.description || undefined, project.plan || undefined, result.contextDiff || undefined);
+              await agentSessionService.compactContext(projectId, result.commitDir!, result.summary, result.commitNum!, project.description || undefined, project.plan || undefined, result.contextDiff || undefined);
             } catch (err) {
               console.error("[Chat API] Background passport error:", err);
             } finally {
@@ -2122,7 +1971,7 @@ export function createWebServer() {
             await billingService.recordUsage(
               user.id, projectId, err.model,
               { input_tokens: err.inputTokens, output_tokens: err.outputTokens, cache_creation_input_tokens: err.cacheWriteTokens, cache_read_input_tokens: err.cacheReadTokens },
-              "build", buildTierId,
+              "build",
             );
             await projectService.updateProjectStatus(projectId, project.generatedCode ? "deployed" : "created");
             processingProjects.delete(projectId);
@@ -2186,14 +2035,7 @@ export function createWebServer() {
       const { feedback } = req.body;
       if (!feedback?.trim()) { res.status(400).json({ error: "Feedback required" }); return; }
 
-      const editPlanUserData = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true, performanceTier: true } });
-      const editPlanTierId = req.body.tierId || editPlanUserData?.performanceTier || "tier_1";
-      const editPlanTier = runtimeConfig.getPerformanceTier(editPlanTierId);
-      const editPlanCredits = editPlanUserData?.credits ?? 0;
-      if (editPlanCredits < editPlanTier.pricing.plan) {
-        res.status(402).json({ error: "Insufficient credits" });
-        return;
-      }
+      // Edit plan is free (part of the build flow)
 
       chatService.addMessage(projectId, { role: "user", type: "text", content: feedback.trim() });
 
@@ -2206,7 +2048,7 @@ export function createWebServer() {
           const updatedDescription = `${project.description}\n\nAdditional feedback: ${feedback.trim()}`;
           const editPrefs = parseProjectPreferences((project as any).preferences ?? null);
           const result = await claudeService.generatePlan(
-            updatedDescription, undefined, editPlanLang, editPrefs, editPlanTierId,
+            updatedDescription, undefined, editPlanLang, editPrefs, undefined,
             (_delta, full) => {
               broadcastToProject(projectId, { type: "plan_stream_chunk", projectId, messageId: streamMsgId, text: full });
             },
@@ -2214,9 +2056,9 @@ export function createWebServer() {
           await projectService.updateProjectPlan(projectId, result.plan);
 
           const usage = await billingService.recordUsage(
-            user.id, projectId, runtimeConfig.getModelConfig("plan", editPlanTierId).modelId,
+            user.id, projectId, runtimeConfig.getSessionConfig("build").model,
             { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-            "plan", editPlanTierId,
+            "plan",
           );
 
           const planMsg = chatService.addMessage(projectId, {
@@ -2259,6 +2101,399 @@ export function createWebServer() {
       res.json({ resolved });
     } catch (err) {
       console.error("[Chat API] Answer error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // ── v4 chat router: classify message, propose action with one button ──
+  app.post("/telegram-mini-app/api/chat/:projectId/route", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const lang = (user.language as Lang) || "en";
+      const projectId = req.params.projectId;
+      const project = await projectService.getProject(projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
+
+      const { text } = req.body;
+      if (!text || !text.trim()) { res.status(400).json({ error: "Empty message" }); return; }
+
+      const routerUserData = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true } });
+      const routerCredits = routerUserData?.credits ?? 0;
+      // Router session is always free (cost = 0); the charged session starts after proposal acceptance.
+      const routerPreCharge = { creditsCharged: 0, newCredits: routerCredits };
+      if (routerPreCharge.creditsCharged > 0) {
+        broadcastToProject(projectId, { type: "balance_update", newCredits: routerPreCharge.newCredits });
+      }
+
+      // Persist the user's message so it survives reconnect.
+      const userMsg = chatService.addMessage(projectId, { role: "user", type: "text", content: text.trim() });
+      broadcastToProject(projectId, { type: "message", message: userMsg });
+
+      res.json({ messageId: userMsg.id, status: "routing" });
+
+      (async () => {
+        broadcastToProject(projectId, { type: "router_thinking", projectId, intent: null, detail: "Reading your message..." });
+
+        const allHistory = chatService.getHistory(projectId, undefined, 1000);
+        const routerHistory = allHistory
+          .filter(m => (m.role === "user" || m.role === "assistant") && m.type === "text")
+          .filter(m => m.id !== userMsg.id)
+          .slice(-12)
+          .map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
+
+        // Wire questionnaire + proposal hooks to chat + WS.
+        const hooks = {
+          async askQuestion(question: string, options: string[]) {
+            const qMsg = chatService.addMessage(projectId, {
+              role: "assistant",
+              type: "question",
+              content: question,
+              metadata: { options, source: "router" },
+            });
+            broadcastToProject(projectId, { type: "router_question", projectId, messageId: qMsg.id, question, options });
+
+            return new Promise<{ answer: string }>((resolve) => {
+              const timeout = setTimeout(() => resolve({ answer: "" }), 5 * 60 * 1000);
+              registerAnswerResolver(projectId, (answer: string) => {
+                clearTimeout(timeout);
+                chatService.removeMessage(projectId, qMsg.id);
+                broadcastToProject(projectId, { type: "remove_messages", projectId, messageIds: [qMsg.id] });
+                resolve({ answer });
+              });
+            });
+          },
+          async emitProposal(p: {
+            kind: string;
+            title: string;
+            description: string;
+            plan?: string[];
+            brief?: string;
+            prefilledPrompt?: string;
+            creditsCost: number;
+          }) {
+            const pMsg = chatService.addMessage(projectId, {
+              role: "assistant",
+              type: "text",
+              content: p.description,
+              metadata: {
+                proposal: true,
+                kind: p.kind,
+                title: p.title,
+                plan: p.plan,
+                brief: p.brief,
+                prefilledPrompt: p.prefilledPrompt,
+                creditsCost: p.creditsCost,
+              },
+            });
+            broadcastToProject(projectId, { type: "message", message: pMsg });
+            broadcastToProject(projectId, {
+              type: "router_proposal",
+              projectId,
+              messageId: pMsg.id,
+              proposalId: pMsg.id,
+              kind: p.kind,
+              title: p.title,
+              description: p.description,
+              plan: p.plan,
+              creditsCost: p.creditsCost,
+            });
+            return { proposalId: pMsg.id };
+          },
+          emitThinking(detail: string) {
+            broadcastToProject(projectId, { type: "router_thinking", projectId, intent: null, detail });
+          },
+        };
+
+        try {
+          const result = await agentSessionService.session_router(
+            projectId, text.trim(), hooks as any, routerHistory, lang,
+          );
+
+          const usage = await billingService.recordUsage(
+            user.id, projectId, result.modelId,
+            { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+            "router", undefined, false,
+          );
+
+          if (!result.proposed && result.text.trim()) {
+            // Model finished without calling propose_action — fall back to a
+            // plain text bubble so the user still sees an answer.
+            const fallbackMsg = chatService.addMessage(projectId, {
+              role: "assistant", type: "text",
+              content: result.text.trim(),
+              costUsd: usage.costUsd, balance: usage.newBalance,
+            });
+            broadcastToProject(projectId, { type: "message", message: fallbackMsg });
+          } else {
+            broadcastToProject(projectId, { type: "balance_update", newCredits: usage.newBalance });
+          }
+        } catch (err: any) {
+          console.error("[Chat API] Router error:", err);
+          // Router session is free, nothing to refund.
+          const errMsg = chatService.addMessage(projectId, {
+            role: "assistant", type: "error",
+            content: `Failed to process message: ${err?.message || "Unknown error"}`,
+          });
+          broadcastToProject(projectId, { type: "message", message: errMsg });
+        }
+      })();
+    } catch (err) {
+      console.error("[Chat API] Route handler error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // ── Execute a proposal card's button (Fix / Build) ──
+  // Looks up the proposal message, extracts prefilledPrompt + planItems, then
+  // re-uses the existing /send (update) pipeline by calling agentSessionService.session_update.
+  app.post("/telegram-mini-app/api/chat/:projectId/execute-proposal", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const lang = (user.language as Lang) || "en";
+      const projectId = req.params.projectId;
+      const project = await projectService.getProject(projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
+
+      const { proposalId } = req.body;
+      if (!proposalId) { res.status(400).json({ error: "proposalId required" }); return; }
+
+      const history = chatService.getHistory(projectId, undefined, 2000);
+      const proposalMsg = history.find(m => m.id === proposalId);
+      if (!proposalMsg || !proposalMsg.metadata?.proposal) {
+        res.status(404).json({ error: "Proposal not found" });
+        return;
+      }
+
+      const kind = String(proposalMsg.metadata.kind || "");
+      const prefilledPrompt = String(proposalMsg.metadata.prefilledPrompt || "").trim();
+      const plan: string[] = Array.isArray(proposalMsg.metadata.plan) ? proposalMsg.metadata.plan : [];
+      const brief = String(proposalMsg.metadata.brief || "").trim();
+      const creditsCost: number = proposalMsg.metadata.creditsCost ?? 0;
+
+      if (kind === "answer" || kind === "suggestions") {
+        // Free sessions — answer was already shown in the bubble body.
+        res.json({ status: "noop" });
+        return;
+      }
+      const agentPrompt = prefilledPrompt || brief;
+      if (!agentPrompt) {
+        res.status(400).json({ error: "Proposal has no prompt or brief" });
+        return;
+      }
+      if (processingProjects.has(projectId)) {
+        res.status(409).json({ error: "Already processing" });
+        return;
+      }
+
+      const execUserData = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true } });
+      const execCredits = execUserData?.credits ?? 0;
+      if (execCredits < creditsCost) {
+        const errMsg = chatService.addMessage(projectId, {
+          role: "system",
+          type: "balance_error",
+          content: t(lang, "insufficient_balance_amount", { balance: `${execCredits} cr`, min: `${creditsCost} cr` }),
+          metadata: { balance: execCredits, minCost: creditsCost },
+        });
+        broadcastToProject(projectId, { type: "message", message: errMsg });
+        res.status(402).json({ error: "insufficient_balance" });
+        return;
+      }
+
+      // Build the agent prompt. For update-plan prepend the plan checklist.
+      let buildPrompt = agentPrompt;
+      if (kind === "update-plan" && plan.length > 0) {
+        const items = plan.map((s, i) => `${i + 1}. ${s}`).join("\n");
+        buildPrompt = `${agentPrompt}\n\nPlanned subtasks (complete all):\n${items}`;
+      }
+
+      const preCharge = await billingService
+        .preChargeAction(user.id, projectId, kind as any, plan.length || undefined)
+        .catch(() => ({ creditsCharged: 0, newCredits: execCredits }));
+      if (preCharge.creditsCharged > 0) {
+        broadcastToProject(projectId, { type: "balance_update", newCredits: preCharge.newCredits });
+      }
+
+      // Mark the proposal bubble as accepted so the client can hide its button.
+      chatService.updateMessage(projectId, proposalId, {
+        metadata: { ...proposalMsg.metadata, accepted: true },
+      });
+      broadcastToProject(projectId, { type: "proposal_accepted", projectId, proposalId });
+
+      res.json({ status: "processing" });
+
+      void trackEvent(auth.telegramId!, "agent_started", {
+        project_id: projectId,
+        source: `router_${kind}`,
+        credits_cost: preCharge.creditsCharged,
+      });
+
+      (async () => {
+        processingProjects.add(projectId);
+        let progressMsgId: string | null = null;
+        let items: { id: number; text: string; done: boolean }[] = [];
+
+        const progressMsg = chatService.addMessage(projectId, {
+          role: "assistant", type: "progress",
+          content: t(lang, "sys_starting"), percent: 0,
+          metadata: {
+            creditsPreCharged: preCharge.creditsCharged,
+            taskKind: kind,
+            originalText: buildPrompt,
+            sourceProposalId: proposalId,
+          },
+        });
+        progressMsgId = progressMsg.id;
+        broadcastToProject(projectId, { type: "message", message: progressMsg });
+
+        const runningProject = await projectService.getProject(projectId);
+        const pendingTaskId = (runningProject as any)?.lastTaskId;
+        if (pendingTaskId) {
+          broadcastToProject(projectId, { type: "task_started", taskId: pendingTaskId });
+        }
+
+        try {
+          await projectService.updateProjectStatus(projectId, "building");
+          let progressDone = false;
+          const onProgress = async (p: AgentProgress) => {
+            if (!progressMsgId || progressDone) return;
+            if (forwardAgentProgress(projectId, progressMsgId, p, items)) return;
+            if ((p.percent ?? 0) >= 100) { progressDone = true; return; }
+            chatService.updateMessage(projectId, progressMsgId, {
+              content: `${p.action} ${p.detail}`,
+              percent: p.percent, costUsd: p.costUsd, balance: p.balance,
+            });
+            broadcastToProject(projectId, {
+              type: "progress", projectId, messageId: progressMsgId,
+              percent: p.percent, message: `${p.action} ${p.detail}`,
+              checklist: items, costUsd: p.costUsd, balance: p.balance,
+            });
+          };
+
+          const onAskUser = async (question: string, options: string[]): Promise<string> => {
+            const qMsg = chatService.addMessage(projectId, {
+              role: "assistant", type: "question", content: question, metadata: { options },
+            });
+            broadcastToProject(projectId, { type: "question", projectId, messageId: qMsg.id, question, options });
+            return new Promise<string>((resolve) => {
+              const timeout = setTimeout(() => resolve(""), 5 * 60 * 1000);
+              registerAnswerResolver(projectId, (answer: string) => {
+                clearTimeout(timeout);
+                chatService.removeMessage(projectId, qMsg.id);
+                broadcastToProject(projectId, { type: "remove_messages", projectId, messageIds: [qMsg.id] });
+                resolve(answer);
+              });
+            });
+          };
+
+          const result = await agentSessionService.session_update(
+            projectId, buildPrompt, onProgress, undefined,
+            onAskUser, lang, execCredits,
+          );
+
+          const proj = await projectService.getProject(projectId);
+          const completedTaskId = (proj as any)?.lastTaskId || undefined;
+          const usage = await billingService.recordUsage(
+            user.id, projectId, result.model,
+            { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: result.cacheWriteTokens, cache_read_input_tokens: result.cacheReadTokens },
+            kind, undefined, preCharge.creditsCharged > 0, completedTaskId,
+          );
+          await projectService.updateProjectStatus(projectId, "deployed");
+
+          try {
+            const shortLabel = kind === "bug-fix" ? "Fix" : "Update";
+            await commitService.createCommit(projectId, `${shortLabel}: ${buildPrompt.substring(0, 80)}`, result.commitNum!, result.commitDir!, result.logPath);
+          } catch {}
+
+          const allHistory = chatService.getHistory(projectId, undefined, 1000);
+          const updateNum = allHistory.filter(m => m.type === "result").length + 1;
+          const appName = proj?.name || "App";
+          const changelogUrl = await publishReport(`${appName} — Update #${updateNum}`, result.summary).catch(() => null);
+
+          const cashbackEnabled = runtimeConfig.get().cashbackEnabled !== false;
+          const cashbackAvail = cashbackEnabled && (usage.creditsCharged ?? 0) > 0;
+          if (progressMsgId) {
+            chatService.updateMessage(projectId, progressMsgId, {
+              type: "result", content: result.shortSummary, percent: 100,
+              costUsd: usage.costUsd, balance: usage.newBalance,
+              creditsCharged: usage.creditsCharged, commitNum: result.commitNum,
+              cashbackAvailable: cashbackAvail, cashbackClaimed: false, checklist: items,
+              // Preserve sourceProposalId so history replay can merge the cards.
+              metadata: { changelogUrl, stepCount: result.stepCount, durationMs: result.durationMs, sourceProposalId: proposalId },
+            });
+          }
+
+          broadcastToProject(projectId, {
+            type: "status", projectId, status: "done", messageId: progressMsgId,
+            summary: result.shortSummary, changelogUrl,
+            costUsd: usage.costUsd, balance: usage.newBalance,
+            creditsCharged: usage.creditsCharged, commitNum: result.commitNum,
+            cashbackAvailable: cashbackAvail, stepCount: result.stepCount, durationMs: result.durationMs,
+            // Tells the client to merge the completion card into the proposal bubble.
+            sourceProposalId: proposalId,
+          });
+
+          notifyProcessDone(auth.telegramId!, appName, result.shortSummary, "update", lang);
+
+          if (abortedProjects.has(projectId)) {
+            abortedProjects.delete(projectId);
+            processingProjects.delete(projectId);
+            return;
+          }
+
+          broadcastToProject(projectId, { type: "message", message: { role: "system", content: "preparing_next_update", metadata: { preparing: true } } });
+          (async () => {
+            try {
+              await agentSessionService.compactContext(projectId, result.commitDir!, result.summary, result.commitNum!, proj?.description || undefined, proj?.plan || undefined, result.contextDiff || undefined);
+            } catch (err) {
+              console.error("[Chat API] Background passport error:", err);
+            } finally {
+              broadcastToProject(projectId, { type: "finalizing_done", projectId });
+              processingProjects.delete(projectId);
+            }
+          })();
+        } catch (err: any) {
+          if (err instanceof AgentAbortedError) {
+            const abortedProj = await projectService.getProject(projectId).catch(() => null);
+            const abortedTaskId = (abortedProj as any)?.lastTaskId || undefined;
+            await billingService.recordUsage(
+              user.id, projectId, err.model,
+              { input_tokens: err.inputTokens, output_tokens: err.outputTokens, cache_creation_input_tokens: err.cacheWriteTokens, cache_read_input_tokens: err.cacheReadTokens },
+              kind, undefined, false, abortedTaskId,
+            );
+            await projectService.updateProjectStatus(projectId, "deployed");
+            processingProjects.delete(projectId);
+            return;
+          }
+          console.error("[Chat API] Execute-proposal agent error:", err);
+          await projectService.updateProjectStatus(projectId, "error");
+          if (progressMsgId) {
+            chatService.removeMessage(projectId, progressMsgId);
+            broadcastToProject(projectId, { type: "remove_messages", projectId, messageIds: [progressMsgId] });
+          }
+          let refunded = 0;
+          if (preCharge.creditsCharged > 0) {
+            try {
+              const r = await billingService.refundAction(user.id, projectId, "update", preCharge.creditsCharged);
+              refunded = preCharge.creditsCharged;
+              broadcastToProject(projectId, { type: "balance_update", newCredits: r.newCredits });
+            } catch {}
+          }
+          const errMsg = chatService.addMessage(projectId, {
+            role: "assistant", type: "error",
+            content: `${t(lang, "sys_update_failed")}: ${err?.message || "Unknown error"}`,
+            metadata: refunded > 0 ? { refunded: true, creditsRefunded: refunded, retry: { kind: "execute-proposal", proposalId } } : undefined,
+          });
+          broadcastToProject(projectId, { type: "message", message: errMsg });
+          broadcastToProject(projectId, { type: "status", projectId, status: "error", messageId: errMsg.id });
+          processingProjects.delete(projectId);
+        }
+      })();
+    } catch (err) {
+      console.error("[Chat API] Execute-proposal handler error:", err);
       res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -2430,8 +2665,7 @@ export function createWebServer() {
             costUsd: new Decimal("0"),
             operation: "preview_unlock",
             creditsCharged: PREVIEW_UNLOCK_FEE_CREDITS,
-            tierId: null,
-          },
+            },
         });
         return u.credits;
       });
@@ -2528,8 +2762,7 @@ export function createWebServer() {
             costUsd: new Decimal("0"),
             operation: "bot_create_unlock",
             creditsCharged: LINK_BOT_FEE_CREDITS,
-            tierId: null,
-          },
+            },
         });
         return u.credits;
       });
@@ -2735,7 +2968,6 @@ export function createWebServer() {
         take: 1,
       });
       const creditsCharged = usageRow?.creditsCharged ?? 0;
-      const performanceTier = usageRow?.tierId ?? null;
       const cashbackPercent = Math.max(0, Math.min(100, runtimeConfig.get().cashbackPercent ?? 50));
       const cashbackCredits = Math.max(0, Math.floor(creditsCharged * (cashbackPercent / 100)));
 
@@ -2770,7 +3002,6 @@ export function createWebServer() {
             qualityScore,
             speedScore,
             userDescription: description || null,
-            performanceTier,
             cashbackCredits,
             cashbackPaidAt: cashbackCredits > 0 ? new Date() : null,
             analysisStatus: "pending",
@@ -2973,7 +3204,7 @@ export function createWebServer() {
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
-      const context = await agentService.regenerateContext(projectId);
+      const context = await agentSessionService.regenerateContext(projectId);
       res.json({
         success: true,
         message: "Context regenerated from source code",
@@ -4128,6 +4359,7 @@ export function createWebServer() {
   app.get("/telegram-mini-app/", serveMiniAppIndex);
   app.use("/telegram-mini-app", express.static(path.join(__dirname, "..", "..", "mini_app")));
 
+
   app.use("/app", appRoutes);
   app.use("/bucket", bucketRoutes);
   app.use("/dev", devRoutes);
@@ -4168,3 +4400,4 @@ export async function startWebServer() {
     });
   });
 }
+

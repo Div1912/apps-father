@@ -3602,7 +3602,6 @@ textarea.tm-input { resize: vertical; }
 .chat-header-status.header-working {
   color: var(--accent-color, #248BDA);
   border-color: rgba(94,181,247,0.3);
-  background: rgba(94,181,247,0.08);
 }
 .chat-header-status.header-working::before {
   background: var(--accent-color, #248BDA);
@@ -3711,7 +3710,7 @@ color-mix(in srgb, #000000 10%, #00000000);
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 90px 18px 130px;
+  padding: 90px 18px 96px;
   transition: padding-bottom 0.25s ease;
   display: flex;
   flex-direction: column;
@@ -3833,6 +3832,322 @@ color-mix(in srgb, #000000 10%, #00000000);
   color: #fff;
 }
 
+/* ── v4 router proposal card ───────────────────────────────────────────── */
+.chat-bubble--proposal {
+  width: 100%;
+  background: none;
+  padding: 0;
+}
+.proposal-card {
+  position: relative;
+  margin: 8px 0 4px;
+  padding: 14px 14px 12px;
+  background: linear-gradient(180deg, rgba(36,139,218,0.06) 0%, rgba(36,139,218,0.02) 100%);
+  border: 1px solid rgba(94,181,247,0.18);
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow:
+    0 0 0 1px rgba(94,181,247,0.05),
+    0 6px 22px rgba(0,0,0,0.32),
+    inset 0 1px 0 rgba(255,255,255,0.05);
+  animation: completionIn 0.32s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.proposal-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(60% 40% at 50% 0%, rgba(94,181,247,0.07) 0%, transparent 70%);
+  pointer-events: none;
+}
+.proposal-card--bug-fix {
+  background: linear-gradient(180deg, rgba(247,121,121,0.07) 0%, rgba(247,121,121,0.02) 100%);
+  border-color: rgba(247,121,121,0.20);
+}
+.proposal-card--bug-fix::before {
+  background: radial-gradient(60% 40% at 50% 0%, rgba(247,121,121,0.09) 0%, transparent 70%);
+}
+/* build — green accent */
+.proposal-card--build {
+  background: linear-gradient(180deg, rgba(52,211,153,0.06) 0%, rgba(52,211,153,0.02) 100%);
+  border-color: rgba(52,211,153,0.18);
+}
+.proposal-card--build::before {
+  background: radial-gradient(60% 40% at 50% 0%, rgba(52,211,153,0.08) 0%, transparent 70%);
+}
+/* update / update-plan — soft green */
+.proposal-card--update,
+.proposal-card--update-plan {
+  background: linear-gradient(180deg, rgba(134,239,172,0.05) 0%, rgba(134,239,172,0.01) 100%);
+  border-color: rgba(134,239,172,0.16);
+}
+.proposal-card--update::before,
+.proposal-card--update-plan::before {
+  background: radial-gradient(60% 40% at 50% 0%, rgba(134,239,172,0.07) 0%, transparent 70%);
+}
+/* suggestions — amber */
+.proposal-card--suggestions {
+  background: linear-gradient(180deg, rgba(251,191,36,0.05) 0%, rgba(251,191,36,0.01) 100%);
+  border-color: rgba(251,191,36,0.16);
+}
+.proposal-card--suggestions::before {
+  background: radial-gradient(60% 40% at 50% 0%, rgba(251,191,36,0.07) 0%, transparent 70%);
+}
+
+/* When a completion card is merged below a proposal card they share one border. */
+.proposal-card--merged-top {
+  margin-bottom: 0;
+  border-bottom: none;
+  border-radius: 18px 18px 0 0;
+  box-shadow: none;
+}
+.proposal-card--merged-top::before { border-radius: 18px 18px 0 0; }
+
+/* completion-card that immediately follows a merged-top proposal card */
+.proposal-card--merged-top + .completion-card,
+.chat-bubble--result .proposal-card--merged-top ~ .completion-card {
+  animation-delay: 0.05s;
+}
+/* ── Kind badge (new — replaces legacy .proposal-intent) ── */
+.proposal-kind-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+  /* default = answer / router */
+  background: rgba(94,181,247,0.14);
+  color: #5eb5f7;
+  border: 1px solid rgba(94,181,247,0.28);
+}
+.proposal-kind-badge--build {
+  background: rgba(52,211,153,0.14);
+  color: #34d399;
+  border-color: rgba(52,211,153,0.28);
+}
+.proposal-kind-badge--update {
+  background: rgba(134,239,172,0.14);
+  color: #86efac;
+  border-color: rgba(134,239,172,0.28);
+}
+.proposal-kind-badge--update-plan {
+  background: rgba(110,231,183,0.14);
+  color: #6ee7b7;
+  border-color: rgba(110,231,183,0.28);
+}
+.proposal-kind-badge--bug-fix {
+  background: rgba(248,113,113,0.14);
+  color: #f87171;
+  border-color: rgba(248,113,113,0.28);
+}
+.proposal-kind-badge--suggestions {
+  background: rgba(251,191,36,0.14);
+  color: #fbbf24;
+  border-color: rgba(251,191,36,0.28);
+}
+.proposal-kind-badge--context,
+.proposal-kind-badge--router {
+  background: rgba(148,163,184,0.12);
+  color: #94a3b8;
+  border-color: rgba(148,163,184,0.24);
+}
+
+.proposal-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.proposal-intent {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: rgba(94,181,247,0.16);
+  color: #5eb5f7;
+  border: 1px solid rgba(94,181,247,0.28);
+  flex-shrink: 0;
+}
+.proposal-intent--bug {
+  background: rgba(247,121,121,0.16);
+  color: #f77979;
+  border-color: rgba(247,121,121,0.28);
+}
+.proposal-intent--update {
+  background: rgba(143,212,127,0.16);
+  color: #8fd47f;
+  border-color: rgba(143,212,127,0.30);
+}
+.proposal-intent--investigate {
+  background: rgba(255,200,87,0.14);
+  color: #ffc857;
+  border-color: rgba(255,200,87,0.28);
+}
+.proposal-intent--speak {
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.65);
+  border-color: rgba(255,255,255,0.12);
+}
+.proposal-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.95);
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  overflow-wrap: break-word;
+}
+.proposal-body {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: rgba(255,255,255,0.82);
+  margin-bottom: 4px;
+}
+.proposal-body p { margin: 0 0 6px; }
+.proposal-body p:last-child { margin-bottom: 0; }
+.proposal-plan {
+  list-style: none;
+  counter-reset: proposal-step;
+  padding: 6px 0 2px;
+  margin: 8px 0 4px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+.proposal-plan li {
+  counter-increment: proposal-step;
+  position: relative;
+  padding: 7px 0 7px 30px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255,255,255,0.82);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.proposal-plan li:last-child { border-bottom: none; }
+.proposal-plan li::before {
+  content: counter(proposal-step);
+  position: absolute;
+  left: 0;
+  top: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: rgba(94,181,247,0.14);
+  color: #5eb5f7;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.proposal-card--bug-fix .proposal-plan li::before {
+  background: rgba(247,121,121,0.14);
+  color: #f77979;
+}
+.proposal-card--build .proposal-plan li::before {
+  background: rgba(52,211,153,0.14);
+  color: #34d399;
+}
+.proposal-card--update .proposal-plan li::before,
+.proposal-card--update-plan .proposal-plan li::before {
+  background: rgba(134,239,172,0.14);
+  color: #86efac;
+}
+.proposal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.proposal-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1;
+  height: 40px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #2a93de 0%, #1f7fc4 100%);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.10) inset,
+    0 6px 16px rgba(36,139,218,0.30);
+  transition: transform 0.08s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+}
+.proposal-btn-primary:hover:not(:disabled) {
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.12) inset,
+    0 8px 22px rgba(36,139,218,0.42);
+}
+.proposal-btn-primary:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.proposal-btn-primary:disabled,
+.proposal-btn-primary.accepted {
+  opacity: 0.5;
+  cursor: default;
+  box-shadow: none;
+}
+.proposal-btn-primary.loading {
+  opacity: 0.7;
+  cursor: wait;
+}
+.proposal-btn-icon {
+  flex-shrink: 0;
+}
+.proposal-card--bug-fix .proposal-btn-primary {
+  background: linear-gradient(180deg, #e26565 0%, #c54848 100%);
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.10) inset,
+    0 6px 16px rgba(226,101,101,0.30);
+}
+.proposal-card--bug-fix .proposal-btn-primary:hover:not(:disabled) {
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.12) inset,
+    0 8px 22px rgba(226,101,101,0.42);
+}
+.proposal-card--build .proposal-btn-primary {
+  background: linear-gradient(180deg, #22c987 0%, #16a76e 100%);
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.10) inset,
+    0 6px 16px rgba(34,201,135,0.30);
+}
+.proposal-card--build .proposal-btn-primary:hover:not(:disabled) {
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.12) inset,
+    0 8px 22px rgba(34,201,135,0.42);
+}
+.proposal-card--update .proposal-btn-primary,
+.proposal-card--update-plan .proposal-btn-primary {
+  background: linear-gradient(180deg, #4ade80 0%, #22c55e 100%);
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.10) inset,
+    0 6px 16px rgba(74,222,128,0.25);
+  color: rgba(0,0,0,0.85);
+}
+.proposal-card--update .proposal-btn-primary:hover:not(:disabled),
+.proposal-card--update-plan .proposal-btn-primary:hover:not(:disabled) {
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.12) inset,
+    0 8px 22px rgba(74,222,128,0.38);
+}
+
 .chat-messages-inner {
   display: flex;
   flex-direction: column;
@@ -3888,7 +4203,7 @@ color-mix(in srgb, #000000 10%, #00000000);
 
 .chat-bubble--assistant {
   padding: 8px 0 16px;
-  border-bottom: 1px solid rgba(255,255,255,0.05);
+  /* border-bottom: 1px solid rgba(255,255,255,0.05); */
 }
 
 .chat-bubble--system {
@@ -4243,7 +4558,7 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
 /* When MainButton (stop) is visible, tg reduces viewport — chat messages compress.
    The is-processing class is still useful for any local fallback. */
 #view-chat.is-processing .chat-messages {
-  padding-bottom: 48px;
+  padding-bottom: 108px;
 }
 
 .chat-abort-btn {
@@ -4513,8 +4828,8 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
   background: linear-gradient(180deg, rgba(94,181,247,0.06), rgba(255,255,255,0.02));
 }
 .row.tool.done .agent-step {
-  border-color: rgba(255,255,255,0.07);
-  background: rgba(255,255,255,0.022);
+  border-color: rgba(255,255,255,0.1);
+  background: linear-gradient(0deg, #ffffff0a, #ffffff14);
 }
 .row.tool.error .agent-step {
   border-color: rgba(255,90,80,0.28);
@@ -5061,7 +5376,7 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
 }
 
 /* Typing indicator */
-.chat-typing { padding: 0; margin-top: 4px; }
+.chat-typing { display: none !important; }
 .typing-dots {
   display: flex;
   gap: 4px;
@@ -5079,6 +5394,22 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
 @keyframes typingBounce {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
   30% { transform: translateY(-4px); opacity: 1; }
+}
+
+/* Processing video — shown above input bar during agent run */
+.processing-video {
+  display: none;
+  position: absolute;
+  bottom: -140px;
+  width: 100%;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+
+/* Extra bottom breathing room so the video doesn't crowd the input */
+#view-chat.is-processing .chat-input-area {
+  padding-bottom: max(18px, calc(env(safe-area-inset-bottom, 0px) + 10px));
 }
 
 /* Input area — floating rounded panel */
@@ -5193,6 +5524,7 @@ h4.chat-h { font-size: 14px; color: var(--description-text-color, #8e9baa); }
 
 /* Floating input bar */
 .chat-input-bar {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: 0;
@@ -11606,3 +11938,187 @@ color-mix(in srgb, var(--tg-theme-button-color, #2563eb) 50%, transparent);
   padding: 8px 14px;
 }
 .chat-rate-btn--done:active { transform: none; }
+
+/* ─── Attach menu ─────────────────────────────────────────── */
+.attach-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: rgba(22, 22, 34, 0.96);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 14px;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+  min-width: 160px;
+}
+.attach-menu.hidden { display: none; }
+
+.attach-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  color: rgba(255,255,255,0.85);
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+  text-align: left;
+  white-space: nowrap;
+}
+.attach-menu-item:hover,
+.attach-menu-item:active {
+  background: rgba(255,255,255,0.08);
+}
+.attach-menu-item svg {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+/* ─── Canvas editor ───────────────────────────────────────── */
+.canvas-editor {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: #0a0a0f;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.canvas-editor.hidden { display: none; }
+
+.canvas-editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.04);
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.ce-colors {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.ce-color {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition: transform 0.12s, border-color 0.12s;
+}
+.ce-color.active {
+  border-color: #fff;
+  transform: scale(1.25);
+}
+.ce-color[data-color="#ffffff"] {
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.3);
+}
+
+.ce-sizes {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+.ce-size {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: transparent;
+  color: rgba(255,255,255,0.7);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.ce-size.active {
+  background: rgba(255,255,255,0.15);
+  border-color: rgba(255,255,255,0.4);
+  color: #fff;
+}
+
+.ce-tool-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: transparent;
+  color: rgba(255,255,255,0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+.ce-tool-btn.active,
+.ce-tool-btn:active {
+  background: rgba(255,255,255,0.12);
+  color: #fff;
+}
+
+.ce-canvas-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 12px;
+}
+#draw-canvas {
+  touch-action: none;
+  cursor: crosshair;
+  border-radius: 8px;
+  max-width: 100%;
+  max-height: 100%;
+  box-shadow: 0 4px 32px rgba(0,0,0,0.6);
+}
+
+.canvas-editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 16px;
+  padding-bottom: max(12px, calc(env(safe-area-inset-bottom, 0px) + 12px));
+  background: rgba(255,255,255,0.04);
+  border-top: 1px solid rgba(255,255,255,0.07);
+  flex-shrink: 0;
+}
+.ce-btn {
+  padding: 10px 22px;
+  border-radius: 10px;
+  border: none;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.12s;
+}
+.ce-btn:active { transform: scale(0.97); opacity: 0.85; }
+.ce-btn-cancel {
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.65);
+}
+.ce-btn-submit {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+}

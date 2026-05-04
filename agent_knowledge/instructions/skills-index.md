@@ -1,4 +1,5 @@
 AVAILABLE SKILLS (load via load_skill tool when relevant):
+- af-sdk — full AF SDK reference: AF.init, AF.api, AF.openWS, AF.haptic, AF.user, AF.storage, AF.back, validator checklist  [REQUIRED when writing or reviewing frontend app.js / index.html]
 - frontend — deep frontend patterns (routing, state, event handling)  [load if you need reference]
 - backend — Express + db patterns (auth, middleware, error handling)  [load if you need reference]
 - bot-management — bot webhook patterns, /start params, callback buttons, push notifications  [load if custom bot behavior needed]

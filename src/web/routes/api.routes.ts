@@ -11,9 +11,21 @@ import { runWithProject } from "../../services/console-tagger.service";
 const router = Router();
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
 
-// Persistent per-project DB connections — never closed between requests so that
-// background setInterval/setTimeout loops (game schedulers, etc.) keep working.
-const projectDbCache = new Map<string, ReturnType<typeof createProjectDb>>();
+// ── Per-project module cache ──────────────────────────────────────────────────
+// Keyed by projectId. Invalidated automatically when routes.js mtime changes
+// (i.e. after every deploy / finish). Keeping the module alive means module-level
+// variables (caches, counters, setIntervals …) persist between requests exactly
+// as the developer expects — no spurious "DB connection not open" errors from
+// closed connections being re-used by live timers.
+
+interface ProjectEntry {
+  mtime: number;
+  routeFactory: Function;
+  db: ReturnType<typeof createProjectDb>;
+  envVars: Record<string, string>;
+}
+
+const projectCache = new Map<string, ProjectEntry>();
 
 function createProjectDb(projectDir: string, botToken: string, botUsername: string, projectId: string) {
   const dataDir = path.join(projectDir, "data");
@@ -51,6 +63,61 @@ function createProjectDb(projectDir: string, botToken: string, botUsername: stri
   };
 }
 
+function evictProject(projectId: string): void {
+  const entry = projectCache.get(projectId);
+  if (entry) {
+    try { entry.db.close(); } catch {}
+    projectCache.delete(projectId);
+  }
+}
+
+async function loadProjectEntry(
+  projectId: string,
+  projectDir: string,
+  backendDir: string,
+  routesFile: string,
+): Promise<ProjectEntry> {
+  const mtime = fs.statSync(routesFile).mtimeMs;
+  const existing = projectCache.get(projectId);
+
+  // Return cached entry if the file hasn't changed.
+  if (existing && existing.mtime === mtime) {
+    return existing;
+  }
+
+  // File changed (new release deployed) or first load — evict stale entry.
+  if (existing) {
+    evictProject(projectId);
+    // Clear Node require cache so the new file is actually read from disk.
+    for (const key of Object.keys(require.cache)) {
+      if (key.startsWith(backendDir) && !key.includes("node_modules")) {
+        delete require.cache[key];
+      }
+    }
+  }
+
+  const routeFactory = require(routesFile);
+
+  const project = await projectService.getProject(projectId);
+  let botToken = "";
+  let botUsername = "";
+  if (project?.botTokenEncrypted) botToken = decryptToken(project.botTokenEncrypted);
+  if (project?.botUsername) botUsername = project.botUsername;
+
+  const releaseDir = path.join(projectDir, "release");
+  const db = createProjectDb(releaseDir, botToken, botUsername, projectId);
+
+  const envPath = path.join(backendDir, ".env");
+  const envVars = fs.existsSync(envPath) ? dotenv.parse(fs.readFileSync(envPath)) : {};
+
+  const entry: ProjectEntry = { mtime, routeFactory, db, envVars };
+  projectCache.set(projectId, entry);
+  console.log(`[API] Loaded routes.js for project ${projectId.substring(0, 8)} (mtime=${mtime})`);
+  return entry;
+}
+
+// ── Request handler ───────────────────────────────────────────────────────────
+
 router.use("/:projectId/{*routePath}", verifyInitData as any);
 
 router.all("/:projectId/{*routePath}", async (req: Request, res: Response) => {
@@ -67,82 +134,49 @@ router.all("/:projectId/{*routePath}", async (req: Request, res: Response) => {
     return;
   }
 
-  // Tag every console output produced by this project's routes.js (sync code,
-  // promises, timers, listeners) with `[app:<projectId>]` so the log viewer
-  // can filter by project. AsyncLocalStorage propagates through awaits.
   await runWithProject(projectId, async () => {
-  try {
-    // Clear module cache so route code changes take effect on next request
-    for (const key of Object.keys(require.cache)) {
-      if (key.startsWith(backendDir) && !key.includes("node_modules")) delete require.cache[key];
-    }
+    try {
+      const entry = await loadProjectEntry(projectId, projectDir, backendDir, routesFile);
+      const { routeFactory, db, envVars } = entry;
 
-    const projectRouter = Router();
-    const routeModule = require(routesFile);
+      const projectRouter = Router();
 
-    // Get or create a persistent DB connection for this project.
-    // We intentionally do NOT close it per-request — background timers (game loops,
-    // schedulers, etc.) inside routes.js hold a reference to the same db object and
-    // would crash with "database connection is not open" if we closed it here.
-    let db = projectDbCache.get(projectId);
-    if (!db) {
-      const project = await projectService.getProject(projectId);
-      let botToken = "";
-      let botUsername = "";
-      if (project?.botTokenEncrypted) botToken = decryptToken(project.botTokenEncrypted);
-      if (project?.botUsername) botUsername = project.botUsername;
-
-      const releaseDir = path.join(projectDir, "release");
-      db = createProjectDb(releaseDir, botToken, botUsername, projectId);
-      projectDbCache.set(projectId, db);
-      console.log(`[API] Opened persistent DB for project ${projectId.substring(0, 8)}`);
-    }
-
-    const envPath = path.join(backendDir, ".env");
-    const envVars = fs.existsSync(envPath)
-      ? dotenv.parse(fs.readFileSync(envPath))
-      : {};
-
-    if (typeof routeModule === "function") {
-      try {
-        routeModule(projectRouter, db, projectId, envVars);
-      } catch (regErr) {
-        console.error(`[API] Route registration error for ${projectId}:`, regErr);
-      }
-    }
-
-    const registeredRoutes: string[] = [];
-    if (projectRouter.stack) {
-      for (const layer of (projectRouter as any).stack) {
-        if (layer.route) {
-          const methods = Object.keys(layer.route.methods).join(",").toUpperCase();
-          registeredRoutes.push(`${methods} ${layer.route.path}`);
+      if (typeof routeFactory === "function") {
+        try {
+          routeFactory(projectRouter, db, projectId, envVars);
+        } catch (regErr) {
+          console.error(`[API] Route registration error for ${projectId}:`, regErr);
         }
       }
-    }
 
-    // Preserve the original query string when rewriting the URL
-    const qs = req.originalUrl.includes("?") ? req.originalUrl.slice(req.originalUrl.indexOf("?")) : "";
-    req.url = "/" + routePath + qs;
-    projectRouter(req, res, () => {
-      console.error(`[API] 404 for /${routePath} in project ${projectId.substring(0, 8)} | Registered: [${registeredRoutes.join(", ")}]`);
-      res.status(404).json({ error: "Endpoint not found" });
-    });
-  } catch (err) {
-    console.error(`[API] Error loading routes for ${projectId}:`, err);
-    res.status(500).json({ error: "Internal server error" });
-  }
+      const registeredRoutes: string[] = [];
+      if (projectRouter.stack) {
+        for (const layer of (projectRouter as any).stack) {
+          if (layer.route) {
+            const methods = Object.keys(layer.route.methods).join(",").toUpperCase();
+            registeredRoutes.push(`${methods} ${layer.route.path}`);
+          }
+        }
+      }
+
+      // Preserve the original query string when rewriting the URL
+      const qs = req.originalUrl.includes("?") ? req.originalUrl.slice(req.originalUrl.indexOf("?")) : "";
+      req.url = "/" + routePath + qs;
+      projectRouter(req, res, () => {
+        console.error(`[API] 404 for /${routePath} in project ${projectId.substring(0, 8)} | Registered: [${registeredRoutes.join(", ")}]`);
+        res.status(404).json({ error: "Endpoint not found" });
+      });
+    } catch (err) {
+      console.error(`[API] Error loading routes for ${projectId}:`, err);
+      res.status(500).json({ error: "Internal server error" });
+    }
   });
 });
 
-/** Evict a project's cached DB connection so the next request opens a fresh one. */
+/** Evict a project's cached module+DB so the next request picks up the new routes.js. */
 export function invalidateProjectDbCache(projectId: string): void {
-  const db = projectDbCache.get(projectId);
-  if (db) {
-    try { (db as any).close?.(); } catch {}
-    projectDbCache.delete(projectId);
-    console.log(`[API] Evicted DB cache for project ${projectId.substring(0, 8)}`);
-  }
+  evictProject(projectId);
+  console.log(`[API] Evicted cache for project ${projectId.substring(0, 8)}`);
 }
 
 export default router;

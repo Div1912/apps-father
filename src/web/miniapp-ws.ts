@@ -2,7 +2,6 @@ import { WebSocketServer, WebSocket } from "ws";
 import { IncomingMessage } from "http";
 import crypto from "crypto";
 import { config } from "../config";
-import { verifyDesktopToken } from "./desktop-auth";
 
 interface MiniAppClient {
   ws: WebSocket;
@@ -79,11 +78,7 @@ export function setupMiniAppWebSocket(): WebSocketServer {
         const data = JSON.parse(raw.toString());
 
         if (data.type === "auth") {
-          let auth = validateInitData(data.initData || "");
-          if (!auth.valid && data.desktopToken) {
-            const dt = verifyDesktopToken(data.desktopToken);
-            if (dt.valid) auth = { valid: true, telegramId: dt.telegramId, username: dt.username };
-          }
+          const auth = validateInitData(data.initData || "");
           if (auth.valid) {
             client.telegramId = auth.telegramId;
             send(client, { type: "auth_ok", telegramId: auth.telegramId });

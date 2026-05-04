@@ -13,7 +13,8 @@ window.AdminPages.models = {
 
   // ── Constants ─────────────────────────────────────────────────────────────
   const ACTION_TYPES = [
-    { key: "plan",        label: "Plan",           hasIter: false, hasThink: false, hasReason: true  },
+    { key: "router",      label: "Chat Router",     hasIter: false, hasThink: false, hasReason: true  },
+    { key: "plan",        label: "Plan",            hasIter: false, hasThink: false, hasReason: true  },
     { key: "codegen",     label: "Code Gen",        hasIter: true,  hasThink: true,  hasReason: true  },
     { key: "ask",         label: "Ask / Q&A",       hasIter: false, hasThink: false, hasReason: true  },
     { key: "suggestions", label: "Suggestions",     hasIter: false, hasThink: false, hasReason: true  },

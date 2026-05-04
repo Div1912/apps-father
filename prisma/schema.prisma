@@ -14,7 +14,6 @@ model User {
   firstName  String?   @map("first_name")
   balance    Decimal   @default(0) @db.Decimal(12, 4)
   credits    Int       @default(50)
-  performanceTier String @default("tier_0") @map("performance_tier")
   appSlots   Int       @default(5) @map("app_slots")
   referredBy BigInt?   @map("referred_by")
   utmSource  String?   @map("utm_source")
@@ -42,6 +41,7 @@ model User {
   conversations   Conversation[]
   payments        Payment[]
   usageLogs       UsageLog[]
+  agentSessions   AgentSession[]
   withdrawals     Withdrawal[]
   retentionPushes RetentionPush[]
   adminNotes      AdminUserNote[]
@@ -110,6 +110,7 @@ model Project {
   assets        Asset[]
   conversations Conversation[]
   usageLogs     UsageLog[]
+  agentSessions AgentSession[]
   appLogs       AppLog[]
   agentFeedback AgentFeedback[]
 
@@ -248,7 +249,6 @@ model UsageLog {
   costUsd         Decimal  @map("cost_usd") @db.Decimal(12, 6)
   operation       String
   creditsCharged  Int?     @map("credits_charged")
-  tierId          String?  @map("tier_id")
   taskId          String?  @map("task_id")
   createdAt       DateTime @default(now()) @map("created_at")
 
@@ -256,6 +256,32 @@ model UsageLog {
   project Project? @relation(fields: [projectId], references: [id])
 
   @@map("usage_logs")
+}
+
+// Single log record for every agent session (router, answer, build, update, etc.)
+model AgentSession {
+  id             String   @id @default(cuid())
+  projectId      String?  @map("project_id")
+  userId         Int?     @map("user_id")
+  type           String                         // AgentSessionType
+  model          String
+  input          String                         // summarised user prompt / router output
+  output         String?                        // final result summary
+  creditsCharged Int      @default(0)  @map("credits_charged")
+  costUsd        Decimal  @default(0)  @map("cost_usd") @db.Decimal(12, 6)
+  inputTokens    Int      @default(0)  @map("input_tokens")
+  outputTokens   Int      @default(0)  @map("output_tokens")
+  durationMs     Int?     @map("duration_ms")
+  success        Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  user    User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([type, createdAt(sort: Desc)])
+  @@map("agent_sessions")
 }
 
 // Persistent runtime log line. Captured by the tee installed in

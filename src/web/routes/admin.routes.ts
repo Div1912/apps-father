@@ -914,35 +914,42 @@ router.get("/api/stats/tiers", async (req: Request, res: Response) => {
     }
 
     const rows = await prisma.usageLog.groupBy({
-      by: ["tierId", "operation"],
+      by: ["operation"],
       where,
       _count: { id: true },
       _sum: { creditsCharged: true, costUsd: true },
     });
 
-    const tierStats: Record<string, any> = {};
+    const operationStats: Record<string, any> = {};
     for (const row of rows) {
-      const tierId = row.tierId || "unknown";
-      if (!tierStats[tierId]) tierStats[tierId] = { tierId, operations: {} };
-      tierStats[tierId].operations[row.operation] = {
+      operationStats[row.operation] = {
         count: row._count.id,
         creditsCharged: row._sum.creditsCharged || 0,
         costUsd: Number(row._sum.costUsd || 0),
       };
     }
 
-    // Credit totals by user
-    const creditSummary = await prisma.user.aggregate({
-      _sum: { credits: true },
-    });
-
-    const usageSum = await prisma.usageLog.aggregate({
-      where,
+    // Session stats from new agent_sessions table
+    const sessionRows = await prisma.agentSession.groupBy({
+      by: ["type"],
+      _count: { id: true },
       _sum: { creditsCharged: true, costUsd: true },
     });
+    const sessionStats: Record<string, any> = {};
+    for (const row of sessionRows) {
+      sessionStats[row.type] = {
+        count: row._count.id,
+        creditsCharged: row._sum.creditsCharged || 0,
+        costUsd: Number(row._sum.costUsd || 0),
+      };
+    }
+
+    const creditSummary = await prisma.user.aggregate({ _sum: { credits: true } });
+    const usageSum = await prisma.usageLog.aggregate({ where, _sum: { creditsCharged: true, costUsd: true } });
 
     res.json({
-      tiers: Object.values(tierStats),
+      operations: operationStats,
+      sessions: sessionStats,
       totalCreditsOutstanding: creditSummary._sum.credits || 0,
       totalCreditsSpent: usageSum._sum.creditsCharged || 0,
       totalRealCostUsd: Number(usageSum._sum.costUsd || 0),
@@ -1026,6 +1033,87 @@ router.get("/api/sessions", async (req: Request, res: Response) => {
   }
 });
 
+// ── Agent Sessions Explorer (reads from agent_sessions table) ────────────────
+// Returns per-session rows with type, model, duration, cost, credits, success.
+router.get("/api/agent-sessions", async (req: Request, res: Response) => {
+  try {
+    const page  = Math.max(1, parseInt(String(req.query.page  || "1"), 10));
+    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || "50"), 10)));
+    const skip  = (page - 1) * limit;
+
+    const typeFilter      = typeof req.query.type      === "string" ? req.query.type : undefined;
+    const projectIdFilter = typeof req.query.projectId === "string" ? req.query.projectId.trim() || undefined : undefined;
+    const userIdFilter    = typeof req.query.userId    === "string" ? parseInt(req.query.userId, 10) : undefined;
+    const successFilter   = typeof req.query.success   === "string" ? req.query.success === "true" : undefined;
+    const fromDate = typeof req.query.from === "string" ? new Date(req.query.from) : undefined;
+    const toDate   = typeof req.query.to   === "string" ? new Date(req.query.to)   : undefined;
+
+    const where: any = {};
+    if (typeFilter)                     where.type      = typeFilter;
+    if (projectIdFilter)                where.projectId = projectIdFilter;
+    if (!isNaN(userIdFilter as any))    where.userId    = userIdFilter;
+    if (successFilter !== undefined)    where.success   = successFilter;
+    if (fromDate || toDate) {
+      where.createdAt = {};
+      if (fromDate && !isNaN(fromDate.getTime())) where.createdAt.gte = fromDate;
+      if (toDate   && !isNaN(toDate.getTime()))   where.createdAt.lte = toDate;
+    }
+
+    const [rows, total] = await Promise.all([
+      prisma.agentSession.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limit,
+        include: { project: { select: { name: true } } },
+      }),
+      prisma.agentSession.count({ where }),
+    ]);
+
+    const creditsPerDollar = runtimeConfig.getCreditsPerDollar() || 50;
+    const sessions = rows.map((s: any) => {
+      const costUsd    = Number(s.costUsd   || 0);
+      const credits    = Number(s.creditsCharged || 0);
+      const revenueUsd = credits / creditsPerDollar;
+      const marginUsd  = revenueUsd - costUsd;
+      return {
+        id:             s.id,
+        type:           s.type,
+        projectId:      s.projectId,
+        projectName:    s.project?.name || "Unknown",
+        userId:         s.userId,
+        model:          s.model,
+        input:          (s.input  || "").substring(0, 120),
+        creditsCharged: credits,
+        costUsd:        parseFloat(costUsd.toFixed(6)),
+        revenueUsd:     parseFloat(revenueUsd.toFixed(4)),
+        marginUsd:      parseFloat(marginUsd.toFixed(4)),
+        inputTokens:    s.inputTokens,
+        outputTokens:   s.outputTokens,
+        durationMs:     s.durationMs,
+        success:        s.success,
+        createdAt:      s.createdAt,
+      };
+    });
+
+    res.json({ sessions, total, page, limit, creditsPerDollar });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE a single agent session log entry by id.
+router.delete("/api/agent-sessions/:id", async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    if (!id) { res.status(400).json({ error: "id is required" }); return; }
+    await prisma.agentSession.delete({ where: { id } });
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE all usage_log rows for a given agent session (task_id).
 // Used by Admin → Sessions to purge a single run from the table.
 router.delete("/api/sessions/:taskId", async (req: Request, res: Response) => {
@@ -1042,21 +1130,27 @@ router.delete("/api/sessions/:taskId", async (req: Request, res: Response) => {
   }
 });
 
-// GET current tier config
-router.get("/api/config/tiers", async (_req: Request, res: Response) => {
-  res.json({ tiers: runtimeConfig.getAllTiers() });
+// GET agent session configurations and pricing
+router.get("/api/config/sessions", async (_req: Request, res: Response) => {
+  res.json({
+    sessions: runtimeConfig.getAllSessionConfigs(),
+    pricing: runtimeConfig.get().agentPricing,
+  });
 });
 
-// POST update tier config (full replacement of performanceTiers array)
-router.post("/api/config/tiers", async (req: Request, res: Response) => {
+// POST update agent session configuration and pricing
+router.post("/api/config/sessions", async (req: Request, res: Response) => {
   try {
-    const { tiers } = req.body;
-    if (!Array.isArray(tiers)) {
-      res.status(400).json({ error: "tiers must be an array" });
+    const { sessions, pricing } = req.body;
+    const update: any = {};
+    if (sessions && typeof sessions === "object") update.agentSessions = sessions;
+    if (pricing && typeof pricing === "object") update.agentPricing = pricing;
+    if (Object.keys(update).length === 0) {
+      res.status(400).json({ error: "sessions or pricing required" });
       return;
     }
-    runtimeConfig.update({ performanceTiers: tiers });
-    res.json({ ok: true, tiers: runtimeConfig.getAllTiers() });
+    runtimeConfig.update(update);
+    res.json({ ok: true, sessions: runtimeConfig.getAllSessionConfigs(), pricing: runtimeConfig.get().agentPricing });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
