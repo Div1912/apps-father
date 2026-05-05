@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html class="">
+
 <head>
   <meta charset="UTF-8">
   <title>Apps Father</title>
@@ -10,14 +11,15 @@
     asset paths and causes a white screen with strict-MIME errors.
   -->
   <base href="/telegram-mini-app/">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport"
+    content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="format-detection" content="telephone=no">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <link href="bootstrap.min.css" rel="stylesheet">
   <link href="bootstrap-extra.css" rel="stylesheet">
-  <link href="styles.css?r=340" rel="stylesheet">
+  <link href="styles.css?r=341" rel="stylesheet">
   <script>
-    window.op=window.op||function(){var n=[];return new Proxy(function(){arguments.length&&n.push([].slice.call(arguments))},{get:function(t,r){return"q"===r?n:function(){n.push([r].concat([].slice.call(arguments)))}} ,has:function(t,r){return"q"===r}}) }();
+    window.op = window.op || function () { var n = []; return new Proxy(function () { arguments.length && n.push([].slice.call(arguments)) }, { get: function (t, r) { return "q" === r ? n : function () { n.push([r].concat([].slice.call(arguments))) } }, has: function (t, r) { return "q" === r } }) }();
     window.op('init', {
       clientId: '94c4b9ff-7935-45b5-be8b-3d22360f4bf5',
       trackScreenViews: true,
@@ -42,16 +44,15 @@
   <script src="https://unpkg.com/@tonconnect/ui@2.0.9/dist/tonconnect-ui.min.js"></script>
   <script src="https://unpkg.com/tonweb@0.0.66/dist/tonweb.js"></script>
   <!-- Telegram Analytics — independent, can stay async -->
-  <script
-    async
-    src="https://tganalytics.xyz/index.js"
-    onload="initAnalytics && initAnalytics()"
-    type="text/javascript"
-  ></script>
+  <script async src="https://tganalytics.xyz/index.js" onload="initAnalytics && initAnalytics()"
+    type="text/javascript"></script>
 </head>
+
 <body class="emoji_image">
 
-  <div id="aj_progress" class="progress-bar" style="width:100%;transition:width .3s linear,box-shadow .2s;position:fixed;z-index:1000;top:0;height:3px;box-shadow:inset 0 0 0 var(--accent-color,#39ade7);"></div>
+  <div id="aj_progress" class="progress-bar"
+    style="width:100%;transition:width .3s linear,box-shadow .2s;position:fixed;z-index:1000;top:0;height:3px;box-shadow:inset 0 0 0 var(--accent-color,#39ade7);">
+  </div>
   <div id="toast-container"></div>
 
   <!-- ═══ FOLLOW-CHANNEL BONUS MODAL ═══
@@ -65,9 +66,10 @@
       <button class="sub-modal-close" id="sub-modal-close" aria-label="Close">&times;</button>
       <div class="sub-modal-glow"></div>
       <div class="sub-modal-icon">
-        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M22 2 11 13"/>
-          <path d="m22 2-7 20-4-9-9-4 20-7z"/>
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 2 11 13" />
+          <path d="m22 2-7 20-4-9-9-4 20-7z" />
         </svg>
       </div>
       <div class="sub-modal-bonus">
@@ -75,7 +77,8 @@
       </div>
       <div class="sub-modal-bonus-label" data-i18n="sub_modal_bonus_label">on your balance</div>
       <h2 class="sub-modal-title" id="sub-modal-title" data-i18n="sub_modal_title">Follow our News</h2>
-      <p class="sub-modal-text" data-i18n="sub_modal_text">Subscribe to our channel to stay up to date with new features, tips and bonuses — and get a small reward for joining.</p>
+      <p class="sub-modal-text" data-i18n="sub_modal_text">Subscribe to our channel to stay up to date with new
+        features, tips and bonuses — and get a small reward for joining.</p>
       <button class="sub-modal-btn sub-modal-btn-primary" id="sub-modal-subscribe">
         <span data-i18n="sub_modal_btn_subscribe">Subscribe to channel</span>
       </button>
@@ -99,19 +102,28 @@
           position: relative;
           overflow: visible;
       ">Apps Father
-      <!-- <span style="
+            <!-- <span style="
           font-weight: 300;
           font-size: 10pt;
           position: absolute;
           right: -32px;
           color: #10b9ec;
       ">beta</span> -->
-    </h1>
+          </h1>
           <button id="btn-admin" class="admin-fab hidden" aria-label="Admin Panel">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15v2"/><path d="M12 3a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2h-2V7a4 4 0 0 0-4-4z"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 15v2" />
+              <path
+                d="M12 3a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2h-2V7a4 4 0 0 0-4-4z" />
+            </svg>
           </button>
           <button id="btn-partner" class="partner-fab hidden" aria-label="Partnership">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.42 4.58a5.4 5.4 0 0 0-7.65 0l-.77.78-.77-.78a5.4 5.4 0 0 0-7.65 0C1.46 6.7 1.33 10.28 4 13l8 8 8-8c2.67-2.72 2.54-6.3.42-8.42z"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path
+                d="M20.42 4.58a5.4 5.4 0 0 0-7.65 0l-.77.78-.77-.78a5.4 5.4 0 0 0-7.65 0C1.46 6.7 1.33 10.28 4 13l8 8 8-8c2.67-2.72 2.54-6.3.42-8.42z" />
+            </svg>
           </button>
           <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="app_subtitle">
             Create and manage your Telegram Mini Apps with AI. Build, update, and publish — all from here.
@@ -122,8 +134,11 @@
           <div class="tm-table-wrap">
             <a class="tm-row tm-row-link tm-row-balance" id="btn-topup">
               <span class="tm-icon tm-icon--coin">
-                <svg viewBox="0 0 211.551 144.439" xmlns="http://www.w3.org/2000/svg" width="28" height="20" fill="currentColor">
-                  <path d="M129.743,95.01c-15.97-.027-35.976,5.02-55.714,15.292-19.706,10.273-35.326,23.73-44.495,36.873-9.174,13.1-11.654,25.3-7.141,34,4.517,8.658,15.938,13.637,31.948,13.637,16.01.045,36.017-5.024,55.709-15.252,19.738-10.273,35.348-23.775,44.5-36.873,9.2-13.1,11.618-25.3,7.132-34-4.531-8.658-15.925-13.677-31.939-13.677Zm41.225,31.531a60.545,60.545,0,0,1-9.779,20.769C151.051,161.8,134.5,175.93,113.774,186.7c-20.725,10.811-41.763,16.239-59.437,16.239a60.477,60.477,0,0,1-22.6-3.9l4.75,9.151c4.522,8.7,15.911,13.682,31.93,13.682s36.021-5.024,55.714-15.3c19.738-10.228,35.348-23.73,44.5-36.873,9.151-13.1,11.663-25.3,7.132-33.958Zm12.919,7.536c5.024,11.977.987,26.556-8.613,40.238-8.478,12.157-21.442,23.954-37.5,33.823a144.6,144.6,0,0,0,15.476.807c22.2,0,42.3-4.755,56.477-12.157,14.22-7.4,22.025-17.091,22.025-26.87s-7.805-19.468-22.025-26.87a103.163,103.163,0,0,0-25.838-8.972Zm47.864,55.983a61.176,61.176,0,0,1-18.257,13.906c-15.7,8.164-36.874,13.054-60.245,13.054a155.816,155.816,0,0,1-27.229-2.333A152.678,152.678,0,0,1,95.113,226.4c.538.314,1.077.583,1.66.9,14.175,7.4,34.272,12.157,56.477,12.157s42.3-4.755,56.477-12.157c14.22-7.4,22.025-17.091,22.025-26.87Z" transform="translate(-20.199 -95.01)"/>
+                <svg viewBox="0 0 211.551 144.439" xmlns="http://www.w3.org/2000/svg" width="28" height="20"
+                  fill="currentColor">
+                  <path
+                    d="M129.743,95.01c-15.97-.027-35.976,5.02-55.714,15.292-19.706,10.273-35.326,23.73-44.495,36.873-9.174,13.1-11.654,25.3-7.141,34,4.517,8.658,15.938,13.637,31.948,13.637,16.01.045,36.017-5.024,55.709-15.252,19.738-10.273,35.348-23.775,44.5-36.873,9.2-13.1,11.618-25.3,7.132-34-4.531-8.658-15.925-13.677-31.939-13.677Zm41.225,31.531a60.545,60.545,0,0,1-9.779,20.769C151.051,161.8,134.5,175.93,113.774,186.7c-20.725,10.811-41.763,16.239-59.437,16.239a60.477,60.477,0,0,1-22.6-3.9l4.75,9.151c4.522,8.7,15.911,13.682,31.93,13.682s36.021-5.024,55.714-15.3c19.738-10.228,35.348-23.73,44.5-36.873,9.151-13.1,11.663-25.3,7.132-33.958Zm12.919,7.536c5.024,11.977.987,26.556-8.613,40.238-8.478,12.157-21.442,23.954-37.5,33.823a144.6,144.6,0,0,0,15.476.807c22.2,0,42.3-4.755,56.477-12.157,14.22-7.4,22.025-17.091,22.025-26.87s-7.805-19.468-22.025-26.87a103.163,103.163,0,0,0-25.838-8.972Zm47.864,55.983a61.176,61.176,0,0,1-18.257,13.906c-15.7,8.164-36.874,13.054-60.245,13.054a155.816,155.816,0,0,1-27.229-2.333A152.678,152.678,0,0,1,95.113,226.4c.538.314,1.077.583,1.66.9,14.175,7.4,34.272,12.157,56.477,12.157s42.3-4.755,56.477-12.157c14.22-7.4,22.025-17.091,22.025-26.87Z"
+                    transform="translate(-20.199 -95.01)" />
                 </svg>
               </span>
               <div>
@@ -133,8 +148,10 @@
             </a>
             <a class="tm-row tm-row-link tm-row-earn" id="btn-earn-credits">
               <span class="tm-icon tm-icon--earn" style="background: none;">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22">
-                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                  stroke-linejoin="round" width="22" height="22">
+                  <polygon
+                    points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
                 </svg>
               </span>
               <div>
@@ -147,7 +164,8 @@
 
         <form class="tm-section tm-main-search-form" onsubmit="return false">
           <div class="icon-before icon-search tm-field tm-search-field">
-            <input type="search" class="form-control tm-input tm-search-input" id="search-input" placeholder="Search" data-i18n="search" autocomplete="off" spellcheck="false">
+            <input type="search" class="form-control tm-input tm-search-input" id="search-input" placeholder="Search"
+              data-i18n="search" autocomplete="off" spellcheck="false">
             <span class="icon-before icon-search-clear tm-search-clear" id="search-clear"></span>
           </div>
         </form>
@@ -219,8 +237,10 @@
           <div class="topup-bonus-banner" id="topup-bonus-banner">
             <div class="topup-bonus-icon">🎉</div>
             <div class="topup-bonus-content">
-              <div class="topup-bonus-title" data-i18n="topup_first_bonus_title">First purchase bonus: ×2 all credits!</div>
-              <div class="topup-bonus-sub" data-i18n="topup_first_bonus_sub">Every credit doubled — automatically applied at checkout</div>
+              <div class="topup-bonus-title" data-i18n="topup_first_bonus_title">First purchase bonus: ×2 all credits!
+              </div>
+              <div class="topup-bonus-sub" data-i18n="topup_first_bonus_sub">Every credit doubled — automatically
+                applied at checkout</div>
             </div>
           </div>
         </section>
@@ -231,7 +251,8 @@
             <!-- Populated by renderBundleGrid() in app.js -->
             <div class="bundle-grid-loading">Loading bundles…</div>
           </div>
-          <p class="help-text" style="margin-top:12px;" data-i18n="topup_note">Your balance will be credited after payment confirmation.</p>
+          <p class="help-text" style="margin-top:12px;" data-i18n="topup_note">Your balance will be credited after
+            payment confirmation.</p>
         </section>
       </main>
     </div>
@@ -282,13 +303,15 @@
             <div class="ton-wallet-label" data-i18n="pm_wallet_connected">Connected wallet</div>
             <div class="ton-wallet-address" id="ton-wallet-address"></div>
           </div>
-          <button class="ton-wallet-disconnect" id="ton-wallet-disconnect" data-i18n="pm_wallet_disconnect">Disconnect</button>
+          <button class="ton-wallet-disconnect" id="ton-wallet-disconnect"
+            data-i18n="pm_wallet_disconnect">Disconnect</button>
         </div>
         <div class="ton-wallet-not-connected" id="ton-wallet-not-connected" style="display:none;">
           <div class="ton-wallet-info">
             <div class="ton-wallet-label" data-i18n="pm_wallet_none">No wallet connected</div>
           </div>
-          <button class="ton-wallet-connect-btn" id="ton-wallet-connect-btn" data-i18n="pm_wallet_connect">Connect</button>
+          <button class="ton-wallet-connect-btn" id="ton-wallet-connect-btn"
+            data-i18n="pm_wallet_connect">Connect</button>
         </div>
       </div>
 
@@ -304,7 +327,10 @@
 
       <header class="rating-modal-header">
         <button class="rating-modal-back" id="rating-modal-close" type="button" aria-label="Close">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
         </button>
         <div class="rating-modal-header-text">
           <h3 class="rating-modal-title" id="rating-modal-title" data-i18n="rating_title">Rate agent work</h3>
@@ -314,10 +340,12 @@
 
       <div class="rating-modal-body">
 
-        <div class="rating-attention" id="rating-attention" data-i18n="rating_attention">Please answer honestly. Your feedback helps us train the agent — fake "No" answers will be reviewed manually.</div>
+        <div class="rating-attention" id="rating-attention" data-i18n="rating_attention">Please answer honestly. Your
+          feedback helps us train the agent — fake "No" answers will be reviewed manually.</div>
 
         <div class="rating-field-group">
-          <div class="rating-field-label" data-i18n="rating_q_correct">Did the agent complete your request correctly?</div>
+          <div class="rating-field-label" data-i18n="rating_q_correct">Did the agent complete your request correctly?
+          </div>
           <div class="rating-yn-row">
             <button class="rating-yn-btn" id="rating-yes" data-i18n="rating_correct_yes">Yes</button>
             <button class="rating-yn-btn" id="rating-no" data-i18n="rating_correct_no">No</button>
@@ -343,7 +371,9 @@
         <div class="rating-desc-wrap hidden" id="rating-desc-wrap">
           <div class="rating-field-group">
             <div class="rating-field-label" data-i18n="rating_desc_label">What went wrong?</div>
-            <textarea class="rating-desc" id="rating-desc" rows="4" minlength="100" maxlength="2000" data-i18n-placeholder="rating_desc_placeholder" placeholder="Minimum 100 characters. Be specific so we can improve the agent."></textarea>
+            <textarea class="rating-desc" id="rating-desc" rows="4" minlength="100" maxlength="2000"
+              data-i18n-placeholder="rating_desc_placeholder"
+              placeholder="Minimum 100 characters. Be specific so we can improve the agent."></textarea>
             <div class="rating-desc-counter" id="rating-desc-counter">0 / 100</div>
           </div>
         </div>
@@ -395,7 +425,12 @@
       <main class="tm-main">
         <section class="tm-main-intro">
           <div class="partner-icon-header">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--tg-theme-accent-text-color,#4ea4f6)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20.42 4.58a5.4 5.4 0 0 0-7.65 0l-.77.78-.77-.78a5.4 5.4 0 0 0-7.65 0C1.46 6.7 1.33 10.28 4 13l8 8 8-8c2.67-2.72 2.54-6.3.42-8.42z"/></svg>
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none"
+              stroke="var(--tg-theme-accent-text-color,#4ea4f6)" stroke-width="1.5" stroke-linecap="round"
+              stroke-linejoin="round">
+              <path
+                d="M20.42 4.58a5.4 5.4 0 0 0-7.65 0l-.77.78-.77-.78a5.4 5.4 0 0 0-7.65 0C1.46 6.7 1.33 10.28 4 13l8 8 8-8c2.67-2.72 2.54-6.3.42-8.42z" />
+            </svg>
           </div>
           <h1 class="tm-main-intro-header">Partnership Program</h1>
           <p class="tm-main-intro-text" style="max-width:312px;" id="partner-subtitle"></p>
@@ -449,7 +484,8 @@
         <section class="tm-main-intro">
           <div class="referral-animation" id="referral-anim"></div>
           <h1 class="tm-main-intro-header" data-i18n="referral_title">Referral Program</h1>
-          <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="referral_subtitle">Invite friends and earn from every top-up they make</p>
+          <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="referral_subtitle">Invite friends and earn
+            from every top-up they make</p>
         </section>
         <section class="tm-section">
           <div class="tm-section-header">
@@ -470,7 +506,8 @@
               <div class="tm-active-button" id="btn-share-referral" data-i18n="referral_share">Share</div>
             </div>
           </div>
-          <p class="help-text" data-i18n="referral_help">Share this link with friends. You'll earn 15% from their top-ups.</p>
+          <p class="help-text" data-i18n="referral_help">Share this link with friends. You'll earn 15% from their
+            top-ups.</p>
         </section>
       </main>
     </div>
@@ -495,7 +532,8 @@
       <main class="tm-main">
         <section class="tm-main-intro">
           <h1 class="tm-main-intro-header" data-i18n="help_title">Apps Father Help</h1>
-          <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="help_subtitle">Everything you need to know about building apps</p>
+          <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="help_subtitle">Everything you need to know
+            about building apps</p>
         </section>
         <section class="tm-section">
           <div class="tm-info-block" id="help-content"></div>
@@ -550,10 +588,13 @@
             <img class="onb-logo-img" src="apps-father-avatar.png?r=1" alt="Apps Father">
           </div>
           <div class="onb-tag" data-i18n="onb_tag">Telegram Mini Apps</div>
-          <div class="onb-big-title"><span data-i18n="onb_s1_title_1">Build apps</span><br><em data-i18n="onb_s1_title_2">just by typing</em></div>
-          <div class="onb-lead" data-i18n="onb_s1_lead" data-i18n-html="1">Describe your idea — AI writes the code,<br>builds the UI and launches the bot.<br><b>No code. No designer.</b></div>
+          <div class="onb-big-title"><span data-i18n="onb_s1_title_1">Build apps</span><br><em
+              data-i18n="onb_s1_title_2">just by typing</em></div>
+          <div class="onb-lead" data-i18n="onb_s1_lead" data-i18n-html="1">Describe your idea — AI writes the
+            code,<br>builds the UI and launches the bot.<br><b>No code. No designer.</b></div>
         </div>
-        <div class="onb-foot"><button class="onb-btn" data-onb-go="3"><span data-i18n="onb_btn_start">Start</span> →</button></div>
+        <div class="onb-foot"><button class="onb-btn" data-onb-go="3"><span data-i18n="onb_btn_start">Start</span>
+            →</button></div>
       </div>
 
       <!-- S2 (temporarily disabled — skip straight from S1 to S3) -->
@@ -584,22 +625,32 @@
       <!-- S3 -->
       <div class="onb-screen" id="onb-s3">
         <div class="onb-body onb-s3-body">
-          <div class="onb-s-title"><span data-i18n="onb_s3_title_1">AI builds —</span><br><em data-i18n="onb_s3_title_2">you watch</em></div>
+          <div class="onb-s-title"><span data-i18n="onb_s3_title_1">AI builds —</span><br><em
+              data-i18n="onb_s3_title_2">you watch</em></div>
           <div class="onb-s-sub" data-i18n="onb_s3_sub">Every step in real time</div>
           <div class="onb-build-card">
             <div class="onb-build-row done">
               <div class="onb-b-icon done">✓</div>
-              <div><div class="onb-b-label done" data-i18n="onb_s3_step1">Task analysis</div></div>
+              <div>
+                <div class="onb-b-label done" data-i18n="onb_s3_step1">Task analysis</div>
+              </div>
               <div class="onb-build-time">0.2s</div>
             </div>
             <div class="onb-build-row done">
               <div class="onb-b-icon done">✓</div>
-              <div><div class="onb-b-label done" data-i18n="onb_s3_step2">Generate HTML / CSS / JS</div></div>
+              <div>
+                <div class="onb-b-label done" data-i18n="onb_s3_step2">Generate HTML / CSS / JS</div>
+              </div>
               <div class="onb-build-time">18s</div>
             </div>
             <div class="onb-build-row active">
               <div class="onb-b-icon spin">
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="#818cf8" stroke-width="1.5" stroke-dasharray="4 3"><animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="1.3s" repeatCount="indefinite"/></circle></svg>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <circle cx="7" cy="7" r="5.5" stroke="#818cf8" stroke-width="1.5" stroke-dasharray="4 3">
+                    <animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="1.3s"
+                      repeatCount="indefinite" />
+                  </circle>
+                </svg>
               </div>
               <div>
                 <div class="onb-b-label active" data-i18n="onb_s3_step3">Telegram Bot API</div>
@@ -608,22 +659,28 @@
             </div>
             <div class="onb-build-row pending">
               <div class="onb-b-icon wait">○</div>
-              <div><div class="onb-b-label wait" data-i18n="onb_s3_step4">Deploy and publish</div></div>
+              <div>
+                <div class="onb-b-label wait" data-i18n="onb_s3_step4">Deploy and publish</div>
+              </div>
             </div>
             <div class="onb-cost-row">
               <div class="onb-cost-label" data-i18n="onb_s3_progress">Progress</div>
-              <div class="onb-prog-outer"><div class="onb-prog-inner"></div></div>
+              <div class="onb-prog-outer">
+                <div class="onb-prog-inner"></div>
+              </div>
               <div class="onb-cost-val">$0.84</div>
             </div>
           </div>
         </div>
-        <div class="onb-foot"><button class="onb-btn" data-onb-go="4"><span data-i18n="onb_btn_next">Next</span> →</button></div>
+        <div class="onb-foot"><button class="onb-btn" data-onb-go="4"><span data-i18n="onb_btn_next">Next</span>
+            →</button></div>
       </div>
 
       <!-- S4 -->
       <div class="onb-screen" id="onb-s4">
         <div class="onb-body onb-s4-body">
-          <div class="onb-s-title"><span data-i18n="onb_s4_title_1">Ready to create</span><br><em data-i18n="onb_s4_title_2">your first app?</em></div>
+          <div class="onb-s-title"><span data-i18n="onb_s4_title_1">Ready to create</span><br><em
+              data-i18n="onb_s4_title_2">your first app?</em></div>
           <div class="onb-s-sub" data-i18n="onb_s4_sub">Four steps to your first earnings</div>
           <div class="onb-steps-wrap">
             <div class="onb-step-card">
@@ -657,7 +714,8 @@
             </div>
           </div>
         </div>
-        <div class="onb-foot"><button class="onb-btn" id="onb-finish"><span data-i18n="onb_btn_finish">Begin</span></button></div>
+        <div class="onb-foot"><button class="onb-btn" id="onb-finish"><span
+              data-i18n="onb_btn_finish">Begin</span></button></div>
       </div>
     </div>
   </div>
@@ -667,22 +725,26 @@
       <main class="tm-main">
         <section class="tm-main-intro">
           <h1 class="tm-main-intro-header" data-i18n="lang_title">Language</h1>
-          <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="lang_subtitle">Select your preferred language</p>
+          <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="lang_subtitle">Select your preferred
+            language</p>
         </section>
         <section class="tm-section tm-menu-items">
           <div class="tm-table-wrap" id="lang-list">
             <a class="tm-row tm-row-link lang-option" data-lang="en">
-              <span class="tm-row-pic tm-row-pic-user" style="width:30px;height:30px;border-radius:50%;font-size:20px;display:flex;align-items:center;justify-content:center;">🇬🇧</span>
+              <span class="tm-row-pic tm-row-pic-user"
+                style="width:30px;height:30px;border-radius:50%;font-size:20px;display:flex;align-items:center;justify-content:center;">🇬🇧</span>
               <span>English</span>
               <span class="lang-check hidden">✓</span>
             </a>
             <a class="tm-row tm-row-link lang-option" data-lang="ru">
-              <span class="tm-row-pic tm-row-pic-user" style="width:30px;height:30px;border-radius:50%;font-size:20px;display:flex;align-items:center;justify-content:center;">🇷🇺</span>
+              <span class="tm-row-pic tm-row-pic-user"
+                style="width:30px;height:30px;border-radius:50%;font-size:20px;display:flex;align-items:center;justify-content:center;">🇷🇺</span>
               <span>Русский</span>
               <span class="lang-check hidden">✓</span>
             </a>
             <a class="tm-row tm-row-link lang-option" data-lang="ua">
-              <span class="tm-row-pic tm-row-pic-user" style="width:30px;height:30px;border-radius:50%;font-size:20px;display:flex;align-items:center;justify-content:center;">🇺🇦</span>
+              <span class="tm-row-pic tm-row-pic-user"
+                style="width:30px;height:30px;border-radius:50%;font-size:20px;display:flex;align-items:center;justify-content:center;">🇺🇦</span>
               <span>Українська</span>
               <span class="lang-check hidden">✓</span>
             </a>
@@ -852,7 +914,8 @@
               </div>
             </div>
           </div>
-          <p class="help-text">Use this token to access the HTTP API. Keep it secure. <a href="https://core.telegram.org/bots/api" target="_blank">Read more</a></p>
+          <p class="help-text">Use this token to access the HTTP API. Keep it secure. <a
+              href="https://core.telegram.org/bots/api" target="_blank">Read more</a></p>
         </section>
 
         <section class="tm-section tm-menu-items" id="section-app">
@@ -941,7 +1004,8 @@
       <main class="tm-main">
         <section class="tm-main-intro">
           <h1 class="tm-main-intro-header" data-i18n="features_title">Premium Features</h1>
-          <p class="tm-main-intro-text" data-i18n="features_subtitle" style="max-width:340px;">Optional add-ons that unlock extra capabilities for this app. Buy once — they stay unlocked forever.</p>
+          <p class="tm-main-intro-text" data-i18n="features_subtitle" style="max-width:340px;">Optional add-ons that
+            unlock extra capabilities for this app. Buy once — they stay unlocked forever.</p>
           <p class="tm-main-intro-text" id="features-balance" style="max-width:340px;margin-top:6px;opacity:0.85;"></p>
         </section>
         <section class="tm-section">
@@ -963,9 +1027,9 @@
           <button type="button" class="ai-avatar-btn" id="btn-generate-avatar">
             <span class="ai-avatar-btn-icon" aria-hidden="true">
               <svg viewBox="0 0 20 20" fill="currentColor">
-                <path d="M10 1.5l1.4 3.5 3.6.3-2.7 2.4.8 3.5L10 9.4l-3.1 1.8.8-3.5L5 5.3l3.6-.3L10 1.5z"/>
-                <circle cx="15.5" cy="14.5" r="1.5"/>
-                <circle cx="4" cy="13" r="1"/>
+                <path d="M10 1.5l1.4 3.5 3.6.3-2.7 2.4.8 3.5L10 9.4l-3.1 1.8.8-3.5L5 5.3l3.6-.3L10 1.5z" />
+                <circle cx="15.5" cy="14.5" r="1.5" />
+                <circle cx="4" cy="13" r="1" />
               </svg>
             </span>
             <span class="ai-avatar-btn-text">
@@ -981,10 +1045,12 @@
             <h2 class="tm-section-header-text" data-i18n="edit_info">Info</h2>
           </div>
           <div class="tm-field" style="border-radius: 6px 6px 0 0; margin-bottom: 1px;">
-            <input type="text" class="form-control tm-input" id="edit-name" placeholder="Bot Name" data-i18n="edit_bot_name" autocomplete="off" spellcheck="false">
+            <input type="text" class="form-control tm-input" id="edit-name" placeholder="Bot Name"
+              data-i18n="edit_bot_name" autocomplete="off" spellcheck="false">
           </div>
           <div class="tm-field" style="border-radius: 0 0 6px 6px;">
-            <textarea rows="1" maxlength="120" class="form-control tm-input tm-autosize" id="edit-about" placeholder="About (Optional)" data-i18n="edit_about" autocomplete="off"></textarea>
+            <textarea rows="1" maxlength="120" class="form-control tm-input tm-autosize" id="edit-about"
+              placeholder="About (Optional)" data-i18n="edit_about" autocomplete="off"></textarea>
           </div>
           <p class="help-text" data-i18n="edit_about_help">People will see this text on the bot's profile page.</p>
         </form>
@@ -994,9 +1060,11 @@
             <h2 class="tm-section-header-text" data-i18n="edit_welcome">Welcome message</h2>
           </div>
           <div class="tm-field" style="border-radius: 6px;">
-            <textarea maxlength="512" rows="1" class="form-control tm-input tm-autosize" id="edit-description" placeholder="Enter bot description" data-i18n="edit_welcome_placeholder"></textarea>
+            <textarea maxlength="512" rows="1" class="form-control tm-input tm-autosize" id="edit-description"
+              placeholder="Enter bot description" data-i18n="edit_welcome_placeholder"></textarea>
           </div>
-          <p class="help-text" data-i18n="edit_welcome_help">People will see the description when they open a chat with your bot, in a block titled 'What can this bot do?'.</p>
+          <p class="help-text" data-i18n="edit_welcome_help">People will see the description when they open a chat with
+            your bot, in a block titled 'What can this bot do?'.</p>
         </form>
       </main>
     </div>
@@ -1008,16 +1076,19 @@
       <main class="tm-main">
         <section class="tm-main-intro">
           <h1 class="tm-main-intro-header" data-i18n="transfer_title">Transfer Ownership</h1>
-          <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="transfer_desc">Transfer this app to another Apps Father user. The new owner must have an account in Apps Father.</p>
+          <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="transfer_desc">Transfer this app to another
+            Apps Father user. The new owner must have an account in Apps Father.</p>
         </section>
         <form class="tm-section" id="transfer-form" onsubmit="return false">
           <div class="tm-section-header">
             <h2 class="tm-section-header-text" data-i18n="transfer_new_owner">New Owner</h2>
           </div>
           <div class="tm-field" style="border-radius: 6px;">
-            <input type="text" class="form-control tm-input" id="transfer-username" placeholder="@username" autocomplete="off" spellcheck="false">
+            <input type="text" class="form-control tm-input" id="transfer-username" placeholder="@username"
+              autocomplete="off" spellcheck="false">
           </div>
-          <p class="help-text" data-i18n="transfer_help">Enter the Telegram username of the new owner. They must be registered in Apps Father.</p>
+          <p class="help-text" data-i18n="transfer_help">Enter the Telegram username of the new owner. They must be
+            registered in Apps Father.</p>
         </form>
       </main>
     </div>
@@ -1029,14 +1100,16 @@
       <main class="tm-main">
         <section class="tm-main-intro">
           <h1 class="tm-main-intro-header" data-i18n="delete_title">Delete App</h1>
-          <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="delete_desc">This action is permanent and cannot be undone. All versions, data, and the bot configuration will be removed.</p>
+          <p class="tm-main-intro-text" style="max-width:312px;" data-i18n="delete_desc">This action is permanent and
+            cannot be undone. All versions, data, and the bot configuration will be removed.</p>
         </section>
         <form class="tm-section" id="delete-form" onsubmit="return false">
           <div class="tm-section-header">
             <h2 class="tm-section-header-text" data-i18n="delete_confirm">Confirm Deletion</h2>
           </div>
           <div class="tm-field" style="border-radius: 6px;">
-            <input type="text" class="form-control tm-input" id="delete-confirm-input" placeholder="" autocomplete="off" spellcheck="false">
+            <input type="text" class="form-control tm-input" id="delete-confirm-input" placeholder="" autocomplete="off"
+              spellcheck="false">
           </div>
           <p class="help-text" id="delete-help-text"></p>
         </form>
@@ -1054,6 +1127,7 @@
         height: 128px;
         background: linear-gradient(0deg, #00000000, #000000);
         z-index: 100;
+        pointer-events: none;
     "></div>
     <div class="chat-header" id="chat-header">
       <div class="chat-header-info" id="chat-header-info">
@@ -1064,18 +1138,25 @@
         </div>
       </div>
       <div class="chat-header-actions">
-        <button class="chat-header-settings hidden" id="btn-stop-process" title="Stop process" style="background-color:color-mix(in srgb,#000000 10%,#ff0039f0);">
+        <button class="chat-header-settings hidden" id="btn-stop-process" title="Stop process"
+          style="background-color:color-mix(in srgb,#000000 10%,#ff0039f0);">
           <div style="width:16px;height:16px;background:#000000ab;border-radius:4px;"></div>
         </button>
         <button class="chat-header-settings" id="btn-chat-features" title="Features" style="">
           <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 195.045 195.046" style="
               fill: #9fafc1;
           ">
-            <path id="Path_25" data-name="Path 25" d="M97.523,0s.975,47.786,25.356,72.167,72.167,25.356,72.167,25.356-47.786.975-72.167,25.356-25.356,72.167-25.356,72.167-.975-47.786-25.356-72.167S0,97.523,0,97.523s47.786-.975,72.167-25.356S97.523,0,97.523,0Z" fill="#9fafc1"></path>
+            <path id="Path_25" data-name="Path 25"
+              d="M97.523,0s.975,47.786,25.356,72.167,72.167,25.356,72.167,25.356-47.786.975-72.167,25.356-25.356,72.167-25.356,72.167-.975-47.786-25.356-72.167S0,97.523,0,97.523s47.786-.975,72.167-25.356S97.523,0,97.523,0Z"
+              fill="#9fafc1"></path>
           </svg>
         </button>
         <button class="chat-header-settings" id="btn-chat-settings" title="App Settings">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3" />
+            <path
+              d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+          </svg>
         </button>
       </div>
     </div>
@@ -1093,7 +1174,8 @@
     <div class="chat-messages" id="chat-messages">
       <div class="chat-welcome hidden" id="chat-welcome">
         <div class="chat-welcome-animation" id="chat-welcome-anim"></div>
-        <div class="chat-welcome-text" id="chat-welcome-text" data-i18n="chat_welcome_plan">Tell me your idea and I'll generate a plan for you</div>
+        <div class="chat-welcome-text" id="chat-welcome-text" data-i18n="chat_welcome_plan">Tell me your idea and I'll
+          generate a plan for you</div>
       </div>
       <div class="loading-spinner" id="chat-skeleton"></div>
       <div class="chat-messages-inner" id="chat-messages-inner"></div>
@@ -1107,35 +1189,62 @@
       <source src="/telegram-mini-app/processing.mp4" type="video/mp4">
     </video>
     <div class="chat-input-area" id="chat-input-area">
-      
+
       <div class="chat-attachments-preview hidden" id="chat-attachments-preview"></div>
       <!-- v4: chat-mode-pills + btn-get-suggestions removed; the router classifies intent from free text. -->
       <div class="chat-input-bar">
-        <input type="file" id="file-input" multiple accept="image/*,.pdf,.json,.csv,.txt,.js,.ts,.html,.css" style="display:none">
+        <input type="file" id="file-input" multiple accept="image/*,.pdf,.json,.csv,.txt,.js,.ts,.html,.css"
+          style="display:none">
 
         <!-- Attach popup menu -->
         <div class="attach-menu hidden" id="attach-menu">
           <button class="attach-menu-item" id="btn-attach-file" type="button">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path
+                d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+            </svg>
             Attach file
           </button>
           <button class="attach-menu-item" id="btn-draw-mockup" type="button">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+            </svg>
             Draw Mockup
           </button>
         </div>
 
         <button type="button" class="chat-btn-attach" id="btn-attach" title="Attach or draw">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
         </button>
-        <textarea class="chat-input" id="chat-input" placeholder="Tell me what you want..." data-i18n="chat_placeholder" rows="1"></textarea>
+        <textarea class="chat-input" id="chat-input" placeholder="Tell me what you want..." data-i18n="chat_placeholder"
+          rows="1"></textarea>
         <button type="button" class="chat-btn-mic" id="btn-mic" title="Voice input" data-i18n-title="chat_mic_title">
-          <svg class="mic-icon-idle" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-          <svg class="mic-icon-stop" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
-          <svg class="mic-icon-spinner" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 2a10 10 0 0 1 10 10" opacity="0.85"/></svg>
+          <svg class="mic-icon-idle" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+            <line x1="12" y1="19" x2="12" y2="23" />
+            <line x1="8" y1="23" x2="16" y2="23" />
+          </svg>
+          <svg class="mic-icon-stop" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="6" y="6" width="12" height="12" rx="2" />
+          </svg>
+          <svg class="mic-icon-spinner" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2.5" stroke-linecap="round">
+            <path d="M12 2a10 10 0 0 1 10 10" opacity="0.85" />
+          </svg>
         </button>
         <button class="chat-btn-send" id="btn-send" title="Send">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3.478 2.404a.75.75 0 00-.926.941l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.404z"/></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+            <path
+              d="M3.478 2.404a.75.75 0 00-.926.941l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.404z" />
+          </svg>
         </button>
       </div>
     </div>
@@ -1160,10 +1269,21 @@
         <button class="ce-size" data-size="16" title="Thick">L</button>
       </div>
       <button class="ce-tool-btn" id="ce-eraser" title="Eraser">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20H7L3 16l13-13 6 6-2 11z"/><path d="M6 17l3-3"/></svg>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 20H7L3 16l13-13 6 6-2 11z" />
+          <path d="M6 17l3-3" />
+        </svg>
       </button>
       <button class="ce-tool-btn" id="ce-clear" title="Clear all">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3 6 5 6 21 6" />
+          <path d="M19 6l-1 14H6L5 6" />
+          <path d="M10 11v6" />
+          <path d="M14 11v6" />
+          <path d="M9 6V4h6v2" />
+        </svg>
       </button>
     </div>
     <div class="ce-canvas-wrap">
@@ -1189,12 +1309,12 @@
   <script src="i18n.js?r=340" defer></script>
   <script src="app.js?r=340" defer></script>
   <script>
-      function initAnalytics() {
-        window.telegramAnalytics.init({
-          token: 'eyJhcHBfbmFtZSI6ImFwcHNfZmF0aGVyIiwiYXBwX3VybCI6Imh0dHBzOi8vdC5tZS9hcHBzX2ZhdGhlciIsImFwcF9kb21haW4iOiJodHRwczovL2FwcHMtZmF0aGVyLmNvbS90ZWxlZ3JhbS1taW5pLWFwcCJ9!obnnT9dZ3vjZw8AprJ8A1v7TV8BLhsrS7FKhOBjT0tI=',
-          appName: 'apps_father',
-        });
-      }
+    function initAnalytics() {
+      window.telegramAnalytics.init({
+        token: 'eyJhcHBfbmFtZSI6ImFwcHNfZmF0aGVyIiwiYXBwX3VybCI6Imh0dHBzOi8vdC5tZS9hcHBzX2ZhdGhlciIsImFwcF9kb21haW4iOiJodHRwczovL2FwcHMtZmF0aGVyLmNvbS90ZWxlZ3JhbS1taW5pLWFwcCJ9!obnnT9dZ3vjZw8AprJ8A1v7TV8BLhsrS7FKhOBjT0tI=',
+        appName: 'apps_father',
+      });
+    }
   </script>
 
   <!-- ═══ TIER SELECTOR MODAL ═══ -->
@@ -1203,11 +1323,15 @@
     <div class="tier-modal-sheet" role="dialog" aria-label="Select Performance Tier">
       <header class="tier-modal-header" id="tier-modal-header">
         <button class="tier-modal-back" id="tier-modal-close" type="button" aria-label="Close">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
         </button>
         <div class="tier-modal-header-text">
           <h3 class="tier-modal-title" id="tier-modal-title" data-i18n="tier_modal_title">Performance Tier</h3>
-          <p class="tier-modal-subtitle" data-i18n="tier_modal_subtitle">Smarter models give better results, but cost more credits.</p>
+          <p class="tier-modal-subtitle" data-i18n="tier_modal_subtitle">Smarter models give better results, but cost
+            more credits.</p>
         </div>
       </header>
       <div class="tier-modal-cards" id="tier-modal-cards">
@@ -1222,17 +1346,24 @@
       <main class="tm-main">
         <section class="tm-main-intro">
           <h1 class="tm-main-intro-header" data-i18n="env_title">Environment Variables</h1>
-          <p class="tm-main-intro-text" style="max-width:340px;" data-i18n="env_desc">Stored in <code style="background:rgba(255,255,255,0.1);border-radius:4px;padding:1px 5px;">backend/.env</code>. Access via <code style="background:rgba(255,255,255,0.1);border-radius:4px;padding:1px 5px;">env.KEY</code> in <code style="background:rgba(255,255,255,0.1);border-radius:4px;padding:1px 5px;">routes.js</code>.</p>
+          <p class="tm-main-intro-text" style="max-width:340px;" data-i18n="env_desc">Stored in <code
+              style="background:rgba(255,255,255,0.1);border-radius:4px;padding:1px 5px;">backend/.env</code>. Access
+            via <code style="background:rgba(255,255,255,0.1);border-radius:4px;padding:1px 5px;">env.KEY</code> in
+            <code style="background:rgba(255,255,255,0.1);border-radius:4px;padding:1px 5px;">routes.js</code>.
+          </p>
         </section>
         <section class="tm-section" style="padding-top:0;">
           <div class="env-env-toggle">
-            <button class="env-toggle-btn active" id="btn-env-dev" data-env="dev" data-i18n="env_dev">Development</button>
-            <button class="env-toggle-btn" id="btn-env-release" data-env="release" data-i18n="env_release">Release</button>
+            <button class="env-toggle-btn active" id="btn-env-dev" data-env="dev"
+              data-i18n="env_dev">Development</button>
+            <button class="env-toggle-btn" id="btn-env-release" data-env="release"
+              data-i18n="env_release">Release</button>
           </div>
           <div class="env-rows" id="env-rows" style="margin-top:12px;width:100%;">
             <!-- rows rendered by JS -->
           </div>
-          <button class="env-add-btn" id="btn-env-add-row" style="margin-top:8px;" data-i18n="env_add_var">+ Add Variable</button>
+          <button class="env-add-btn" id="btn-env-add-row" style="margin-top:8px;" data-i18n="env_add_var">+ Add
+            Variable</button>
           <div class="env-actions" style="margin-top:12px;">
             <button class="env-save-btn" id="btn-env-save" data-i18n="env_save">Save Variables</button>
           </div>
@@ -1240,5 +1371,45 @@
       </main>
     </div>
   </div>
+  <!-- ── File Bucket View ── -->
+  <div id="view-bucket" class="view-container hidden">
+    <div>
+      <main class="tm-main">
+        <section class="tm-main-intro">
+          <h1 class="tm-main-intro-header">File Bucket</h1>
+          <p class="tm-main-intro-text" style="max-width:340px;">
+            Project file storage. Upload images, audio, video and docs. Access files via the direct link in your <code
+              style="background:rgba(255,255,255,0.1);border-radius:4px;padding:1px 5px;">routes.js</code>.
+          </p>
+        </section>
+        <section class="tm-section" style="padding-top:0;">
+          <div class="bucket-toolbar">
+            <label class="bucket-upload-btn" id="bucket-upload-label">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+              Upload File
+              <input type="file" id="bucket-file-input" style="display:none;" multiple
+                accept="image/*,audio/*,video/*,.pdf,.txt,.csv,.json">
+            </label>
+            <span class="bucket-count" id="bucket-count"></span>
+          </div>
+          <div id="bucket-loading" class="bucket-loading" style="display:none;">
+            <div class="bucket-spinner"></div>
+            Loading files…
+          </div>
+          <div id="bucket-empty" class="bucket-empty" style="display:none;">
+            <div class="bucket-empty-icon">🗂️</div>
+            <div>No files yet. Upload your first file above.</div>
+          </div>
+          <div id="bucket-list" class="bucket-list"></div>
+        </section>
+      </main>
+    </div>
+  </div>
 </body>
+
 </html>

@@ -1,0 +1,15 @@
+{
+    "prisma":  false,
+    "restart":  true,
+    "agent_knowledge":  true,
+    "migrations":  false,
+    "build":  true,
+    "mini_app":  true,
+    "landing":  false,
+    "dist":  true,
+    "env":  false,
+    "deps":  false,
+    "playwright":  false,
+    "env_idx":  0,
+    "admin":  false
+}

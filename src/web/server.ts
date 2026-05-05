@@ -9,7 +9,7 @@ import { config } from "../config";
 import appRoutes from "./routes/app.routes";
 import apiRoutes, { invalidateProjectDbCache } from "./routes/api.routes";
 import devRoutes from "./routes/dev.routes";
-import bucketRoutes from "./routes/bucket.routes";
+import bucketRoutes, { listProjectFiles, uploadProjectFile, uploadProjectFileFromBuffer, deleteProjectFile } from "./routes/bucket.routes";
 import devApiRoutes from "./routes/devapi.routes";
 import webhookRoutes from "./routes/webhook.routes";
 import adminRoutes from "./routes/admin.routes";
@@ -587,6 +587,68 @@ export function createWebServer() {
       res.json({ ok: true });
     } catch (err) {
       console.error("[MiniApp API] project-env POST error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // ── Bucket management (owner only) ──────────────────────────────────────
+  const bucketUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+
+  // GET  /telegram-mini-app/api/bucket/:projectId  → list files
+  app.get("/telegram-mini-app/api/bucket/:projectId", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const project = await projectService.getProject(req.params.projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) {
+        res.status(403).json({ error: "Forbidden" }); return;
+      }
+      const files = listProjectFiles(req.params.projectId);
+      res.json({ files });
+    } catch (err: any) {
+      console.error("[Bucket API] List error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /telegram-mini-app/api/bucket/:projectId/upload  → owner upload (multipart/form-data)
+  app.post("/telegram-mini-app/api/bucket/:projectId/upload", bucketUpload.single("file"), async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const projectId = req.params.projectId as string;
+      const project = await projectService.getProject(projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) {
+        res.status(403).json({ error: "Forbidden" }); return;
+      }
+      if (!req.file) {
+        res.status(400).json({ error: "No file uploaded. Send multipart/form-data with field 'file'" }); return;
+      }
+      const result = uploadProjectFileFromBuffer(projectId, req.file.buffer, req.file.mimetype);
+      res.json(result);
+    } catch (err: any) {
+      console.error("[Bucket API] Upload error:", err);
+      res.status(500).json({ error: err.message || "Upload failed" });
+    }
+  });
+
+  // DELETE /telegram-mini-app/api/bucket/:projectId/:filename  → owner delete
+  app.delete("/telegram-mini-app/api/bucket/:projectId/:filename", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const project = await projectService.getProject(req.params.projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) {
+        res.status(403).json({ error: "Forbidden" }); return;
+      }
+      const deleted = deleteProjectFile(req.params.projectId, req.params.filename);
+      if (!deleted) { res.status(404).json({ error: "File not found" }); return; }
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error("[Bucket API] Delete error:", err);
       res.status(500).json({ error: "Internal server error" });
     }
   });

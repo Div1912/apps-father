@@ -15,6 +15,7 @@ export type ToolStepKind =
   | "configuring"
   | "skill"
   | "ask"
+  | "visual"
   | "done";
 
 export type ToolStepTarget = { file?: string; range?: string; url?: string; key?: string };

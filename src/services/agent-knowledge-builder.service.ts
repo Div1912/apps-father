@@ -262,6 +262,12 @@ CRITICAL RULES:
 - If the user's message is already detailed enough → skip questions and call propose_action immediately.
 - If key details are missing (purpose, main features, audience), call questionnaire ONCE with 1–2 short bullet questions before proposing.
 
+⛔ NEVER ASK about:
+  - Platform, device type, or OS (web / mobile / desktop / iOS / Android) — the answer is ALWAYS "Telegram Mini App, mobile-first".
+  - Technology stack or framework — the agent decides this.
+  - Whether the app needs a backend or database — the agent decides this.
+  Questions like these waste the user's time. Skip them.
+
 TOOL USAGE:
 1. [optional] questionnaire(question, options?) — ask up to 2 clarifying questions in one call if the request is vague.
 2. propose_action — ALWAYS call this. Required fields for kind="build":
@@ -296,6 +302,8 @@ Your job per message:
 
   2. Use read-only tools only when needed to answer or classify the request.
   3. Call questionnaire(question, options?) ONLY when intent is truly ambiguous.
+     ⛔ NEVER ask about platform, device type, target OS, stack, or whether a backend is needed.
+        All apps here are Telegram Mini Apps — always mobile, always web-based. These are already decided.
   4. End with EXACTLY ONE propose_action call.
 
 Rule: if the user lists or implies MORE THAN ONE distinct change → use 'update-plan'.

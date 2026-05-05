@@ -43,11 +43,11 @@ function parseStartParam(param) {
 // to avoid storing garbage that would never round-trip back through TG.
 function getStartParam() {
   let raw = '';
-  try { raw = tg?.initDataUnsafe?.start_param || ''; } catch (_) {}
+  try { raw = tg?.initDataUnsafe?.start_param || ''; } catch (_) { }
   if (!raw) {
     try {
       raw = new URLSearchParams(window.location.search).get('startapp') || '';
-    } catch (_) {}
+    } catch (_) { }
   }
   // Android fallback: on some Telegram Android launch paths (inline
   // web_app button, deep link via custom tabs, after a task switch),
@@ -61,7 +61,7 @@ function getStartParam() {
       const hash = (window.location.hash || '').replace(/^#/, '');
       const hp = new URLSearchParams(hash);
       raw = hp.get('tgWebAppStartParam') || '';
-    } catch (_) {}
+    } catch (_) { }
   }
   // Also probe the SDK's signed initData string directly — on Android it's
   // sometimes already populated in initData (URL-encoded form fields)
@@ -73,7 +73,7 @@ function getStartParam() {
         const sp = new URLSearchParams(initStr);
         raw = sp.get('start_param') || '';
       }
-    } catch (_) {}
+    } catch (_) { }
   }
   raw = (raw || '').trim();
   // Persist across reloads AND sessions. localStorage survives WebView
@@ -81,14 +81,14 @@ function getStartParam() {
   // arrive from an ad and then reopen the Mini App later. Cache lookup
   // runs only when neither live source had a value.
   if (!raw) {
-    try { raw = localStorage.getItem('af_start_param') || ''; } catch (_) {}
+    try { raw = localStorage.getItem('af_start_param') || ''; } catch (_) { }
     if (!raw) {
-      try { raw = sessionStorage.getItem('af_start_param') || ''; } catch (_) {}
+      try { raw = sessionStorage.getItem('af_start_param') || ''; } catch (_) { }
     }
   }
   if (!raw) return '';
-  try { sessionStorage.setItem('af_start_param', raw); } catch (_) {}
-  try { localStorage.setItem('af_start_param', raw); } catch (_) {}
+  try { sessionStorage.setItem('af_start_param', raw); } catch (_) { }
+  try { localStorage.setItem('af_start_param', raw); } catch (_) { }
   return raw.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
 }
 
@@ -129,7 +129,7 @@ async function reportInit() {
       body: JSON.stringify({ startParam }),
     });
     if (r.ok) return await r.json();
-  } catch {}
+  } catch { }
   return null;
 }
 
@@ -366,7 +366,7 @@ function apiHeaders() {
   try {
     const sp = getStartParam();
     if (sp) h['X-Apps-Father-Start-Param'] = sp;
-  } catch (_) {}
+  } catch (_) { }
   return h;
 }
 
@@ -384,10 +384,10 @@ function timeStr(ts) {
 // ── Spoiler points ──
 
 var SimpleSpoiler = {
-  random: function(x, y) {
+  random: function (x, y) {
     return x + Math.floor(Math.random() * (y + 1 - x));
   },
-  generateVector: function(count) {
+  generateVector: function (count) {
     var speedMax = 8, speedMin = 4, lifetime = 600;
     var value = SimpleSpoiler.random(0, 2 * count + 2);
     var negative = value < count + 1;
@@ -399,7 +399,7 @@ var SimpleSpoiler = {
     var y = Math.sqrt(1 - x * x) * (negative ? -1 : 1);
     return { dx: k * x, dy: k * y };
   },
-  resetPoint: function(point) {
+  resetPoint: function (point) {
     var v = SimpleSpoiler.generateVector(point.cnt);
     point.x = SimpleSpoiler.random(point.md, point.mx - point.md);
     point.y = SimpleSpoiler.random(point.md, point.my - point.md);
@@ -407,7 +407,7 @@ var SimpleSpoiler = {
     point.dy = v.dy;
     point.s = SimpleSpoiler.random(60, 80) * point.my / 3600;
   },
-  updatePoint: function(point) {
+  updatePoint: function (point) {
     var b = point.b, t = point.t;
     var d = point.fps * point.lsec / 3;
     var k = 360 / point.lsec / point.fps;
@@ -416,7 +416,7 @@ var SimpleSpoiler = {
     b.style.transform = 'translate(' + x + 'px, ' + y + 'px) scale(' + point.s + ')';
     b.style.opacity = (t < d ? t / d : t < d * 2 ? 1 : (d * 3 - t) / d) * 0.95;
   },
-  init: function(el) {
+  init: function (el) {
     SimpleSpoiler.destroy(el);
     el.style.position = 'relative';
     var el_w = el.offsetWidth || 260;
@@ -452,7 +452,7 @@ var SimpleSpoiler = {
     spoiler.raf = requestAnimationFrame(doRedraw);
     el._spoiler = spoiler;
   },
-  destroy: function(el) {
+  destroy: function (el) {
     var spoiler = el._spoiler;
     if (!spoiler) return;
     spoiler.active = false;
@@ -482,9 +482,9 @@ function renderAppList(filter) {
 
   const filtered = filter
     ? projects.filter(p =>
-        p.name.toLowerCase().includes(filter) ||
-        (p.botUsername || '').toLowerCase().includes(filter)
-      )
+      p.name.toLowerCase().includes(filter) ||
+      (p.botUsername || '').toLowerCase().includes(filter)
+    )
     : projects;
 
   if (filtered.length === 0 && projects.length > 0) {
@@ -509,8 +509,8 @@ function renderAppList(filter) {
     html = `<a class="tm-row tm-row-add tm-row-add-pulse" id="btn-create-app">` +
       `<span class="tm-icon"></span>` +
       `<div class="tm-row-add-textcol">` +
-        `<span class="tm-row-add-label">${esc(ctaLabel)}</span>` +
-        `<span class="tm-row-add-hint">${esc(ctaHint)}</span>` +
+      `<span class="tm-row-add-label">${esc(ctaLabel)}</span>` +
+      `<span class="tm-row-add-hint">${esc(ctaHint)}</span>` +
       `</div>` +
       `</a>`;
   } else {
@@ -619,21 +619,20 @@ function startLinkBotPolling(projectId, onLinked) {
         // Result-card actions are gated on botUsername — re-render any
         // existing result-action rows for this project so the Release
         // button appears immediately, instead of only on next page load.
-        try { refreshResultActionsFor(projectId); } catch (_) {}
+        try { refreshResultActionsFor(projectId); } catch (_) { }
         if (typeof onLinked === 'function') {
           try { onLinked(updated); } catch (e) { console.error('[link-bot] onLinked threw', e); }
         }
       }
-    } catch {}
+    } catch { }
   }, 3000);
 }
 
 function showLinkBotWaiting() {
-  const elements = document.querySelectorAll('.link-bot-waiting');
+  const elements = document.querySelectorAll('.link-bot-card');
 
   elements.forEach((el) => {
-    el.style.display = 'block';
-    el.classList.remove('hidden');
+    el.classList.add('opacity-blink');
   });
 }
 
@@ -819,7 +818,7 @@ async function startTask(task, rowEl, btn) {
     else if (tg?.openLink) tg.openLink(task.link, { try_instant_view: true });
     else window.open(task.link, '_blank');
   } catch (_) {
-    try { tg?.openLink(task.link, { try_instant_view: true }); } catch (_2) {}
+    try { tg?.openLink(task.link, { try_instant_view: true }); } catch (_2) { }
   }
 
   // Show verifying state on button
@@ -976,12 +975,12 @@ function renderBundleGrid(bundles, isFirstPurchase) {
 
     const progressLine = isLimited
       ? (() => {
-          const pct = Math.min(100, Math.round((b.purchaseCount / b.limitTotal) * 100));
-          return `<div class="bundle-progress">
+        const pct = Math.min(100, Math.round((b.purchaseCount / b.limitTotal) * 100));
+        return `<div class="bundle-progress">
             <div class="bundle-progress-bar"><div class="bundle-progress-fill" style="width:${pct}%"></div></div>
             <span class="bundle-progress-label">${b.purchaseCount}/${b.limitTotal}</span>
           </div>`;
-        })()
+      })()
       : '';
 
     const cardClass = [
@@ -1030,19 +1029,19 @@ const ESTIMATED_PRICE_RANGE = '100–500';
 // shown inline only when the user is still eligible for the first-deposit
 // bonus AND the bonus percent is enabled.
 function renderInsufficientFundsCard(balance, minCostOverride) {
-  const bal      = Math.floor(Number(balance) || 0);
-  const cost     = (minCostOverride != null) ? minCostOverride : getMinBuildCredits();
+  const bal = Math.floor(Number(balance) || 0);
+  const cost = (minCostOverride != null) ? minCostOverride : getMinBuildCredits();
   const shortfall = Math.max(0, cost - bal);
-  const eligible  = firstDepositBonusEligible;
+  const eligible = firstDepositBonusEligible;
 
   // substitute {pct} placeholder – bonus is always ×2 (100%)
   const subPct = s => s.replace(/\{pct\}/g, '100');
 
-  const title    = t('chat_insufficient_funds_title') || t('chat_insufficient') || 'Not Enough Credits';
-  const subtitle = t('chat_insufficient_funds_sub')   || 'Top up to start building your app';
-  const lblBal   = t('chat_your_balance')             || 'Your balance';
-  const lblCost  = t('chat_build_cost')               || 'Build cost';
-  const lblNeed  = t('chat_credits_needed')           || 'You need';
+  const title = t('chat_insufficient_funds_title') || t('chat_insufficient') || 'Not Enough Credits';
+  const subtitle = t('chat_insufficient_funds_sub') || 'Top up to start building your app';
+  const lblBal = t('chat_your_balance') || 'Your balance';
+  const lblCost = t('chat_build_cost') || 'Build cost';
+  const lblNeed = t('chat_credits_needed') || 'You need';
 
   const rawCta = eligible
     ? (t('chat_topup_cta_bonus') || 'Top Up & Get ×2 Bonus')
@@ -1115,7 +1114,7 @@ async function loadTopupBalance() {
       renderTierChip();
       updatePillPrices();
     }
-  } catch {}
+  } catch { }
 }
 
 function loadTopupTgs() {
@@ -1316,7 +1315,7 @@ async function openRatingModal(projectId, commitNum, creditsCharged) {
         return;
       }
     }
-  } catch {}
+  } catch { }
 
   const cashback = cashbackAmount(creditsCharged);
   ratingCtx = { projectId, commitNum, creditsCharged, cashback };
@@ -1455,7 +1454,7 @@ async function submitRating() {
       showToast(t('rating_success') || 'Thanks for the feedback', 'success');
     }
     if (typeof tg?.HapticFeedback?.notificationOccurred === 'function') {
-      try { tg.HapticFeedback.notificationOccurred('success'); } catch {}
+      try { tg.HapticFeedback.notificationOccurred('success'); } catch { }
     }
     if (Number.isFinite(newBal)) {
       try {
@@ -1466,7 +1465,7 @@ async function submitRating() {
         if (balanceEl) balanceEl.textContent = `${userCredits} cr`;
         const tasksBalance = document.getElementById('tasks-balance');
         if (tasksBalance) tasksBalance.innerHTML = fmtBalance(userCredits);
-      } catch {}
+      } catch { }
     }
     ratedRuns.add(ratedKey(ratingCtx.projectId, ratingCtx.commitNum));
     refreshCashbackButtons(ratingCtx.projectId, ratingCtx.commitNum);
@@ -1531,7 +1530,7 @@ function bindRatingModal() {
 document.addEventListener('DOMContentLoaded', bindRatingModal);
 // Also try to bind immediately in case the DOM is already ready.
 if (document.readyState !== 'loading') {
-  try { bindRatingModal(); } catch {}
+  try { bindRatingModal(); } catch { }
 }
 
 async function submitTopup() {
@@ -1580,7 +1579,7 @@ async function submitTopup() {
         });
       } catch (e) {
         console.error('openInvoice error:', e);
-        try { tg?.openInvoice(data.invoiceUrl); } catch {}
+        try { tg?.openInvoice(data.invoiceUrl); } catch { }
       }
     } else {
       closePurchaseModal();
@@ -1716,7 +1715,7 @@ function startTonVerifying(paymentId) {
   tonVerifyAttempts = 0;
   tg?.MainButton?.setText('Verifying payment...');
   tg?.MainButton?.showProgress();
-  console.log(`[TON] Started verifying payment ${paymentId}, every ${TON_VERIFY_INTERVAL/1000}s for ${TON_MAX_VERIFY * TON_VERIFY_INTERVAL / 60000}min`);
+  console.log(`[TON] Started verifying payment ${paymentId}, every ${TON_VERIFY_INTERVAL / 1000}s for ${TON_MAX_VERIFY * TON_VERIFY_INTERVAL / 60000}min`);
 
   async function poll() {
     tonVerifyAttempts++;
@@ -1771,7 +1770,7 @@ function startStarsVerifying(paymentId) {
   stopStarsVerifying();
   starsVerifyingPaymentId = paymentId;
   starsVerifyAttempts = 0;
-  console.log(`[Stars] Started verifying payment ${paymentId}, every ${STARS_VERIFY_INTERVAL/1000}s for ${STARS_MAX_VERIFY * STARS_VERIFY_INTERVAL / 60000}min`);
+  console.log(`[Stars] Started verifying payment ${paymentId}, every ${STARS_VERIFY_INTERVAL / 1000}s for ${STARS_MAX_VERIFY * STARS_VERIFY_INTERVAL / 60000}min`);
 
   async function poll() {
     starsVerifyAttempts++;
@@ -1835,7 +1834,7 @@ function initTopupEvents() {
       try {
         await tonConnectUI.disconnect();
         showToast('Wallet disconnected', 'info');
-      } catch {}
+      } catch { }
       updateTonWalletPanel();
     }
   });
@@ -1843,7 +1842,7 @@ function initTopupEvents() {
   document.getElementById('ton-wallet-connect-btn')?.addEventListener('click', async () => {
     initTonConnect();
     if (tonConnectUI) {
-      try { await tonConnectUI.openModal(); } catch {}
+      try { await tonConnectUI.openModal(); } catch { }
     }
   });
 }
@@ -2048,7 +2047,7 @@ function connectChatWS(projectId) {
   const gen = ++wsGeneration;
 
   if (chatWs) {
-    try { chatWs.onclose = null; chatWs.close(); } catch {}
+    try { chatWs.onclose = null; chatWs.close(); } catch { }
     chatWs = null;
   }
 
@@ -2066,7 +2065,7 @@ function connectChatWS(projectId) {
     try {
       const data = JSON.parse(event.data);
       handleWSMessage(data);
-    } catch {}
+    } catch { }
   };
 
   chatWs.onclose = () => {
@@ -2134,8 +2133,8 @@ function ensureChainHeader(el) {
   header.innerHTML =
     `<div class="agent-chain-icon">${CHAIN_SPARKLE_SVG}</div>` +
     `<div class="agent-chain-titles">` +
-      `<div class="agent-chain-title"></div>` +
-      `<div class="agent-chain-subtitle">live agent timeline</div>` +
+    `<div class="agent-chain-title"></div>` +
+    `<div class="agent-chain-subtitle">live agent timeline</div>` +
     `</div>` +
     `<div class="agent-chain-step"></div>`;
   header.querySelector('.agent-chain-title').textContent = display;
@@ -2162,7 +2161,7 @@ function updateChainCounter(el) {
 function scrollRunningRowIntoView(el) {
   const running = el.querySelector(':scope > .agent-chain > .agent-chain-rows > .row.running');
   if (!running) return;
-  try { running.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch {}
+  try { running.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch { }
 }
 
 // Move the cost/abort footer back to the bottom of the chain after we
@@ -2261,20 +2260,21 @@ function appendCompletionDelta(viewport, delta) {
 function agentStepIcon(kind) {
   const F = (p) => `<svg class="step-svg-icon" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">${p}</svg>`;
   const MAP = {
-    thinking:   F('<path fill="currentColor" d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 2a5 5 0 110 10A5 5 0 018 3zm.75 2.5H7.25V9l3.5 2.1.75-1.25-2.75-1.65V5.5z"/>'),
-    reading:    F('<path fill="currentColor" d="M8 3C4.5 3 1.5 8 1.5 8S4.5 13 8 13s6.5-5 6.5-5S11.5 3 8 3zm0 2a3 3 0 110 6A3 3 0 018 5zm0 1.5a1.5 1.5 0 100 3 1.5 1.5 0 000-3z"/>'),
-    writing:    F('<path fill="currentColor" d="M3 1h7.5L14 4.5V15H3V1zm1 1v12h9V5.5L9.5 2H4zm1.5 3.5h5v1h-5V5.5zm0 2h5v1h-5v-1zm0 2h3.5v1H5.5v-1z"/>'),
-    editing:    F('<path fill="currentColor" d="M12 1.5l2.5 2.5-9 9L3 14l.5-2.5 9-10zm0 1.5L5 10.6l-.3 1.7 1.7-.3L13.5 5 12 3zM1 14.5h14v1H1v-1z"/>'),
-    searching:  F('<path fill="currentColor" d="M7 2a5 5 0 100 10A5 5 0 007 2zm0 1.5a3.5 3.5 0 110 7 3.5 3.5 0 010-7zm4.47 5.53l1.06 1.06L15 12.56 13.94 13.6l-2.47-2.47 1.06-1.06-.06.06z"/>'),
-    shell:      F('<path fill="currentColor" d="M1 2.5h14v11H1v-11zm1.5 2v7.5h11V4.5h-11zM4 6l3.5 2L4 10V8.5l2-.5-2-.5V6zm4 4h4v1H8v-1z"/>'),
-    fetch:      F('<path fill="currentColor" d="M10.5 1.5a4 4 0 012.83 6.83l-1.06-1.06a2.5 2.5 0 10-3.54-3.54L7.67 2.67A4 4 0 0110.5 1.5zM5.5 14.5a4 4 0 01-2.83-6.83l1.06 1.06a2.5 2.5 0 003.54 3.54l1.06 1.06A4 4 0 015.5 14.5zm5.56-3.5L9.5 9.44l1.06-1.06 1.56 1.56-1.06 1.06zM5.44 6.56L4.38 5.5 5.44 4.44 6.5 5.5 5.44 6.56z"/>'),
-    db:         F('<path fill="currentColor" d="M8 2C5.24 2 3 3.12 3 4.5v7C3 12.88 5.24 14 8 14s5-1.12 5-2.5v-7C13 3.12 10.76 2 8 2zm0 1.5c2.21 0 3.5.75 3.5 1 0 .25-1.29 1-3.5 1S4.5 4.75 4.5 4.5c0-.25 1.29-1 3.5-1zM4.5 6.4c.9.4 2.1.6 3.5.6s2.6-.2 3.5-.6v1.1c0 .25-1.29 1-3.5 1s-3.5-.75-3.5-1V6.4zm0 3c.9.4 2.1.6 3.5.6s2.6-.2 3.5-.6v1.1c0 .25-1.29 1-3.5 1s-3.5-.75-3.5-1V9.4z"/>'),
-    telegram:   F('<path fill="currentColor" d="M14.5 2L1 7.5l5 1.5 1.5 5 2.5-3.5L14 13 14.5 2zm-2 2L6.5 9l-.8-2.8L12.5 4z"/>'),
-    deploying:  F('<path fill="currentColor" d="M8 1l5.5 5.5H10V14H6V6.5H2.5L8 1zm-7 13.5h14V16H1v-1.5z"/>'),
-    configuring:F('<path fill="currentColor" d="M8 5.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zm0 1.5a1 1 0 110 2 1 1 0 010-2z"/><path fill="currentColor" d="M8.75 0h-1.5l-.5 2a5.5 5.5 0 00-1.7.7L3 1.75l-1.05 1.05 1.2 2A5.5 5.5 0 002.5 6.5H.5v1.5l2 .3a5.5 5.5 0 00.65 1.7L2 12.25l1.05 1.05 2-1.2a5.5 5.5 0 001.7.65L7.25 15h1.5l.3-2.25a5.5 5.5 0 001.7-.65l2 1.2 1.05-1.05-1.25-2a5.5 5.5 0 00.65-1.7L15.5 8V6.5h-2a5.5 5.5 0 00-.65-1.7l1.2-2L13 1.75l-2 1.25a5.5 5.5 0 00-1.7-.7L8.75 0z"/>'),
-    skill:      F('<polygon fill="currentColor" points="10,1 5.5,9 9.5,9 6,15 13.5,6.5 9.5,6.5"/>'),
-    ask:        F('<path fill="currentColor" d="M1 1h14v10.5H9.5l-3.5 3.5v-3.5H1V1zm6 2.5v3h2v-3H7zm0 4v1.5h2V7.5H7z"/>'),
-    done:       F('<path fill="currentColor" d="M6.5 11.5l-4-4L4 6l2.5 2.5 6-6 1.5 1.5z"/>'),
+    thinking: F('<path fill="currentColor" d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 2a5 5 0 110 10A5 5 0 018 3zm.75 2.5H7.25V9l3.5 2.1.75-1.25-2.75-1.65V5.5z"/>'),
+    reading: F('<path fill="currentColor" d="M8 3C4.5 3 1.5 8 1.5 8S4.5 13 8 13s6.5-5 6.5-5S11.5 3 8 3zm0 2a3 3 0 110 6A3 3 0 018 5zm0 1.5a1.5 1.5 0 100 3 1.5 1.5 0 000-3z"/>'),
+    writing: F('<path fill="currentColor" d="M3 1h7.5L14 4.5V15H3V1zm1 1v12h9V5.5L9.5 2H4zm1.5 3.5h5v1h-5V5.5zm0 2h5v1h-5v-1zm0 2h3.5v1H5.5v-1z"/>'),
+    editing: F('<path fill="currentColor" d="M12 1.5l2.5 2.5-9 9L3 14l.5-2.5 9-10zm0 1.5L5 10.6l-.3 1.7 1.7-.3L13.5 5 12 3zM1 14.5h14v1H1v-1z"/>'),
+    searching: F('<path fill="currentColor" d="M7 2a5 5 0 100 10A5 5 0 007 2zm0 1.5a3.5 3.5 0 110 7 3.5 3.5 0 010-7zm4.47 5.53l1.06 1.06L15 12.56 13.94 13.6l-2.47-2.47 1.06-1.06-.06.06z"/>'),
+    shell: F('<path fill="currentColor" d="M1 2.5h14v11H1v-11zm1.5 2v7.5h11V4.5h-11zM4 6l3.5 2L4 10V8.5l2-.5-2-.5V6zm4 4h4v1H8v-1z"/>'),
+    fetch: F('<path fill="currentColor" d="M10.5 1.5a4 4 0 012.83 6.83l-1.06-1.06a2.5 2.5 0 10-3.54-3.54L7.67 2.67A4 4 0 0110.5 1.5zM5.5 14.5a4 4 0 01-2.83-6.83l1.06 1.06a2.5 2.5 0 003.54 3.54l1.06 1.06A4 4 0 015.5 14.5zm5.56-3.5L9.5 9.44l1.06-1.06 1.56 1.56-1.06 1.06zM5.44 6.56L4.38 5.5 5.44 4.44 6.5 5.5 5.44 6.56z"/>'),
+    db: F('<path fill="currentColor" d="M8 2C5.24 2 3 3.12 3 4.5v7C3 12.88 5.24 14 8 14s5-1.12 5-2.5v-7C13 3.12 10.76 2 8 2zm0 1.5c2.21 0 3.5.75 3.5 1 0 .25-1.29 1-3.5 1S4.5 4.75 4.5 4.5c0-.25 1.29-1 3.5-1zM4.5 6.4c.9.4 2.1.6 3.5.6s2.6-.2 3.5-.6v1.1c0 .25-1.29 1-3.5 1s-3.5-.75-3.5-1V6.4zm0 3c.9.4 2.1.6 3.5.6s2.6-.2 3.5-.6v1.1c0 .25-1.29 1-3.5 1s-3.5-.75-3.5-1V9.4z"/>'),
+    telegram: F('<path fill="currentColor" d="M14.5 2L1 7.5l5 1.5 1.5 5 2.5-3.5L14 13 14.5 2zm-2 2L6.5 9l-.8-2.8L12.5 4z"/>'),
+    deploying: F('<path fill="currentColor" d="M8 1l5.5 5.5H10V14H6V6.5H2.5L8 1zm-7 13.5h14V16H1v-1.5z"/>'),
+    configuring: F('<path fill="currentColor" d="M8 5.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zm0 1.5a1 1 0 110 2 1 1 0 010-2z"/><path fill="currentColor" d="M8.75 0h-1.5l-.5 2a5.5 5.5 0 00-1.7.7L3 1.75l-1.05 1.05 1.2 2A5.5 5.5 0 002.5 6.5H.5v1.5l2 .3a5.5 5.5 0 00.65 1.7L2 12.25l1.05 1.05 2-1.2a5.5 5.5 0 001.7.65L7.25 15h1.5l.3-2.25a5.5 5.5 0 001.7-.65l2 1.2 1.05-1.05-1.25-2a5.5 5.5 0 00.65-1.7L15.5 8V6.5h-2a5.5 5.5 0 00-.65-1.7l1.2-2L13 1.75l-2 1.25a5.5 5.5 0 00-1.7-.7L8.75 0z"/>'),
+    skill: F('<polygon fill="currentColor" points="10,1 5.5,9 9.5,9 6,15 13.5,6.5 9.5,6.5"/>'),
+    ask: F('<path fill="currentColor" d="M1 1h14v10.5H9.5l-3.5 3.5v-3.5H1V1zm6 2.5v3h2v-3H7zm0 4v1.5h2V7.5H7z"/>'),
+    done: F('<path fill="currentColor" d="M6.5 11.5l-4-4L4 6l2.5 2.5 6-6 1.5 1.5z"/>'),
+    visual: F('<path fill="currentColor" d="M8 3C4.5 3 1.5 8 1.5 8S4.5 13 8 13s6.5-5 6.5-5S11.5 3 8 3zm0 2a3 3 0 110 6A3 3 0 018 5zm0 1.5a1.5 1.5 0 100 3 1.5 1.5 0 000-3z"/><rect fill="currentColor" x="1" y="13.5" width="14" height="1.5" rx="0.5"/>'),
   };
   return MAP[kind] || F('<circle cx="8" cy="8" r="3.5" fill="currentColor"/>');
 }
@@ -2440,16 +2440,16 @@ function handleWSMessage(data) {
     row.dataset.stepId = data.stepId;
     row.innerHTML =
       `<div class="rail">` +
-        `<div class="rail-line"></div>` +
-        `<div class="thought-dot"></div>` +
+      `<div class="rail-line"></div>` +
+      `<div class="thought-dot"></div>` +
       `</div>` +
       `<div class="agent-think-block running" id="narr-${esc(data.stepId)}">` +
-        `<div class="agent-think-header">` +
-          `<span class="agent-think-label">thinking</span>` +
-          `<span class="agent-think-dots"><i></i><i></i><i></i></span>` +
-          `<span class="agent-think-toggle">\u203a</span>` +
-        `</div>` +
-        `<div class="agent-think-body"></div>` +
+      `<div class="agent-think-header">` +
+      `<span class="agent-think-label">thinking</span>` +
+      `<span class="agent-think-dots"><i></i><i></i><i></i></span>` +
+      `<span class="agent-think-toggle">\u203a</span>` +
+      `</div>` +
+      `<div class="agent-think-body"></div>` +
       `</div>`;
     rows.appendChild(row);
     moveFooterToEnd(el);
@@ -2551,19 +2551,20 @@ function handleWSMessage(data) {
     row.dataset.stepId = data.stepId;
     row.innerHTML =
       `<div class="rail">` +
-        `<div class="rail-line"></div>` +
-        `<div class="tool-dot">${agentStepIcon(data.kind)}</div>` +
+      `<div class="rail-line"></div>` +
+      `<div class="tool-dot">${agentStepIcon(data.kind)}</div>` +
       `</div>` +
       `<div class="agent-step" id="step-${esc(data.stepId)}">` +
-        `<div class="agent-step-head">` +
-          `<div class="agent-step-body">` +
-            `<div class="agent-step-title">${esc(titleText)}</div>` +
-            targetHtml +
-          `</div>` +
-          `<span class="agent-step-badge agent-step-badge--running">` +
-            `<span class="ping-dot"></span>running` +
-          `</span>` +
-        `</div>` +
+      `<div class="agent-step-head">` +
+      `<div class="agent-step-body">` +
+      `<div class="agent-step-title">${esc(titleText)}</div>` +
+      targetHtml +
+      `</div>` +
+      `<span class="agent-step-badge agent-step-badge--running">` +
+      `<span class="ping-dot"></span>running` +
+      `</span>` +
+      `</div>` +
+      (data.kind === 'visual' ? `<div class="vt-robot-scan"><div class="vt-screen"><div class="vt-scanline"></div><div class="vt-eye"></div></div><div class="vt-robot-label">Analysing UI…</div></div>` : '') +
       `</div>`;
     rows.appendChild(row);
     moveFooterToEnd(el);
@@ -2587,23 +2588,52 @@ function handleWSMessage(data) {
       row.classList.remove('running');
       row.classList.add(ok ? 'done' : 'error');
     }
+    // Remove robot animation if present
+    step.querySelector('.vt-robot-scan')?.remove();
     finalizeStepCard(step, !ok);
     if (data.meta) {
       const m = data.meta;
-      const bits = [];
-      if (typeof m.lines === 'number') bits.push(`<span class="meta-neutral">${m.lines} lines</span>`);
-      if (typeof m.added === 'number' && m.added > 0) bits.push(`<span class="meta-added">+${m.added}</span>`);
-      if (typeof m.removed === 'number' && m.removed > 0) bits.push(`<span class="meta-removed">-${m.removed}</span>`);
-      if (typeof m.bytes === 'number') bits.push(`<span class="meta-neutral">${(m.bytes/1024).toFixed(1)}KB</span>`);
-      if (m.error) bits.push(`<span class="meta-removed">${esc(m.error)}</span>`);
-      if (bits.length) {
-        let meta = step.querySelector('.agent-step-meta');
-        if (!meta) {
-          meta = document.createElement('div');
-          meta.className = 'agent-step-meta';
-          step.appendChild(meta);
+      // ── Visual test screenshot card ──────────────────────────────────────
+      if (m.screenshotBase64) {
+        const statusEmoji = m.status === 'pass' ? '✅' : m.status === 'warn' ? '⚠️' : '❌';
+        const statusCls = m.status === 'pass' ? 'vt-pass' : m.status === 'warn' ? 'vt-warn' : 'vt-fail';
+        const issuesHtml = Array.isArray(m.issues) && m.issues.length
+          ? `<div class="vt-issues">${m.issues.map(i => `<span class="vt-issue">• ${esc(String(i))}</span>`).join('')}</div>`
+          : '';
+        const errBadges = [];
+        if (m.consoleErrors > 0) errBadges.push(`<span class="vt-badge vt-badge--err">${m.consoleErrors} console err</span>`);
+        if (m.networkErrors > 0) errBadges.push(`<span class="vt-badge vt-badge--err">${m.networkErrors} net err</span>`);
+        if (m.pageErrors > 0) errBadges.push(`<span class="vt-badge vt-badge--err">${m.pageErrors} JS err</span>`);
+        const durationStr = m.durationMs ? `${(m.durationMs / 1000).toFixed(1)}s` : '';
+        const card = document.createElement('div');
+        card.className = `vt-result-card ${statusCls}`;
+        card.innerHTML =
+          `<img class="vt-screenshot" src="data:image/png;base64,${m.screenshotBase64}" alt="App screenshot" loading="lazy"/>` +
+          `<div class="vt-result-body">` +
+          `<div class="vt-result-status">${statusEmoji} <strong>${(m.status || '').toUpperCase()}</strong>${durationStr ? ` <span class="vt-dur">${durationStr}</span>` : ''}</div>` +
+          (m.headline ? `<div class="vt-headline">${esc(m.headline)}</div>` : '') +
+          issuesHtml +
+          (errBadges.length ? `<div class="vt-badges">${errBadges.join('')}</div>` : '') +
+          `</div>`;
+        step.appendChild(card);
+      } else {
+        // Fallback: plain text meta bits
+        const bits = [];
+        if (m.status) bits.push(`<span class="meta-neutral">${esc(m.status)}</span>`);
+        if (typeof m.lines === 'number') bits.push(`<span class="meta-neutral">${m.lines} lines</span>`);
+        if (typeof m.added === 'number' && m.added > 0) bits.push(`<span class="meta-added">+${m.added}</span>`);
+        if (typeof m.removed === 'number' && m.removed > 0) bits.push(`<span class="meta-removed">-${m.removed}</span>`);
+        if (typeof m.bytes === 'number') bits.push(`<span class="meta-neutral">${(m.bytes / 1024).toFixed(1)}KB</span>`);
+        if (m.error) bits.push(`<span class="meta-removed">${esc(m.error)}</span>`);
+        if (bits.length) {
+          let meta = step.querySelector('.agent-step-meta');
+          if (!meta) {
+            meta = document.createElement('div');
+            meta.className = 'agent-step-meta';
+            step.appendChild(meta);
+          }
+          meta.innerHTML = bits.join('');
         }
-        meta.innerHTML = bits.join('');
       }
     }
     // Persist: update step status + meta
@@ -2927,14 +2957,14 @@ function handleWSMessage(data) {
 }
 
 const RESULT_CHECK_SVG = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
-const RESULT_STAR_SVG  = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15 9 22 9.5 17 14.5 18.5 22 12 18 5.5 22 7 14.5 2 9.5 9 9 12 2"/></svg>`;
+const RESULT_STAR_SVG = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15 9 22 9.5 17 14.5 18.5 22 12 18 5.5 22 7 14.5 2 9.5 9 9 12 2"/></svg>`;
 
 /**
  * Build the full reference-style completion card HTML.
  * Wraps resultActionsHtml + cashbackRatePill + linkBotCardHtml inside
  * a .completion-card with glow, head, and summary block.
  */
-function resultCardHtml(projectId, {changelogUrl, summary, commitNum, creditsCharged, cashbackAvailable, cashbackClaimed, stepCount, durationMs} = {}) {
+function resultCardHtml(projectId, { changelogUrl, summary, commitNum, creditsCharged, cashbackAvailable, cashbackClaimed, stepCount, durationMs } = {}) {
   // ── Rate pill (top-right of head) ──
   let ratePill = '';
   if (cashbackAvailable && projectId && commitNum) {
@@ -3117,9 +3147,9 @@ async function handleLinkBotClick(projectId, btnEl) {
   const newbotUrl = `https://t.me/newbot/${fatherBot}/username_bot`;
 
   const proceed = () => {
-    try { tg?.openTelegramLink(newbotUrl); } catch (_) {}
-    try { startLinkBotPolling(projectId); } catch (_) {}
-    try { showLinkBotWaiting(); } catch (_) {}
+    try { tg?.openTelegramLink(newbotUrl); } catch (_) { }
+    try { startLinkBotPolling(projectId); } catch (_) { }
+    try { showLinkBotWaiting(); } catch (_) { }
   };
 
   if (btnEl) {
@@ -3135,7 +3165,7 @@ async function handleLinkBotClick(projectId, btnEl) {
     if (res.ok && data?.ok) {
       if (typeof data.newCredits === 'number') {
         userCredits = data.newCredits;
-        try { loadBalance(); } catch (_) {}
+        try { loadBalance(); } catch (_) { }
       }
       // Either we just paid (fresh charge), or the server told us it was
       // already paid / linked. In all three cases there's no future fee,
@@ -3148,7 +3178,7 @@ async function handleLinkBotClick(projectId, btnEl) {
     if (res.status === 402) {
       hapticNotify('error');
       showToast(t('link_bot_insufficient') || 'Not enough credits — top up first.', 'error');
-      setTimeout(() => { try { openTopup(currentView || 'list'); } catch (_) {} }, 200);
+      setTimeout(() => { try { openTopup(currentView || 'list'); } catch (_) { } }, 200);
       return;
     }
     showToast(data?.error || 'Could not unlock bot creation', 'error');
@@ -3230,7 +3260,7 @@ async function loadChatHistory(projectId) {
     }
 
     const hasActiveProgress = data.messages.some(m => m.type === 'progress' && (m.percent || 0) < 100);
-    const hasOpenQuestion  = data.messages.some(m => m.type === 'question');
+    const hasOpenQuestion = data.messages.some(m => m.type === 'question');
     if (hasActiveProgress || hasOpenQuestion) {
       processingProjectIds.add(projectId);
       isProcessing = true;
@@ -3340,11 +3370,11 @@ function appendMessage(msg, animate = true) {
     if (msg.type === 'devtools_request') {
       const TAG_MAP = {
         'Restyle App': { icon: '🎨', cls: 'restyle', label: 'Restyle App Request' },
-        'Bug Report':  { icon: '🐛', cls: 'bug',     label: 'Bug Report'          },
-        'Bug Fixing':  { icon: '🐛', cls: 'bug',     label: 'Bug Report'          },
+        'Bug Report': { icon: '🐛', cls: 'bug', label: 'Bug Report' },
+        'Bug Fixing': { icon: '🐛', cls: 'bug', label: 'Bug Report' },
       };
-      const tag   = (msg.metadata && msg.metadata.tag) ? String(msg.metadata.tag) : 'Request';
-      const info  = TAG_MAP[tag] || { icon: '⚙️', cls: 'default', label: tag };
+      const tag = (msg.metadata && msg.metadata.tag) ? String(msg.metadata.tag) : 'Request';
+      const info = TAG_MAP[tag] || { icon: '⚙️', cls: 'default', label: tag };
       el.className = `chat-bubble chat-devtools-svc chat-devtools-svc--${info.cls}`;
       el.innerHTML = `<div class="chat-devtools-pill">
         <span class="chat-devtools-icon">${info.icon}</span>
@@ -3352,18 +3382,18 @@ function appendMessage(msg, animate = true) {
         <span class="chat-devtools-dot"></span>
       </div>`;
     } else {
-    // ── Normal user message ──
-    el.className = 'chat-bubble chat-bubble--user';
-    let html = '';
-    if (msg.attachments && msg.attachments.length > 0) {
-      html += '<div class="chat-bubble-attachments">';
-      for (const a of msg.attachments) {
-        html += `<span class="chat-bubble-attach-item">📎 ${esc(a.name || 'file')}</span>`;
+      // ── Normal user message ──
+      el.className = 'chat-bubble chat-bubble--user';
+      let html = '';
+      if (msg.attachments && msg.attachments.length > 0) {
+        html += '<div class="chat-bubble-attachments">';
+        for (const a of msg.attachments) {
+          html += `<span class="chat-bubble-attach-item">📎 ${esc(a.name || 'file')}</span>`;
+        }
+        html += '</div>';
       }
-      html += '</div>';
-    }
-    html += `<div class="chat-bubble-content">${esc(msg.content)}</div>`;
-    el.innerHTML = html;
+      html += `<div class="chat-bubble-content">${esc(msg.content)}</div>`;
+      el.innerHTML = html;
     }
   } else if (msg.type === 'balance_error') {
     el.className = 'chat-bubble';
@@ -3399,7 +3429,7 @@ function appendMessage(msg, animate = true) {
         const fresh = el.parentElement?.querySelector(`#${el.id}`);
         if (fresh) renderBalancePromptCard(fresh, userCredits, minCost);
       })
-      .catch(() => {});
+      .catch(() => { });
   } else if (msg.content === 'preparing_next_update' || msg.metadata?.preparing) {
     setInputFinalizing(true);
     return;
@@ -3711,7 +3741,7 @@ function ensureAgentProcState(messageId) {
         agentProcState.set(messageId, parsed);
         return agentProcState.get(messageId);
       }
-    } catch {}
+    } catch { }
     agentProcState.set(messageId, { narrations: [], steps: [], footer: {}, _seq: 0 });
   }
   return agentProcState.get(messageId);
@@ -3720,12 +3750,12 @@ function ensureAgentProcState(messageId) {
 function persistAgentProcState(messageId) {
   const st = agentProcState.get(messageId);
   if (!st) return;
-  try { localStorage.setItem('af_proc_' + messageId, JSON.stringify(st)); } catch {}
+  try { localStorage.setItem('af_proc_' + messageId, JSON.stringify(st)); } catch { }
 }
 
 function clearAgentProcState(messageId) {
   agentProcState.delete(messageId);
-  try { localStorage.removeItem('af_proc_' + messageId); } catch {}
+  try { localStorage.removeItem('af_proc_' + messageId); } catch { }
 }
 
 function restoreAgentProcessCard(el, state, isRunning) {
@@ -3738,8 +3768,8 @@ function restoreAgentProcessCard(el, state, isRunning) {
   // `order` stamp written at push time. Items without an order (legacy saves)
   // fall back to narrations-then-steps to preserve previous behaviour.
   const narrations = (state.narrations || []).map(n => ({ ...n, _kind: 'narration' }));
-  const steps      = (state.steps      || []).map(s => ({ ...s, _kind: 'step' }));
-  const hasOrder   = [...narrations, ...steps].some(x => typeof x.order === 'number');
+  const steps = (state.steps || []).map(s => ({ ...s, _kind: 'step' }));
+  const hasOrder = [...narrations, ...steps].some(x => typeof x.order === 'number');
   const items = hasOrder
     ? [...narrations, ...steps].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
     : [...narrations, ...steps];  // legacy: narrations first
@@ -3756,15 +3786,15 @@ function restoreAgentProcessCard(el, state, isRunning) {
         : `<span class="agent-think-label">thinking</span><span class="agent-think-dots"><i></i><i></i><i></i></span>`;
       row.innerHTML =
         `<div class="rail">` +
-          `<div class="rail-line"></div>` +
-          `<div class="thought-dot"></div>` +
+        `<div class="rail-line"></div>` +
+        `<div class="thought-dot"></div>` +
         `</div>` +
         `<div class="agent-think-block ${isDone ? 'done' : 'running'}" id="narr-${esc(n.stepId)}">` +
-          `<div class="agent-think-header">` +
-            labelHtml +
-            `<span class="agent-think-toggle">\u203a</span>` +
-          `</div>` +
-          `<div class="agent-think-body">${n.body ? formatContent(n.body) : ''}</div>` +
+        `<div class="agent-think-header">` +
+        labelHtml +
+        `<span class="agent-think-toggle">\u203a</span>` +
+        `</div>` +
+        `<div class="agent-think-body">${n.body ? formatContent(n.body) : ''}</div>` +
         `</div>`;
       rows.appendChild(row);
       if (isDone) {
@@ -3794,7 +3824,7 @@ function restoreAgentProcessCard(el, state, isRunning) {
         if (typeof m.lines === 'number') bits.push(`<span class="meta-neutral">${m.lines} lines</span>`);
         if (typeof m.added === 'number' && m.added > 0) bits.push(`<span class="meta-added">+${m.added}</span>`);
         if (typeof m.removed === 'number' && m.removed > 0) bits.push(`<span class="meta-removed">-${m.removed}</span>`);
-        if (typeof m.bytes === 'number') bits.push(`<span class="meta-neutral">${(m.bytes/1024).toFixed(1)}KB</span>`);
+        if (typeof m.bytes === 'number') bits.push(`<span class="meta-neutral">${(m.bytes / 1024).toFixed(1)}KB</span>`);
         if (m.error) bits.push(`<span class="meta-removed">${esc(m.error)}</span>`);
         if (bits.length) metaHtml = `<div class="agent-step-meta">${bits.join('')}</div>`;
       }
@@ -3803,18 +3833,18 @@ function restoreAgentProcessCard(el, state, isRunning) {
       row.dataset.stepId = s.stepId;
       row.innerHTML =
         `<div class="rail">` +
-          `<div class="rail-line"></div>` +
-          `<div class="tool-dot">${agentStepIcon(s.kind)}</div>` +
+        `<div class="rail-line"></div>` +
+        `<div class="tool-dot">${agentStepIcon(s.kind)}</div>` +
         `</div>` +
         `<div class="agent-step" id="step-${esc(s.stepId)}">` +
-          `<div class="agent-step-head">` +
-            `<div class="agent-step-body">` +
-              `<div class="agent-step-title">${esc(s.title || s.kind || '')}</div>` +
-              targetHtml +
-            `</div>` +
-            badgeHtml +
-          `</div>` +
-          metaHtml +
+        `<div class="agent-step-head">` +
+        `<div class="agent-step-body">` +
+        `<div class="agent-step-title">${esc(s.title || s.kind || '')}</div>` +
+        targetHtml +
+        `</div>` +
+        badgeHtml +
+        `</div>` +
+        metaHtml +
         `</div>`;
       rows.appendChild(row);
     }
@@ -3950,7 +3980,7 @@ function renderProgressBubble(msg, fromHistory = false) {
         agentProcState.set(msg.id, parsed);
         return parsed;
       }
-    } catch {}
+    } catch { }
     return null;
   })();
   if (savedProcState && (savedProcState.narrations?.length || savedProcState.steps?.length)) {
@@ -4552,7 +4582,7 @@ async function unlockPreview(projectId) {
     if (res.ok && data?.ok) {
       if (typeof data.newCredits === 'number') {
         userCredits = data.newCredits;
-        try { loadBalance(); } catch (_) {}
+        try { loadBalance(); } catch (_) { }
       }
       hapticNotify('success');
       closeLockedPreview();
@@ -4562,7 +4592,7 @@ async function unlockPreview(projectId) {
     if (res.status === 402) {
       closeLockedPreview();
       showToast(t('paywall_insufficient') || 'Not enough credits — top up first.', 'error');
-      setTimeout(() => { try { openTopup(currentView || 'list'); } catch (_) {} }, 200);
+      setTimeout(() => { try { openTopup(currentView || 'list'); } catch (_) { } }, 200);
       return;
     }
     showToast(data?.error || 'Could not unlock', 'error');
@@ -4717,13 +4747,13 @@ async function openDetail(id) {
     + taskIdLine;
 
   document.getElementById('detail-info').querySelectorAll('.detail-copy-id').forEach(el => {
-    el.addEventListener('click', function() {
+    el.addEventListener('click', function () {
       const val = this.getAttribute('data-copy');
       navigator.clipboard.writeText(val).then(() => {
         const orig = this.innerHTML;
         this.innerHTML = '<b>Copied!</b>';
         setTimeout(() => { this.innerHTML = orig; }, 1200);
-      }).catch(() => {});
+      }).catch(() => { });
     });
   });
 
@@ -4780,7 +4810,7 @@ async function openDetail(id) {
   if (isAdmin) settingsRows += menuRowAction(t('detail_regen_context'), 'af-icon-refresh', 'open-regen-context');
   if (hasFeature(p, 'get_code')) settingsRows += menuRow('Edit Code', 'af-icon-code', `${baseUrl}/editor/${p.id}/`);
   settingsRows += menuRowAction(t('detail_env_vars') || 'Environment Variables', 'af-icon-code', 'open-env-vars');
-  // if (hasFeature(p, 'admin_panel')) settingsRows += menuRow('Admin Panel', 'af-icon-admin', `${baseUrl}/admin/${p.id}/`);
+  settingsRows += menuRowAction('File Bucket', 'af-icon-features', 'open-bucket');
   document.getElementById('detail-settings-rows').innerHTML = settingsRows;
 
   document.getElementById('detail-settings-rows').querySelector('[data-action="open-edit-info"]')
@@ -4789,6 +4819,8 @@ async function openDetail(id) {
     ?.addEventListener('click', () => regenerateContext(p.id));
   document.getElementById('detail-settings-rows').querySelector('[data-action="open-env-vars"]')
     ?.addEventListener('click', () => openProjectEnv(p.id));
+  document.getElementById('detail-settings-rows').querySelector('[data-action="open-bucket"]')
+    ?.addEventListener('click', () => openBucket(p.id));
 
   document.getElementById('detail-money-rows').querySelector('[data-action="open-features"]')
     ?.addEventListener('click', () => openFeatures(p.id));
@@ -5350,7 +5382,7 @@ async function checkPartner() {
     isPartnerUser = data.isPartner === true;
     const btn = document.getElementById('btn-partner');
     if (btn) btn.classList.toggle('hidden', !isPartnerUser);
-  } catch {}
+  } catch { }
 }
 
 async function openPartner() {
@@ -6002,7 +6034,7 @@ async function openFeatures(projectId) {
     const refreshOwnedCache = (newlyOwnedIds) => {
       if (!currentProject) return;
       let owned = [];
-      try { owned = JSON.parse(currentProject.features || '[]'); } catch (_) {}
+      try { owned = JSON.parse(currentProject.features || '[]'); } catch (_) { }
       for (const id of newlyOwnedIds) if (!owned.includes(id)) owned.push(id);
       currentProject.features = JSON.stringify(owned);
       const p = projects.find(pp => pp.id === projectId);
@@ -6154,7 +6186,7 @@ async function checkAdmin() {
     isAdmin = data.isAdmin === true;
     const btn = document.getElementById('btn-admin');
     if (btn) btn.classList.toggle('hidden', !isAdmin);
-  } catch {}
+  } catch { }
 }
 
 function admApi(path, opts = {}) {
@@ -6172,7 +6204,7 @@ function admFmtDate(d) {
   return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 function admFmtMoney(n) { return '$' + Number(n).toFixed(2); }
-function admFmtTokens(n) { return n > 999999 ? (n/1000000).toFixed(1)+'M' : n > 999 ? (n/1000).toFixed(0)+'K' : String(n); }
+function admFmtTokens(n) { return n > 999999 ? (n / 1000000).toFixed(1) + 'M' : n > 999 ? (n / 1000).toFixed(0) + 'K' : String(n); }
 function admBadge(status) { return `<span class="adm-badge ${status}">${status}</span>`; }
 
 function openAdmin() {
@@ -6194,7 +6226,7 @@ function openAdmin() {
   admApi('/stats').then(d => {
     document.getElementById('adm-info').innerHTML =
       `Users: <b>${d.userCount}</b> · Apps: <b>${d.projectCount}</b> · Revenue: <b>${admFmtMoney(d.totalTopups)}</b>`;
-  }).catch(() => {});
+  }).catch(() => { });
 }
 
 async function openAdmDashboard() {
@@ -6251,10 +6283,10 @@ function admIsoEndOfToday() {
 
 function admPresetToRange(preset) {
   switch (preset) {
-    case 'today': return { preset, from: admIsoStartOfToday(),    to: admIsoEndOfToday() };
-    case 'week':  return { preset, from: admIsoStartDaysAgo(6),   to: admIsoEndOfToday() };
-    case 'all':   return { preset, from: null,                    to: null };
-    default:      return { preset: 'all', from: null, to: null };
+    case 'today': return { preset, from: admIsoStartOfToday(), to: admIsoEndOfToday() };
+    case 'week': return { preset, from: admIsoStartDaysAgo(6), to: admIsoEndOfToday() };
+    case 'all': return { preset, from: null, to: null };
+    default: return { preset: 'all', from: null, to: null };
   }
 }
 
@@ -6314,10 +6346,10 @@ function admBuildBlock(item, kind) {
 }
 
 const ADM_KIND_META = {
-  all:      { label: 'TOTAL',    cssClass: 'all' },
-  organic:  { label: 'ORGANIC',  cssClass: 'organic' },
-  source:   { label: 'SOURCE',   cssClass: 'source' },
-  partner:  { label: 'PARTNER',  cssClass: 'partner' },
+  all: { label: 'TOTAL', cssClass: 'all' },
+  organic: { label: 'ORGANIC', cssClass: 'organic' },
+  source: { label: 'SOURCE', cssClass: 'source' },
+  partner: { label: 'PARTNER', cssClass: 'partner' },
   referrer: { label: 'REFERRER', cssClass: 'referrer' },
 };
 
@@ -6428,7 +6460,7 @@ function admSourceCard(block) {
 //   partner / referrer: referrer's telegramId
 //   all / organic: empty (the kind alone is enough)
 function admBlockKey(block) {
-  if (block.kind === 'source')  return block.source || block.title || '';
+  if (block.kind === 'source') return block.source || block.title || '';
   if (block.kind === 'partner' || block.kind === 'referrer') return block.telegramId || '';
   return '';
 }
@@ -6439,25 +6471,24 @@ function admRenderSources() {
   const d = admSourcesData;
 
   const tabs = [
-    { id: 'all',       label: 'All' },
-    { id: 'sources',   label: 'Sources',   count: d.sources.length },
-    { id: 'partners',  label: 'Partners',  count: d.partners.length },
+    { id: 'all', label: 'All' },
+    { id: 'sources', label: 'Sources', count: d.sources.length },
+    { id: 'partners', label: 'Partners', count: d.partners.length },
     { id: 'referrers', label: 'Referrers', count: d.referrers.length },
   ];
 
-  const tabsHtml = `<div class="adm-tabs">${
-    tabs.map(t => {
-      const badge = t.count != null ? `<span class="adm-tab-count">${t.count}</span>` : '';
-      return `<button class="adm-tab ${t.id === admSourcesTab ? 'active' : ''}" data-tab="${t.id}">${t.label}${badge}</button>`;
-    }).join('')
-  }</div>`;
+  const tabsHtml = `<div class="adm-tabs">${tabs.map(t => {
+    const badge = t.count != null ? `<span class="adm-tab-count">${t.count}</span>` : '';
+    return `<button class="adm-tab ${t.id === admSourcesTab ? 'active' : ''}" data-tab="${t.id}">${t.label}${badge}</button>`;
+  }).join('')
+    }</div>`;
 
   let blocks = [];
   if (admSourcesTab === 'all') {
     blocks.push(admBuildBlock(d.all, 'all'));
     if (d.organic.users > 0) blocks.push(admBuildBlock(d.organic, 'organic'));
-    for (const s of d.sources)   blocks.push(admBuildBlock(s, 'source'));
-    for (const p of d.partners)  blocks.push(admBuildBlock(p, 'partner'));
+    for (const s of d.sources) blocks.push(admBuildBlock(s, 'source'));
+    for (const p of d.partners) blocks.push(admBuildBlock(p, 'partner'));
     for (const r of d.referrers) blocks.push(admBuildBlock(r, 'referrer'));
   } else if (admSourcesTab === 'sources') {
     blocks = d.sources.map(s => admBuildBlock(s, 'source'));
@@ -6503,7 +6534,7 @@ async function admReloadSources() {
   try {
     const params = new URLSearchParams();
     if (admSourcesRange.from) params.set('from', admSourcesRange.from);
-    if (admSourcesRange.to)   params.set('to',   admSourcesRange.to);
+    if (admSourcesRange.to) params.set('to', admSourcesRange.to);
     const qs = params.toString();
     admSourcesData = await admApi('/stats/sources' + (qs ? `?${qs}` : ''));
     admRenderSources();
@@ -6517,15 +6548,15 @@ function admSourcesControlsHtml() {
   const r = admSourcesRange;
   const presets = [
     { id: 'today', label: 'Today' },
-    { id: 'week',  label: 'Week' },
-    { id: 'all',   label: 'All Time' },
+    { id: 'week', label: 'Week' },
+    { id: 'all', label: 'All Time' },
   ];
   const presetBtns = presets.map(p =>
     `<button class="adm-range-btn ${r.preset === p.id ? 'active' : ''}" data-range-preset="${p.id}">${p.label}</button>`
   ).join('');
 
   const fromVal = admIsoToDateInput(r.from);
-  const toVal   = admIsoToDateInput(r.to);
+  const toVal = admIsoToDateInput(r.to);
 
   return `
     <div class="adm-range">
@@ -6555,9 +6586,9 @@ function admWireSourcesControls() {
   if (apply) {
     apply.addEventListener('click', () => {
       const fromInput = root.querySelector('#adm-range-from');
-      const toInput   = root.querySelector('#adm-range-to');
+      const toInput = root.querySelector('#adm-range-to');
       const from = admDateInputToIso(fromInput && fromInput.value, 'start');
-      const to   = admDateInputToIso(toInput && toInput.value, 'end');
+      const to = admDateInputToIso(toInput && toInput.value, 'end');
       admSourcesRange = { preset: 'custom', from, to };
       admReloadSources();
     });
@@ -6571,8 +6602,8 @@ let admSourceUsersCtx = null; // { kind, key, title }
 
 function admSourceRangeLabel() {
   const r = admSourcesRange;
-  if (r.preset === 'today')  return 'today';
-  if (r.preset === 'week')   return 'last 7 days';
+  if (r.preset === 'today') return 'today';
+  if (r.preset === 'week') return 'last 7 days';
   if (r.preset === 'all' || (!r.from && !r.to)) return 'all time';
   const fmt = (iso) => admIsoToDateInput(iso) || '?';
   return `${fmt(r.from)} → ${fmt(r.to)}`;
@@ -6583,18 +6614,18 @@ async function openAdmSourceUsers(kind, key, title) {
   showView('adm-source-users');
 
   const titleEl = document.getElementById('adm-source-users-title');
-  const subEl   = document.getElementById('adm-source-users-sub');
-  const el      = document.getElementById('adm-source-users-content');
+  const subEl = document.getElementById('adm-source-users-sub');
+  const el = document.getElementById('adm-source-users-content');
   if (titleEl) titleEl.textContent = admSourceUsersCtx.title;
-  if (subEl)   subEl.textContent   = `Registered · ${admSourceRangeLabel()}`;
-  if (el)      el.innerHTML        = '<div class="loading-spinner"></div>';
+  if (subEl) subEl.textContent = `Registered · ${admSourceRangeLabel()}`;
+  if (el) el.innerHTML = '<div class="loading-spinner"></div>';
 
   try {
     const params = new URLSearchParams();
     params.set('kind', kind);
     if (key) params.set('key', key);
     if (admSourcesRange.from) params.set('from', admSourcesRange.from);
-    if (admSourcesRange.to)   params.set('to',   admSourcesRange.to);
+    if (admSourcesRange.to) params.set('to', admSourcesRange.to);
     const data = await admApi('/stats/sources/users?' + params.toString());
     admRenderSourceUsers(data);
   } catch (err) {
@@ -6620,16 +6651,16 @@ function admRenderSourceUsers(data) {
     const name = u.username || u.firstName || 'User ' + u.id;
     const avatar = userAvatarHtml(name, u.username);
     const flags = [
-      u.hasApp   ? 'app'   : null,
-      u.hasPlan  ? 'plan'  : null,
+      u.hasApp ? 'app' : null,
+      u.hasPlan ? 'plan' : null,
       u.hasBuilt ? 'built' : null,
       u.revenue > 0 ? `$${u.revenue.toFixed(2)}` : null,
     ].filter(Boolean).join(' · ') || 'no activity';
     html += `<a class="tm-row tm-row-link" data-user-id="${u.id}">` +
       avatar +
       `<div style="flex:1;min-width:0;overflow:hidden;">` +
-        `<div class="tm-row-value" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(name)}</div>` +
-        `<div class="tm-row-description">${esc(flags)} · ${admFmtDate(u.createdAt)}</div>` +
+      `<div class="tm-row-value" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(name)}</div>` +
+      `<div class="tm-row-description">${esc(flags)} · ${admFmtDate(u.createdAt)}</div>` +
       `</div>` +
       `<div class="tm-row-status"><span class="tm-status-dot" style="background:${Number(u.balance) > 0 ? '#5CC377' : '#708499'}"></span>${admFmtMoney(u.balance)}</div>` +
       `</a>`;
@@ -6866,7 +6897,7 @@ async function openAdmUserDetail(userId) {
         try {
           const r = await admApi('/users/' + userId + '/data', { method: 'DELETE' });
           const d = r.deleted || {};
-          showToast(`Wiped: ${d.payments||0} payments, ${d.conversations||0} chats, ${d.usageLogs||0} usage, ${d.withdrawals||0} withdrawals`, 'success');
+          showToast(`Wiped: ${d.payments || 0} payments, ${d.conversations || 0} chats, ${d.usageLogs || 0} usage, ${d.withdrawals || 0} withdrawals`, 'success');
           openAdmUserDetail(userId);
         } catch (err) {
           showToast('Failed to wipe user data', 'error');
@@ -6893,7 +6924,7 @@ async function openAdmUserDetail(userId) {
         try {
           const r = await admApi('/users/' + userId + '/full', { method: 'DELETE' });
           const d = r.deleted || {};
-          showToast(`Full reset: ${d.projects||0} apps, ${d.payments||0} payments, ${d.usageLogs||0} usage, user deleted`, 'success');
+          showToast(`Full reset: ${d.projects || 0} apps, ${d.payments || 0} payments, ${d.usageLogs || 0} usage, user deleted`, 'success');
           setTimeout(() => openAdmUsers(), 1200);
         } catch (err) {
           showToast('Failed to full-reset user', 'error');
@@ -6933,10 +6964,10 @@ const ADM_APPS_STATUS_ORDER = ['released', 'deployed', 'building', 'planning', '
 const ADM_APPS_SORTERS = {
   updated_desc: { label: 'Recently updated', cmp: (a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt) },
   created_desc: { label: 'Recently created', cmp: (a, b) => +new Date(b.createdAt) - +new Date(a.createdAt) },
-  budget_desc:  { label: 'Budget: high → low', cmp: (a, b) => (b.totalCost || 0) - (a.totalCost || 0) },
-  budget_asc:   { label: 'Budget: low → high', cmp: (a, b) => (a.totalCost || 0) - (b.totalCost || 0) },
-  name_asc:     { label: 'Name (A → Z)',     cmp: (a, b) => String(a.name || '').localeCompare(String(b.name || '')) },
-  status:       { label: 'Status',           cmp: (a, b) => ADM_APPS_STATUS_ORDER.indexOf(a.status) - ADM_APPS_STATUS_ORDER.indexOf(b.status) },
+  budget_desc: { label: 'Budget: high → low', cmp: (a, b) => (b.totalCost || 0) - (a.totalCost || 0) },
+  budget_asc: { label: 'Budget: low → high', cmp: (a, b) => (a.totalCost || 0) - (b.totalCost || 0) },
+  name_asc: { label: 'Name (A → Z)', cmp: (a, b) => String(a.name || '').localeCompare(String(b.name || '')) },
+  status: { label: 'Status', cmp: (a, b) => ADM_APPS_STATUS_ORDER.indexOf(a.status) - ADM_APPS_STATUS_ORDER.indexOf(b.status) },
 };
 
 async function openAdmApps() {
@@ -6965,19 +6996,17 @@ function admRenderApps() {
       .filter(s => counts[s] > 0)
       .map(s => ({ id: s, label: statusLabel(s) })));
 
-  const chipsHtml = `<div class="adm-tabs" id="adm-apps-status-chips">${
-    chips.map(c => {
-      const active = c.id === admAppsStatusFilter ? ' active' : '';
-      return `<button class="adm-tab${active}" data-status="${c.id}">${esc(c.label)}<span class="adm-tab-count">${counts[c.id] || 0}</span></button>`;
-    }).join('')
-  }</div>`;
+  const chipsHtml = `<div class="adm-tabs" id="adm-apps-status-chips">${chips.map(c => {
+    const active = c.id === admAppsStatusFilter ? ' active' : '';
+    return `<button class="adm-tab${active}" data-status="${c.id}">${esc(c.label)}<span class="adm-tab-count">${counts[c.id] || 0}</span></button>`;
+  }).join('')
+    }</div>`;
 
   const sortHtml = `<div class="adm-apps-toolbar">
     <label class="adm-apps-sort-label">Sort by</label>
-    <select class="adm-apps-sort" id="adm-apps-sort">${
-      Object.entries(ADM_APPS_SORTERS).map(([id, s]) =>
-        `<option value="${id}"${id === admAppsSort ? ' selected' : ''}>${esc(s.label)}</option>`
-      ).join('')
+    <select class="adm-apps-sort" id="adm-apps-sort">${Object.entries(ADM_APPS_SORTERS).map(([id, s]) =>
+    `<option value="${id}"${id === admAppsSort ? ' selected' : ''}>${esc(s.label)}</option>`
+  ).join('')
     }</select>
   </div>`;
 
@@ -7012,12 +7041,12 @@ function admRenderApps() {
       listHtml += `<a class="tm-row tm-row-link" data-proj-id="${p.id}" style="align-items:center;">` +
         avatarHtml +
         `<div style="flex:1;min-width:0;overflow:hidden;">` +
-          `<div class="tm-row-value" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.name)}</div>` +
-          `<div class="tm-row-description" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${username || '<span style="opacity:0.5">no bot</span>'}</div>` +
+        `<div class="tm-row-value" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.name)}</div>` +
+        `<div class="tm-row-description" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${username || '<span style="opacity:0.5">no bot</span>'}</div>` +
         `</div>` +
         `<div class="tm-row-status" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">` +
-          `<div style="display:flex;align-items:center;">${statusDot}${statusLabel(p.status)}</div>` +
-          budgetPill +
+        `<div style="display:flex;align-items:center;">${statusDot}${statusLabel(p.status)}</div>` +
+        budgetPill +
         `</div>` +
         `</a>`;
     }
@@ -7033,7 +7062,7 @@ function admRenderApps() {
   el.innerHTML = jumpHtml + chipsHtml + sortHtml + summaryHtml + listHtml;
 
   const jumpInput = el.querySelector('#adm-apps-jump-id');
-  const jumpBtn   = el.querySelector('#adm-apps-jump-btn');
+  const jumpBtn = el.querySelector('#adm-apps-jump-btn');
   function doJump() {
     const id = jumpInput.value.trim();
     if (!id) return;
@@ -7213,6 +7242,7 @@ function showView(view) {
   document.getElementById('view-language').classList.toggle('hidden', view !== 'language');
   document.getElementById('view-onboarding').classList.toggle('hidden', view !== 'onboarding');
   document.getElementById('view-project-env')?.classList.toggle('hidden', view !== 'project-env');
+  document.getElementById('view-bucket')?.classList.toggle('hidden', view !== 'bucket');
 
   const headerDropdown = document.getElementById('chat-header-dropdown');
   if (headerDropdown) headerDropdown.classList.add('hidden');
@@ -7224,9 +7254,9 @@ function showView(view) {
   }
 
   if (tg) {
-    try { tg.setHeaderColor('#000000'); } catch {}
-    try { tg.setBackgroundColor('#000000'); } catch {}
-    try { if (typeof tg.setBottomBarColor === 'function') tg.setBottomBarColor('#000000'); } catch {}
+    try { tg.setHeaderColor('#000000'); } catch { }
+    try { tg.setBackgroundColor('#000000'); } catch { }
+    try { if (typeof tg.setBottomBarColor === 'function') tg.setBottomBarColor('#000000'); } catch { }
   }
 
   if (tg?.BackButton) {
@@ -7338,7 +7368,7 @@ function openSampleBot(botUsername, _name) {
   const link = `https://t.me/${botUsername}`;
   try {
     tg.openTelegramLink(link, { try_instant_view: true });
-  } catch (_) {}
+  } catch (_) { }
   // Fallback for environments where Telegram WebApp isn't available
   // (desktop dev preview, accidental browser open).
   // window.open(link, '_blank');
@@ -7472,7 +7502,7 @@ async function startVoiceRecording() {
 
   voiceMediaRecorder.start();
   setMicState('recording');
-  try { tg?.HapticFeedback?.impactOccurred?.('light'); } catch {}
+  try { tg?.HapticFeedback?.impactOccurred?.('light'); } catch { }
 }
 
 function stopVoiceRecording() {
@@ -7483,7 +7513,7 @@ function stopVoiceRecording() {
   } catch {
     setMicState('idle');
   }
-  try { tg?.HapticFeedback?.impactOccurred?.('light'); } catch {}
+  try { tg?.HapticFeedback?.impactOccurred?.('light'); } catch { }
 }
 
 async function uploadVoiceForTranscription(blob) {
@@ -7502,8 +7532,8 @@ async function uploadVoiceForTranscription(blob) {
   try {
     const ext = (blob.type.includes('mp4') ? 'm4a'
       : blob.type.includes('mpeg') ? 'mp3'
-      : blob.type.includes('ogg') ? 'ogg'
-      : 'webm');
+        : blob.type.includes('ogg') ? 'ogg'
+          : 'webm');
     const fd = new FormData();
     fd.append('audio', blob, `voice-${Date.now()}.${ext}`);
     const langHint = SPEECH_LANG_MAP[currentLang] || '';
@@ -7528,7 +7558,7 @@ async function uploadVoiceForTranscription(blob) {
       input.style.height = Math.min(input.scrollHeight, 120) + 'px';
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.focus();
-      try { tg?.HapticFeedback?.notificationOccurred?.('success'); } catch {}
+      try { tg?.HapticFeedback?.notificationOccurred?.('success'); } catch { }
     } else if (!text) {
       showToast(t('chat_mic_empty') || 'No speech detected', 'error');
     }
@@ -7896,7 +7926,7 @@ function onbReset() {
 }
 
 function onbFinish() {
-  try { localStorage.setItem('af_onboarding_seen', '1'); } catch (_) {}
+  try { localStorage.setItem('af_onboarding_seen', '1'); } catch (_) { }
   showView('list');
   // The 5-second timer for the follow-channel modal starts only AFTER
   // the user lands on the main menu — we never want to interrupt the
@@ -7991,7 +8021,7 @@ function openSubModal(channelLink, bonusUsd) {
   overlay.dataset.channelLink = channelLink || 'https://t.me/apps_father';
   overlay.classList.remove('hidden');
   overlay.setAttribute('aria-hidden', 'false');
-  try { sessionStorage.setItem(SUB_MODAL_SESSION_KEY, '1'); } catch (_) {}
+  try { sessionStorage.setItem(SUB_MODAL_SESSION_KEY, '1'); } catch (_) { }
 }
 
 function closeSubModal() {
@@ -8025,14 +8055,14 @@ async function claimSubBonus() {
       return;
     }
     if (data.claimed) {
-      try { localStorage.setItem('af_sub_claimed', '1'); } catch (_) {}
+      try { localStorage.setItem('af_sub_claimed', '1'); } catch (_) { }
       showToast(t('sub_modal_toast_claimed'), 'success');
-      try { loadBalance(); } catch (_) {}
+      try { loadBalance(); } catch (_) { }
       closeSubModal();
       return;
     }
     if (data.alreadyClaimed) {
-      try { localStorage.setItem('af_sub_claimed', '1'); } catch (_) {}
+      try { localStorage.setItem('af_sub_claimed', '1'); } catch (_) { }
       showToast(t('sub_modal_toast_already'), 'info');
       closeSubModal();
       return;
@@ -8053,17 +8083,17 @@ async function checkAndShowSubModal() {
   //   - bonus already claimed on this device (cached locally)
   try {
     if (sessionStorage.getItem(SUB_MODAL_SESSION_KEY)) return;
-  } catch (_) {}
+  } catch (_) { }
   try {
     if (localStorage.getItem('af_sub_claimed') === '1') return;
-  } catch (_) {}
+  } catch (_) { }
 
   try {
     const res = await fetch(`${API_BASE}/sub-status`, { headers: apiHeaders() });
     if (!res.ok) return;
     const data = await res.json();
     if (!data.eligible) {
-      try { localStorage.setItem('af_sub_claimed', '1'); } catch (_) {}
+      try { localStorage.setItem('af_sub_claimed', '1'); } catch (_) { }
       return;
     }
     if (data.subscribed) return; // Already a member — don't pester.
@@ -8187,7 +8217,7 @@ async function init() {
         showView('chat');
       } else if (currentView === 'chat') {
         wsGeneration++;
-        if (chatWs) { try { chatWs.onclose = null; chatWs.close(); } catch {} chatWs = null; }
+        if (chatWs) { try { chatWs.onclose = null; chatWs.close(); } catch { } chatWs = null; }
         chatProjectId = null;
         currentProject = null;
         currentToken = null;
@@ -8296,7 +8326,7 @@ async function init() {
       // once so we don't re-detect on every cold start.
       if (detected) setLang(detected);
     }
-  } catch (_) {}
+  } catch (_) { }
   applyLang();
 
   // First-run onboarding. The 4-screen carousel is shown exactly once
@@ -8317,7 +8347,7 @@ async function init() {
       // eligible for the one-time bonus.
       scheduleSubModalCheck();
     }
-  } catch (_) {}
+  } catch (_) { }
 
   initTokenActions();
   initChatInput();
@@ -8356,15 +8386,15 @@ function maybeHandleReservedStartParam() {
   // to unlock a preview. Land them straight on the Topup view so they can
   // recover and try again.
   if (sp === 'topup') {
-    try { localStorage.removeItem('af_start_param'); } catch (_) {}
-    try { sessionStorage.removeItem('af_start_param'); } catch (_) {}
-    try { openTopup('list'); } catch (_) {}
+    try { localStorage.removeItem('af_start_param'); } catch (_) { }
+    try { sessionStorage.removeItem('af_start_param'); } catch (_) { }
+    try { openTopup('list'); } catch (_) { }
     return;
   }
 
   if (sp !== 'open_dialog') return;
-  try { localStorage.removeItem('af_start_param'); } catch (_) {}
-  try { sessionStorage.removeItem('af_start_param'); } catch (_) {}
+  try { localStorage.removeItem('af_start_param'); } catch (_) { }
+  try { sessionStorage.removeItem('af_start_param'); } catch (_) { }
   if (!Array.isArray(projects) || projects.length === 0) return;
   const sorted = projects.slice().sort((a, b) => {
     const ta = new Date(a.updatedAt || a.createdAt || 0).getTime();
@@ -8384,9 +8414,9 @@ function openTierModal() {
   renderTierCards();
   modal.classList.remove('hidden');
   modal.setAttribute('aria-hidden', 'false');
-  try { tg.setHeaderColor(DEFAULT_CHROME); } catch {}
-  try { tg.setBackgroundColor(DEFAULT_CHROME); } catch {}
-  try { if (typeof tg.setBottomBarColor === 'function') tg.setBottomBarColor(DEFAULT_CHROME); } catch {}
+  try { tg.setHeaderColor(DEFAULT_CHROME); } catch { }
+  try { tg.setBackgroundColor(DEFAULT_CHROME); } catch { }
+  try { if (typeof tg.setBottomBarColor === 'function') tg.setBottomBarColor(DEFAULT_CHROME); } catch { }
 }
 
 function closeTierModal() {
@@ -8398,9 +8428,9 @@ function closeTierModal() {
     modal.classList.add('hidden');
     modal.setAttribute('aria-hidden', 'true');
   }, 170);
-  try { tg.setHeaderColor(DEFAULT_CHROME); } catch {}
-  try { tg.setBackgroundColor(DEFAULT_CHROME); } catch {}
-  try { if (typeof tg.setBottomBarColor === 'function') tg.setBottomBarColor(DEFAULT_CHROME); } catch {}
+  try { tg.setHeaderColor(DEFAULT_CHROME); } catch { }
+  try { tg.setBackgroundColor(DEFAULT_CHROME); } catch { }
+  try { if (typeof tg.setBottomBarColor === 'function') tg.setBottomBarColor(DEFAULT_CHROME); } catch { }
 }
 
 function renderSegBar(value) {
@@ -8413,16 +8443,16 @@ function renderSegBar(value) {
 }
 
 const PRICE_META = {
-  create:  { labelKey: 'tier_price_create', hintKey: 'tier_price_create_hint' },
-  update:  { labelKey: 'tier_price_update', hintKey: 'tier_price_update_hint' },
-  plan:    { labelKey: 'tier_price_plan',   hintKey: 'tier_price_plan_hint'   },
-  ask:     { labelKey: 'tier_price_ask',    hintKey: 'tier_price_ask_hint'    },
+  create: { labelKey: 'tier_price_create', hintKey: 'tier_price_create_hint' },
+  update: { labelKey: 'tier_price_update', hintKey: 'tier_price_update_hint' },
+  plan: { labelKey: 'tier_price_plan', hintKey: 'tier_price_plan_hint' },
+  ask: { labelKey: 'tier_price_ask', hintKey: 'tier_price_ask_hint' },
 };
 
 function priceRow(key, val) {
   const meta = PRICE_META[key] || {};
   const label = meta.labelKey ? (t(meta.labelKey) || key) : (meta.label || key);
-  const hint  = meta.hintKey  ? (t(meta.hintKey)  || '') : (meta.hint  || '');
+  const hint = meta.hintKey ? (t(meta.hintKey) || '') : (meta.hint || '');
   // Hide rows where price is 0 or not set
   if (val === '—' || val == null || Number(val) === 0) return '';
   const n = Number(val).toLocaleString();
@@ -8442,20 +8472,20 @@ function renderTierCards() {
   const tiers = allTiers.length ? allTiers : getDefaultTiers();
   container.innerHTML = tiers.map((tier, idx) => {
     const isActive = tier.id === userTierId;
-    const speed   = tier.stats?.speed   ?? 5;
+    const speed = tier.stats?.speed ?? 5;
     const quality = tier.stats?.quality ?? 5;
-    const price   = tier.stats?.price   ?? 5;
+    const price = tier.stats?.price ?? 5;
     const createP = tier.pricing?.create ?? '—';
     const updateP = tier.pricing?.update ?? '—';
-    const askP    = tier.pricing?.ask    ?? '—';
-    const planP   = tier.pricing?.plan   ?? '—';
+    const askP = tier.pricing?.ask ?? '—';
+    const planP = tier.pricing?.plan ?? '—';
 
     // Localized name and description
     const tierName = (tier.nameI18n?.[currentLang] || tier.nameI18n?.en || tier.name || tier.id);
     const tierDesc = (tier.descriptionI18n?.[currentLang] || tier.descriptionI18n?.en || '');
 
     // Accent color per tier
-    const accents = ['#38bdf8','#818cf8','#f472b6','#fb923c','#4ade80'];
+    const accents = ['#38bdf8', '#818cf8', '#f472b6', '#fb923c', '#4ade80'];
     const accent = accents[idx % accents.length];
 
     return `
@@ -8487,8 +8517,8 @@ function renderTierCards() {
         <div class="tier-pricing">
           ${priceRow('create', createP)}
           ${priceRow('update', updateP)}
-          ${priceRow('plan',   planP)}
-          ${priceRow('ask',    askP)}
+          ${priceRow('plan', planP)}
+          ${priceRow('ask', askP)}
         </div>
       </div>
     `;
@@ -8504,7 +8534,7 @@ function renderTierCards() {
 
 function applyTierHeaderAccent() {
   const tiers = allTiers.length ? allTiers : getDefaultTiers();
-  const accents = ['#38bdf8','#818cf8','#f472b6','#fb923c','#4ade80'];
+  const accents = ['#38bdf8', '#818cf8', '#f472b6', '#fb923c', '#4ade80'];
   const activeIdx = tiers.findIndex(t => t.id === userTierId);
   const accent = activeIdx >= 0 ? accents[activeIdx % accents.length] : '#818cf8';
 
@@ -8574,9 +8604,9 @@ function updatePillPrices() {
 }
 
 const TIER_COLORS = [
-  [74,  222, 128],  // 0 — green
-  [233, 178,   0],  // 1 — yellow
-  [233,   0,  80],  // 2 — red
+  [74, 222, 128],  // 0 — green
+  [233, 178, 0],  // 1 — yellow
+  [233, 0, 80],  // 2 — red
 ];
 
 function getTierColor(safeIdx, total) {
@@ -8727,6 +8757,156 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('btn-env-save')?.addEventListener('click', () => saveEnvVars());
 });
+
+// ── File Bucket ─────────────────────────────────────────────────────────────
+
+let bucketProjectId = null;
+
+function openBucket(projectId) {
+  bucketProjectId = projectId;
+  showView('bucket');
+  loadBucketFiles();
+
+  // Wire upload input (re-attach each time the view opens)
+  const input = document.getElementById('bucket-file-input');
+  if (input) {
+    input._bucketHandler && input.removeEventListener('change', input._bucketHandler);
+    input._bucketHandler = (e) => handleBucketUpload(e.target.files);
+    input.addEventListener('change', input._bucketHandler);
+  }
+}
+
+async function loadBucketFiles() {
+  if (!bucketProjectId) return;
+  const loading = document.getElementById('bucket-loading');
+  const empty = document.getElementById('bucket-empty');
+  const list = document.getElementById('bucket-list');
+  const count = document.getElementById('bucket-count');
+  if (!list) return;
+  loading.style.display = 'flex';
+  empty.style.display = 'none';
+  list.innerHTML = '';
+
+  try {
+    const r = await fetch(`${API_BASE}/bucket/${bucketProjectId}`, {
+      headers: apiHeaders(),
+    });
+    if (!r.ok) throw new Error('Failed to load files');
+    const { files } = await r.json();
+
+    loading.style.display = 'none';
+    if (!files || files.length === 0) {
+      empty.style.display = 'flex';
+      count.textContent = '';
+      return;
+    }
+    count.textContent = `${files.length} file${files.length !== 1 ? 's' : ''}`;
+    list.innerHTML = files.map(f => bucketFileRow(f)).join('');
+    list.querySelectorAll('.bucket-del-btn').forEach(btn => {
+      btn.addEventListener('click', () => deleteBucketFile(btn.dataset.filename));
+    });
+    list.querySelectorAll('.bucket-copy-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const url = location.origin + btn.dataset.link;
+        navigator.clipboard.writeText(url).then(() => {
+          const orig = btn.textContent;
+          btn.textContent = 'Copied!';
+          setTimeout(() => { btn.textContent = orig; }, 1400);
+        }).catch(() => { });
+      });
+    });
+    list.querySelectorAll('.bucket-dl-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const a = document.createElement('a');
+        a.href = btn.dataset.link;
+        a.download = btn.dataset.filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      });
+    });
+  } catch (err) {
+    loading.style.display = 'none';
+    list.innerHTML = `<div class="bucket-error">Failed to load files: ${esc(err.message)}</div>`;
+  }
+}
+
+function bucketFileRow(f) {
+  const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp', 'svg'].includes(f.ext);
+  const isAudio = ['mp3', 'ogg', 'wav', 'flac', 'aac', 'm4a', 'weba'].includes(f.ext);
+  const isVideo = ['mp4', 'webm', 'ogv', 'mov'].includes(f.ext);
+  let icon = '📄';
+  if (isImage) icon = '🖼️';
+  else if (isAudio) icon = '🎵';
+  else if (isVideo) icon = '🎬';
+  else if (f.ext === 'pdf') icon = '📕';
+
+  const sizeStr = f.size > 1048576
+    ? (f.size / 1048576).toFixed(1) + ' MB'
+    : (f.size / 1024).toFixed(0) + ' KB';
+
+  const date = new Date(f.uploaded_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+  return `
+    <div class="bucket-file-row" data-filename="${esc(f.filename)}">
+      <div class="bucket-file-icon">${icon}</div>
+      <div class="bucket-file-info">
+        <div class="bucket-file-name">${esc(f.filename)}</div>
+        <div class="bucket-file-meta">${esc(f.ext.toUpperCase())} · ${sizeStr} · ${date}</div>
+      </div>
+      <div class="bucket-file-actions">
+        <button class="bucket-copy-btn" data-link="${esc(f.direct_link)}" title="Copy link">Link</button>
+        <button class="bucket-dl-btn"   data-link="${esc(f.direct_link)}" data-filename="${esc(f.filename)}" title="Download">DL</button>
+        <button class="bucket-del-btn"  data-filename="${esc(f.filename)}" title="Delete">✕</button>
+      </div>
+    </div>`;
+}
+
+async function handleBucketUpload(files) {
+  if (!bucketProjectId || !files || files.length === 0) return;
+  const label = document.getElementById('bucket-upload-label');
+  if (label) { label.classList.add('uploading'); label.querySelector('svg') && (label.querySelector('svg').style.opacity = '0.4'); }
+
+  for (const file of Array.from(files)) {
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await fetch(`${API_BASE}/bucket/${bucketProjectId}/upload`, {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: fd,
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        showToast(err.error || 'Upload failed', 'error');
+      } else {
+        showToast(`${file.name} uploaded`, 'success');
+      }
+    } catch (e) {
+      showToast('Upload error: ' + e.message, 'error');
+    }
+  }
+  if (label) { label.classList.remove('uploading'); }
+  const input = document.getElementById('bucket-file-input');
+  if (input) input.value = '';
+  loadBucketFiles();
+}
+
+async function deleteBucketFile(filename) {
+  if (!bucketProjectId || !filename) return;
+  if (!confirm(`Delete "${filename}"?`)) return;
+  try {
+    const r = await fetch(`${API_BASE}/bucket/${bucketProjectId}/${encodeURIComponent(filename)}`, {
+      method: 'DELETE',
+      headers: apiHeaders(),
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Delete failed');
+    showToast('File deleted', 'success');
+    loadBucketFiles();
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
 
 init();
 

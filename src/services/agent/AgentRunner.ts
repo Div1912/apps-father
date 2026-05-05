@@ -29,6 +29,7 @@ const TOOL_DISPLAY: Record<string, { kind: ToolStepKind; title: string; targetKe
   simulate_telegram:{ kind: "telegram",    title: "Simulating bot message" },
   simulate_api:     { kind: "fetch",       title: "Simulating API call" },
   simulate_ws:      { kind: "shell",       title: "Simulating WebSocket" },
+  visual_test:      { kind: "visual",      title: "Visual test",            targetKey: "path",     targetField: "url" },
 };
 
 function buildToolStepTarget(toolName: string, args: any): ToolStepTarget | undefined {
@@ -61,6 +62,7 @@ function summarizeToolArgs(toolName: string, args: any): string {
     case "simulate_api":      return `${args.method || "GET"} ${args.path}`;
     case "simulate_ws":       return args.scenarioId || `${Array.isArray(args.messages) ? args.messages.length : 0} message(s)`;
     case "deploy_to_dev":     return "";
+    case "visual_test":       return (args.path as string) || "/";
     case "finish":            return (args.shortSummary || args.summary || "").substring(0, 80);
     default:                  return JSON.stringify(args).substring(0, 80);
   }

@@ -73,6 +73,13 @@ scp package.json "${SERVER}:${APP_DIR}/package.json"
 ssh $SERVER "cd ${APP_DIR} && npm install --omit=dev --no-audit --no-fund 2>&1 | tail -3"
 Write-Host "Deps OK" -ForegroundColor Green
 
+# ── Playwright Chromium (for Visual Test tool) ─────────────
+# Install Chromium + required OS-level libs to the default cache location.
+# --with-deps pulls in libglib, libnss, libatk, etc. on Debian/Ubuntu.
+Write-Host "=== [$ENV_NAME] Installing Playwright Chromium ===" -ForegroundColor $COLOR
+ssh $SERVER "cd ${APP_DIR} && npx playwright install chromium --with-deps"
+Write-Host "Playwright OK" -ForegroundColor Green
+
 # ── Prisma ────────────────────────────────────────────────
 Write-Host "=== [$ENV_NAME] Syncing Prisma schema ===" -ForegroundColor $COLOR
 scp prisma/schema.prisma "${SERVER}:${APP_DIR}/prisma/schema.prisma"

@@ -22,6 +22,7 @@ import { SimulateWsTool } from "./impl/build/SimulateWsTool";
 import { SetBotCommandsTool } from "./impl/build/SetBotCommandsTool";
 import { ConfigureAppTool } from "./impl/build/ConfigureAppTool";
 import { FinishTool } from "./impl/build/FinishTool";
+import { VisualTestTool } from "./impl/build/VisualTestTool";
 
 /**
  * All agent tool instances. Each exposes renderDefinition() (OpenAI schema)
@@ -47,6 +48,7 @@ export const AGENT_TOOL_INSTANCES: AgentTool[] = [
   new SimulateWsTool(),
   new SetBotCommandsTool(),
   new ConfigureAppTool(),
+  new VisualTestTool(),
   new FinishTool(),
 ];
 
