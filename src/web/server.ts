@@ -2123,15 +2123,27 @@ export function createWebServer() {
             "router", undefined, false,
           );
 
-          if (!result.proposed && result.text.trim()) {
-            // Model finished without calling propose_action — fall back to a
-            // plain text bubble so the user still sees an answer.
-            const fallbackMsg = chatService.addMessage(projectId, {
-              role: "assistant", type: "text",
-              content: result.text.trim(),
-              costUsd: usage.costUsd, balance: usage.newBalance,
-            });
-            broadcastToProject(projectId, { type: "message", message: fallbackMsg });
+          if (!result.proposed) {
+            if (result.isFirstMessage) {
+              // First message MUST produce a build proposal. If it didn't,
+              // hide the internal error text and ask the user to retry.
+              const retryMsg = chatService.addMessage(projectId, {
+                role: "assistant", type: "text",
+                content: "Не удалось сформировать предложение. Пожалуйста, опишите, что вы хотите создать, и я начну сборку.",
+                costUsd: usage.costUsd, balance: usage.newBalance,
+              });
+              broadcastToProject(projectId, { type: "message", message: retryMsg });
+            } else if (result.text.trim()) {
+              // Normal router fallback — model answered in free-text (no proposal).
+              const fallbackMsg = chatService.addMessage(projectId, {
+                role: "assistant", type: "text",
+                content: result.text.trim(),
+                costUsd: usage.costUsd, balance: usage.newBalance,
+              });
+              broadcastToProject(projectId, { type: "message", message: fallbackMsg });
+            } else {
+              broadcastToProject(projectId, { type: "balance_update", newCredits: usage.newBalance });
+            }
           } else {
             broadcastToProject(projectId, { type: "balance_update", newCredits: usage.newBalance });
           }

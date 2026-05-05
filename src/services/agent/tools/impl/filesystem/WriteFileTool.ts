@@ -10,7 +10,7 @@ export class WriteFileTool implements AgentTool {
       type: "function",
       function: {
         name: "write_file",
-        description: "Create or overwrite a file with complete content. Use for new files or full rewrites. For small changes, prefer edit_file.",
+        description: "Create or overwrite a file with complete content. Use for new files or full rewrites. For small changes, prefer edit_file. WARNING: do NOT use for files longer than ~300 lines — the content will be cut off by max_tokens mid-generation, corrupting the file. For large files use the shell tool with a heredoc, or write a short skeleton and fill sections with edit_file.",
         parameters: {
           type: "object",
           properties: {
@@ -30,6 +30,25 @@ export class WriteFileTool implements AgentTool {
     if (ctx.mode === "new" && !ctx.technicalPlanSubmitted) {
       return "Error: technical_plan must be called before writing code in a new build.";
     }
+
+    // Guard: args may be empty/undefined if the JSON was truncated by max_tokens
+    if (!args.path || typeof args.path !== "string") {
+      return `Error: write_file args were truncated by max_tokens — 'path' is missing. The file content was too large to fit in one tool call.
+
+DO NOT retry write_file with the full file. Split the work:
+
+OPTION 1 — shell heredoc (best for files >300 lines):
+  shell("cat > frontend/yourfile.js << 'EOF'\\n...content in chunks...\\nEOF")
+
+OPTION 2 — skeleton + edit_file:
+  write_file(path, "// skeleton with // TODO: sectionA markers")
+  edit_file(path, "// TODO: sectionA", "...actual code...")
+
+OPTION 3 — split into multiple smaller files.
+
+Pick one and proceed immediately.`;
+    }
+
     if (this._isProtectedPath(args.path)) {
       return "Error: You can only write to frontend/ and backend/ directories.";
     }
@@ -37,21 +56,20 @@ export class WriteFileTool implements AgentTool {
     if (!filePath) return "Error: Invalid path";
 
     if (typeof args.content !== "string" || args.content.length === 0) {
-      return `Error: write_file received empty content — the model hit max_tokens while generating the full file. This will happen again if you retry.
+      return `Error: write_file received empty content for '${args.path}' — the model hit max_tokens while generating the file body. This will happen again if you retry the same way.
 
-DO NOT retry write_file on ${args.path}. Use ONE of these instead:
+DO NOT retry write_file with the full file. Split the work:
 
-OPTION 1 — shell heredoc (recommended for files >400 lines):
-  shell("cat > ${args.path} << 'HEREDOC_EOF'\\n... full file content here ...\\nHEREDOC_EOF")
+OPTION 1 — shell heredoc (best for files >300 lines):
+  shell("cat > ${args.path} << 'HEREDOC_EOF'\\n...content...\\nHEREDOC_EOF")
 
 OPTION 2 — skeleton + edit_file:
-  write_file("${args.path}", "// skeleton ~50 lines with // TODO: section_A markers")
-  edit_file("${args.path}", "// TODO: section_A", "... actual code ...")
-  edit_file("${args.path}", "// TODO: section_B", "... actual code ...")
+  write_file("${args.path}", "// skeleton ~50 lines with // TODO: sectionA markers")
+  edit_file("${args.path}", "// TODO: sectionA", "...actual code...")
 
-OPTION 3 — split into multiple smaller files if the architecture allows.
+OPTION 3 — split into multiple smaller files.
 
-Pick one and proceed.`;
+Pick one and proceed immediately.`;
     }
 
     fs.mkdirSync(path.dirname(filePath), { recursive: true });

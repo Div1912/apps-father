@@ -316,10 +316,14 @@ export class AgentRunner {
         const id = (toolCall as any).id as string;
         let name = (toolCall as any).function?.name as string;
         let args: any;
+        let argsTruncated = false;
+        const rawArgs = (toolCall as any).function?.arguments || "{}";
         try {
-          args = JSON.parse((toolCall as any).function?.arguments || "{}");
+          args = JSON.parse(rawArgs);
         } catch {
+          // JSON truncated by max_tokens — pass empty args and let the tool handle it
           args = {};
+          argsTruncated = true;
         }
 
         // Canonicalize inline-argument calls (e.g. load_skill("frontend"))

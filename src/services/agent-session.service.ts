@@ -85,8 +85,8 @@ class AgentSessionService {
     conversationHistory?: { role: "user" | "assistant"; content: string }[],
     lang?: string,
     onToolCall?: (toolName: string) => void,
-  ): Promise<{ proposed: boolean; text: string; inputTokens: number; outputTokens: number; modelId: string }> {
-    const { systemPrompt, messages } = await kb.session_router(projectId, { userMessage, lang, conversationHistory });
+  ): Promise<{ proposed: boolean; text: string; inputTokens: number; outputTokens: number; modelId: string; isFirstMessage: boolean }> {
+    const { systemPrompt, messages, isFirstMessage } = await kb.session_router(projectId, { userMessage, lang, conversationHistory });
 
     const routerCfg = runtimeConfig.getSessionConfig("router");
     const project: any = await projectService.getProject(projectId);
@@ -103,18 +103,23 @@ class AgentSessionService {
       questionnaireCount: 0,
     };
 
+    // On first message there is no project to inspect — only questionnaire + propose_action needed.
+    const tools = isFirstMessage
+      ? [new QuestionnaireTool(), new ProposeActionTool()]
+      : [
+          wrapAskTool(new ProjectInfoAskTool()),
+          wrapAskTool(new ListFilesAskTool()),
+          wrapAskTool(new ReadFileAskTool()),
+          wrapAskTool(new DbQueryAskTool()),
+          wrapAskTool(new PlatformHelpAskTool()),
+          new QuestionnaireTool(),
+          new ProposeActionTool(),
+        ];
+
     const result = await new Agent("router")
       .setSystemPrompt(systemPrompt)
       .setMessages(messages)
-      .setTools([
-        wrapAskTool(new ProjectInfoAskTool()),
-        wrapAskTool(new ListFilesAskTool()),
-        wrapAskTool(new ReadFileAskTool()),
-        wrapAskTool(new DbQueryAskTool()),
-        wrapAskTool(new PlatformHelpAskTool()),
-        new QuestionnaireTool(),
-        new ProposeActionTool(),
-      ] as any)
+      .setTools(tools as any)
       .executeAsRouter(ctx, { telegramId, sessionId: crypto.randomUUID(), onToolCall });
 
     return {
@@ -123,6 +128,7 @@ class AgentSessionService {
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
       modelId: routerCfg.model,
+      isFirstMessage,
     };
   }
 

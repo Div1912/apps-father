@@ -245,13 +245,45 @@ export async function session_router(
     lang?: string;
     conversationHistory?: { role: "user" | "assistant"; content: string }[];
   },
-): Promise<{ systemPrompt: string; messages: any[] }> {
+): Promise<{ systemPrompt: string; messages: any[]; isFirstMessage: boolean }> {
   const project: any = await projectService.getProject(projectId);
   const context = loadLatestContext(projectId) || project?.projectSummary || "No project context available.";
   const description = project?.description || "";
   const langNote = langSpeakInstruction(args.lang);
 
-  const systemPrompt = `You are the chat ROUTER for an Apps Father app builder. The user owns a Telegram Mini App and is chatting with you about it.
+  const isFirstMessage = !args.conversationHistory || args.conversationHistory.length === 0;
+
+  const systemPrompt = isFirstMessage
+    ? `You are a build planner for Apps Father. This is the user's FIRST message — they are describing an app they want to build.
+
+CRITICAL RULES:
+- DO NOT generate any text or prose. Use ONLY tool calls.
+- You MUST call propose_action with kind="build" as your final action. No other kind is allowed.
+- If the user's message is already detailed enough → skip questions and call propose_action immediately.
+- If key details are missing (purpose, main features, audience), call questionnaire ONCE with 1–2 short bullet questions before proposing.
+
+TOOL USAGE:
+1. [optional] questionnaire(question, options?) — ask up to 2 clarifying questions in one call if the request is vague.
+2. propose_action — ALWAYS call this. Required fields for kind="build":
+   - kind: "build"
+   - title: app name / short headline (max 60 chars)
+   - description: 2–3 sentence summary shown to the user (what the app does, for whom)
+   - brief: SHORT synthesized spec — max 3 paragraphs, each covering one area:
+       §1 Core purpose & audience (1–3 sentences)
+       §2 Key screens / user flow (bullet list, max 6 items)
+       §3 Special requirements: stack, design notes, integrations, constraints (1–3 sentences)
+     DO NOT copy-paste the user's message. Summarize and distill. Max ~250 words total.
+   - prefilledPrompt: same as brief (copy it)
+
+EXAMPLE propose_action call for build:
+{
+  "kind": "build",
+  "title": "Tendr — маркетплейс задач",
+  "description": "Telegram Mini App маркетплейс для самозанятых СНГ с нативной эскроу-системой. Заказчики публикуют тендеры, исполнители откликаются офферами, деньги защищены до приёмки.",
+  "brief": "Маркетплейс задач для самозанятых внутри Telegram. Заказчик публикует тендер, фрилансеры присылают офферы, деньги лежат в эскроу до приёмки, затем уходят исполнителю минус 10%.\n\nОсновные экраны: онбординг (выбор роли), лента тендеров с фильтрами, детальная карточка тендера, создание тендера (4 шага), отправка оффера, карточка сделки с эскроу-статусом, профиль с кошельком.\n\nСтек: React + TypeScript + Vite, Tailwind, @twa-dev/sdk, Zustand, Framer Motion. Дизайн: функциональный минимализм, палитра #5B5BFF акцент, тёмная/светлая тема синхронизированы с Telegram. Моки вместо бэкенда, архитектура готова к реальному API.",
+  "prefilledPrompt": "<same as brief>"
+}${langNote}`
+    : `You are the chat ROUTER for an Apps Father app builder. The user owns a Telegram Mini App and is chatting with you about it.
 
 Your job per message:
   1. Classify the user's intent and call propose_action with the matching kind:
@@ -281,7 +313,7 @@ ${context.substring(0, 4000)}`;
   }
   messages.push({ role: "user", content: args.userMessage });
 
-  return { systemPrompt, messages };
+  return { systemPrompt, messages, isFirstMessage };
 }
 
 export async function session_answer(

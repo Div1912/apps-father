@@ -107,6 +107,29 @@ ssh $SERVER "$psql 'ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_notified_at
 ssh $SERVER "$psql 'UPDATE users SET admin_notified_at = created_at WHERE admin_notified_at IS NULL;'"
 ssh $SERVER "$psql 'ALTER TABLE users ADD COLUMN IF NOT EXISTS sub_bonus_claimed_at TIMESTAMPTZ;'"
 ssh $SERVER "$psql 'ALTER TABLE projects DROP COLUMN IF EXISTS preferences;'"
+# Agent sessions log (Prisma AgentSession model → agent_sessions table)
+$agentSessionsSql = @"
+CREATE TABLE IF NOT EXISTS agent_sessions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+  user_id INT REFERENCES users(id) ON DELETE SET NULL,
+  type TEXT NOT NULL,
+  model TEXT NOT NULL,
+  input TEXT NOT NULL,
+  output TEXT,
+  credits_charged INT NOT NULL DEFAULT 0,
+  cost_usd DECIMAL(12,6) NOT NULL DEFAULT 0,
+  input_tokens INT NOT NULL DEFAULT 0,
+  output_tokens INT NOT NULL DEFAULT 0,
+  duration_ms INT,
+  success BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS agent_sessions_project_created ON agent_sessions(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS agent_sessions_user_created ON agent_sessions(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS agent_sessions_type_created ON agent_sessions(type, created_at DESC);
+"@
+ssh $SERVER "$psql '$agentSessionsSql'"
 # Admin CRM: user tags + notes (Prisma User.adminTags / AdminUserNote)
 ssh $SERVER "$psql 'ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_tags TEXT;'"
 # App slots: bumped from 1 → 5 free starter slots. Existing users get +4 so

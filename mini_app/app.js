@@ -184,12 +184,7 @@ let isProcessing = false;
 const processingProjectIds = new Set();
 
 function showStopButton() {
-  if (tg?.MainButton) {
-    tg.MainButton.setText(t('chat_stop_update') || 'Stop Process');
-    tg.MainButton.color = '#e53935';
-    tg.MainButton.textColor = '#000000';
-    tg.MainButton.show();
-  }
+  document.getElementById('btn-stop-process')?.classList.remove('hidden');
   const chatView = document.getElementById('view-chat');
   if (chatView) chatView.classList.add('is-processing');
   // Fade in processing video (display:none → block needs a frame before opacity transition)
@@ -198,9 +193,7 @@ function showStopButton() {
 }
 
 function hideStopButton() {
-  if (tg?.MainButton && currentView === 'chat') {
-    tg.MainButton.hide();
-  }
+  document.getElementById('btn-stop-process')?.classList.add('hidden');
   const chatView = document.getElementById('view-chat');
   if (chatView) chatView.classList.remove('is-processing');
   // Fade out processing video
@@ -267,7 +260,7 @@ function setInputDisabled(disabled) {
     area.classList.toggle('chat-input-disabled', disabled);
   }
   if (disabled && isProcessing) showStopButton();
-  else if (!disabled) hideStopButton();
+  else if (!disabled && !isProcessing) hideStopButton();
 }
 
 function setInputFinalizing(active) {
@@ -8214,9 +8207,7 @@ async function init() {
 
   if (tg?.MainButton) {
     tg.MainButton.onClick(() => {
-      if (currentView === 'chat' && isProcessing) {
-        abortProcess();
-      } else if (currentView === 'edit-info') {
+      if (currentView === 'edit-info') {
         saveEditInfo();
       } else if (currentView === 'transfer') {
         submitTransfer();
@@ -8238,6 +8229,10 @@ async function init() {
   document.getElementById('search-clear').addEventListener('click', () => {
     searchInput.value = '';
     renderAppList();
+  });
+
+  document.getElementById('btn-stop-process')?.addEventListener('click', () => {
+    abortProcess();
   });
 
   document.getElementById('btn-chat-settings')?.addEventListener('click', () => {
