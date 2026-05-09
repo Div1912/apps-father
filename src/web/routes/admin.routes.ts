@@ -1278,6 +1278,77 @@ router.post("/api/config", (req: Request, res: Response) => {
   }
 });
 
+// --- DANGER: Erase entire database + project folders + bucket files ---
+// Wipes all user-generated state (users, projects, listings, tokens, holdings,
+// etc.) and the on-disk artefacts (projects/* and bucket/*). Runtime config,
+// bundles and bot-managed catalogues are preserved.
+router.post("/api/erase-all", async (req: Request, res: Response) => {
+  try {
+    const confirm = String(req.body?.confirm || "");
+    if (confirm !== "ERASE EVERYTHING") {
+      res.status(400).json({ error: 'Pass { "confirm": "ERASE EVERYTHING" } to proceed.' });
+      return;
+    }
+
+    // Order matters: leaf tables first, then parents.
+    // Use raw DELETE so we don't have to worry about cascade nuances.
+    await prisma.$transaction([
+      // Token / market related
+      prisma.tokenTrade.deleteMany({}),
+      prisma.tokenHolding.deleteMany({}),
+      prisma.liquidityEvent.deleteMany({}),
+      prisma.liquidityPosition.deleteMany({}),
+      prisma.appToken.deleteMany({}),
+      prisma.appListing.deleteMany({}),
+      prisma.tonTopup.deleteMany({}),
+
+      // App / build artefacts
+      prisma.appLog.deleteMany({}),
+      prisma.agentCodePatch.deleteMany({}),
+      prisma.agentFeedback.deleteMany({}),
+      prisma.agentSession.deleteMany({}),
+      prisma.usageLog.deleteMany({}),
+      prisma.conversation.deleteMany({}),
+      prisma.asset.deleteMany({}),
+      prisma.version.deleteMany({}),
+
+      // Tasks / vouchers / payments
+      prisma.taskCompletion.deleteMany({}),
+      prisma.voucherRedemption.deleteMany({}),
+      prisma.payment.deleteMany({}),
+      prisma.withdrawal.deleteMany({}),
+
+      // Projects
+      prisma.project.deleteMany({}),
+
+      // Per-user side data
+      prisma.adminUserNote.deleteMany({}),
+      prisma.retentionPush.deleteMany({}),
+
+      // Users last (everything else FK's to them)
+      prisma.user.deleteMany({}),
+    ]);
+
+    // Wipe on-disk artefacts: projects/* + bucket/*
+    const fsp = await import("fs/promises");
+    const wipeDir = async (dir: string) => {
+      try {
+        const entries = await fsp.readdir(dir, { withFileTypes: true });
+        await Promise.all(entries.map(e =>
+          fsp.rm(path.join(dir, e.name), { recursive: true, force: true })
+        ));
+      } catch { /* dir might not exist */ }
+    };
+    await wipeDir(PROJECTS_DIR);
+    await wipeDir(path.join(process.cwd(), "bucket"));
+
+    res.json({ ok: true, message: "Everything erased." });
+  } catch (err: any) {
+    console.error("[admin/erase-all]", err);
+    res.status(500).json({ error: err.message || "Erase failed" });
+  }
+});
+
 // --- Vouchers ---
 
 router.get("/api/vouchers", async (_req: Request, res: Response) => {

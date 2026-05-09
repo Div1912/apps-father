@@ -480,7 +480,7 @@ class AppStoreService {
     if (!token?.creationPaidAt) step5Missing.push("Pay initial liquidity");
     const step5Done = step5Missing.length === 0;
 
-    const reviewStatuses = new Set(["review", "pending", "approved", "deployed_pending_lp", "published"]);
+    const reviewStatuses = new Set(["review", "pending", "approved", "deployed_pending_lp", "published", "rejected"]);
     const step6Done = listing ? reviewStatuses.has(listing.status) : false;
 
     const step7Done = listing?.status === "published";
@@ -949,7 +949,17 @@ class AppStoreService {
 
   async listForReview(status?: string) {
     const where: any = {};
-    if (status) where.status = status;
+    if (status === "review") {
+      // "review" tab groups legacy "pending" + new "review" status
+      where.status = { in: ["review", "pending"] };
+    } else if (status === "published") {
+      // "live" tab groups published + legacy approved/deployed_pending_lp
+      where.status = { in: ["published", "approved", "deployed_pending_lp"] };
+    } else if (status === "draft") {
+      where.status = { in: ["draft", "submitting", "ready"] };
+    } else if (status) {
+      where.status = status;
+    }
     return prisma.appListing.findMany({
       where,
       include: {
@@ -972,23 +982,43 @@ class AppStoreService {
       include: { token: true },
     });
     if (!listing) throw new Error("Listing not found");
-    if (listing.status !== "pending") throw new Error(`Cannot approve from status=${listing.status}`);
-    if (!listing.token) throw new Error("No token attached");
+    if (listing.status !== "pending" && listing.status !== "review") throw new Error(`Cannot approve from status=${listing.status}`);
 
-    // V2: admin approval just gates the user-signed deploy. The actual
-    // on-chain deploy is initiated by the publisher from their wallet.
     await prisma.appListing.update({
       where: { id: listingId },
       data: {
-        status: "approved",
+        status: "published",
         approvedAt: new Date(),
         approvedBy: adminUserId,
+        publishedAt: new Date(),
       },
     });
+
+    // Notify the listing owner
+    try {
+      const project = await prisma.project.findUnique({
+        where: { id: listing.projectId },
+        include: { user: true },
+      });
+      if (project?.user && config.botToken) {
+        const appName = listing.appName || project.name || "your app";
+        const msg = `🎉 <b>Your app is live!</b>\n\n<b>${appName}</b> has been approved and is now published in the App Store.`;
+        await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: project.user.telegramId.toString(), text: msg, parse_mode: "HTML" }),
+        }).catch(() => {});
+      }
+    } catch {}
+
     return { ok: true };
   }
 
   async reject(listingId: string, reason: string) {
+    const listing = await prisma.appListing.findUnique({
+      where: { id: listingId },
+      include: { project: { include: { user: true } } },
+    });
     await prisma.appListing.update({
       where: { id: listingId },
       data: {
@@ -996,6 +1026,20 @@ class AppStoreService {
         rejectedReason: reason || "rejected",
       },
     });
+
+    // Notify the listing owner
+    try {
+      if (listing?.project?.user && config.botToken) {
+        const appName = listing.appName || listing.project.name || "your app";
+        const msg = `❌ <b>App rejected</b>\n\n<b>${appName}</b> was not approved.\n\n<blockquote>${reason}</blockquote>\n\nYou can fix the issues and resubmit from App Settings.`;
+        await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: listing.project.user.telegramId.toString(), text: msg, parse_mode: "HTML" }),
+        }).catch(() => {});
+      }
+    } catch {}
+
     return { ok: true };
   }
 
@@ -1053,6 +1097,10 @@ class AppStoreService {
       priceNano = spotPriceNano(state);
       if (mcap === 0n) mcap = marketCapNano(state, token.totalSupply);
     }
+    // The App avatar (listing.appLogoFilename) is the canonical image and
+    // overrides the token's standalone logoFilename anywhere the token is
+    // displayed (App Store detail, Wallet, Swap).
+    const displayLogo = row.appLogoFilename || token?.logoFilename || null;
     return {
       listingId: row.id,
       projectId: row.projectId,
@@ -1061,6 +1109,7 @@ class AppStoreService {
       shortDescription: row.shortDescription,
       category: row.category,
       tags: (row.tags as string[] | null) || [],
+      appLogoFilename: row.appLogoFilename || null,
       bannerFilename: row.bannerFilename || null,
       publishedAt: row.publishedAt,
       screenshots: (row.screenshots as string[] | null) || [],
@@ -1068,7 +1117,7 @@ class AppStoreService {
         id: token.id,
         name: token.name,
         symbol: token.symbol,
-        logoFilename: token.logoFilename,
+        logoFilename: displayLogo,
         priceTon: Number(priceNano) / 1e9,
         marketCapTon: Number(mcap) / 1e9,
         volume24hTon: Number(row.volume24hNanoTon ?? 0n) / 1e9,
@@ -1205,6 +1254,8 @@ class AppStoreService {
       const balance = h.balance;
       const valueNano = (priceNano * balance) / BigInt(1e9);
       const costNano = (h.avgBuyNanoTon * balance) / BigInt(1e9);
+      // App avatar wins over standalone token logo for display purposes.
+      const displayLogo = (t.listing as any)?.appLogoFilename || t.logoFilename || null;
       return {
         tokenId: t.id,
         listingId: t.listingId,
@@ -1212,7 +1263,7 @@ class AppStoreService {
         projectName: t.listing?.project?.name,
         symbol: t.symbol,
         name: t.name,
-        logoFilename: t.logoFilename,
+        logoFilename: displayLogo,
         balance: Number(balance) / 1e9,
         avgBuyTon: Number(h.avgBuyNanoTon) / 1e9,
         priceTon: Number(priceNano) / 1e9,

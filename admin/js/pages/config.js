@@ -171,7 +171,47 @@
             Agent session pricing (per-complexity matrix) and per-session model/iteration limits live on the
             <strong>Models</strong> tab.
           </p>
+
+          <!-- Danger zone -->
+          <section class="cfg-section" style="margin-top:2.5rem;border:1px solid rgba(248,113,113,0.35);background:rgba(248,113,113,0.04)">
+            <header>
+              <h3 style="color:#f87171">Danger zone</h3>
+              <span>Irreversible operations &mdash; double-check before clicking</span>
+            </header>
+            <div class="cfg-rows" style="padding:0.75rem 1rem 1rem">
+              <div style="display:flex;gap:1rem;align-items:flex-start;flex-wrap:wrap">
+                <div style="flex:1;min-width:240px">
+                  <div style="font-weight:600;margin-bottom:4px">Erase everything</div>
+                  <div class="sub" style="font-size:0.85rem">
+                    Deletes all users, projects, listings, tokens, holdings, payments, vouchers, agent sessions,
+                    on-disk project folders and bucket files. Runtime config and bundles are kept.
+                  </div>
+                </div>
+                <button class="btn btn-sm" id="cfg-erase-all"
+                  style="background:#dc2626;color:#fff;border-color:#b91c1c;flex-shrink:0">
+                  Erase all data
+                </button>
+              </div>
+            </div>
+          </section>
         `;
+
+        host.querySelector("#cfg-erase-all")?.addEventListener("click", async () => {
+          const ans = prompt(
+            "This will PERMANENTLY delete every user, project, app, token, balance and uploaded file.\n\n" +
+            'Type ERASE EVERYTHING (uppercase) to confirm:'
+          );
+          if (ans !== "ERASE EVERYTHING") {
+            Fmt.toast("Erase cancelled", "ok");
+            return;
+          }
+          try {
+            await Api.request("/erase-all", { method: "POST", body: { confirm: "ERASE EVERYTHING" } });
+            Fmt.toast("All data erased", "ok");
+          } catch (err) {
+            Fmt.toast(err.message || "Erase failed", "err");
+          }
+        });
 
         const onSave = async () => {
           const payload = {};

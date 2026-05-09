@@ -27,6 +27,7 @@ import {
 } from "./liquidity-amm.service";
 import { payoutTon } from "./jetton.service";
 import { runtimeConfig } from "./runtime-config.service";
+import { config } from "../config";
 
 const POLL_INTERVAL_MS = 30_000;
 const PLATFORM_WALLET = BillingService.TON_WALLET;
@@ -213,19 +214,79 @@ class TonMonitorService {
 
   private async handleIncoming(tx: IncomingTx, leg: "ton" | "jetton") {
     if (!tx.comment) return;
-    const m = tx.comment.match(/(publish|buy|sell|lp_init|lp_add):([a-zA-Z0-9-]+)/);
+    const m = tx.comment.match(/(publish|buy|sell|lp_init|lp_add|topup):([a-zA-Z0-9-]+)/);
     if (!m) return;
     const [, kind, id] = m;
     try {
       if (kind === "publish")  await this.handlePublishFee(id, tx);
       else if (kind === "buy")  await this.handleBuy(id, tx);
       else if (kind === "sell") await this.handleSell(id, tx);
+      else if (kind === "topup") await this.handleTopup(id, tx);
       else if (kind === "lp_init" || kind === "lp_add") {
         await this.handleLpLeg(kind as "lp_init" | "lp_add", id, tx, leg);
       }
     } catch (err: any) {
       console.warn(`[TonMonitor] ${kind}:${id} → ${err?.message || err}`);
     }
+  }
+
+  private async handleTopup(topupId: string, tx: IncomingTx) {
+    const topup = await prisma.tonTopup.findUnique({ where: { id: topupId } });
+    if (!topup) return;
+    if (topup.status === "confirmed") return;
+
+    const expectedNano = BigInt(topup.amountNano);
+    const minAcceptable = (expectedNano * 95n) / 100n;
+    if (tx.valueNano < minAcceptable) {
+      console.warn(`[TonMonitor] topup:${topupId} value ${tx.valueNano} < ${minAcceptable}`);
+      return;
+    }
+
+    const amountTon = Number(topup.amountTon);
+
+    await prisma.$transaction([
+      prisma.tonTopup.update({
+        where: { id: topupId },
+        data: { status: "confirmed", txHash: tx.hash, confirmedAt: new Date() },
+      }),
+      prisma.user.update({
+        where: { id: topup.userId },
+        data: { tonBalance: { increment: amountTon } },
+      }),
+    ]);
+
+    console.log(`[TonMonitor] topup:${topupId} confirmed — +${amountTon} TON for user ${topup.userId}`);
+
+    // Notify user via Telegram bot
+    try {
+      const user = await prisma.user.findUnique({ where: { id: topup.userId } });
+      if (user && config.botToken) {
+        const userMsg = `✅ <b>Top-up confirmed!</b>\n\n+<b>${amountTon} TON</b> added to your wallet.\n\n<blockquote>New balance will update in the app.</blockquote>`;
+        await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: user.telegramId.toString(), text: userMsg, parse_mode: "HTML" }),
+        });
+      }
+    } catch {}
+
+    // Notify admins
+    try {
+      const ADMIN_IDS = [8784357184, 8796958409];
+      if (config.botToken) {
+        const user = await prisma.user.findUnique({ where: { id: topup.userId } });
+        const name = user?.firstName || user?.username || `#${topup.userId}`;
+        const username = user?.username ? ` (@${user.username})` : "";
+        const adminMsg = `💰 <b>TON Top-up</b>\n\nUser: <b>${name}</b>${username}\nAmount: <b>${amountTon} TON</b>\nTx: <code>${tx.hash}</code>`;
+        for (const adminId of ADMIN_IDS) {
+          await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: adminId.toString(), text: adminMsg, parse_mode: "HTML" }),
+          }).catch(() => {});
+        }
+      }
+    } catch {}
   }
 
   // ── Legacy publish-fee handler (kept for V1 compat) ─────────────────────

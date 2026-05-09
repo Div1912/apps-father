@@ -416,6 +416,44 @@ export function createWebServer() {
     }
   });
 
+  // ── GET /telegram-mini-app/api/user/avatar — returns the caller's Telegram profile photo URL ──
+  app.get("/telegram-mini-app/api/user/avatar", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const telegramId = String(auth.telegramId);
+      const cacheKey = `avatar:${telegramId}`;
+
+      // Return cached URL if available
+      if (avatarCache.has(cacheKey)) {
+        res.json({ url: avatarCache.get(cacheKey) });
+        return;
+      }
+
+      const token = config.botToken;
+      if (!token) { res.json({ url: null }); return; }
+
+      // Fetch profile photo from Telegram Bot API
+      const pr = await fetch(
+        `https://api.telegram.org/bot${token}/getUserProfilePhotos?user_id=${telegramId}&limit=1`
+      );
+      const pd: any = await pr.json();
+      if (!pd.ok || !pd.result?.photos?.length) { res.json({ url: null }); return; }
+      const photo = pd.result.photos[0];
+      const biggest = photo[photo.length - 1];
+      const fr = await fetch(
+        `https://api.telegram.org/bot${token}/getFile?file_id=${biggest.file_id}`
+      );
+      const fd: any = await fr.json();
+      if (!fd.ok) { res.json({ url: null }); return; }
+      const url = `https://api.telegram.org/file/bot${token}/${fd.result.file_path}`;
+      avatarCache.set(cacheKey, url);
+      res.json({ url });
+    } catch (err: any) {
+      res.json({ url: null });
+    }
+  });
+
   app.get("/telegram-mini-app/api/projects", async (req, res) => {
     try {
       const auth = validateAuth(req);
@@ -490,52 +528,6 @@ export function createWebServer() {
     }
   });
 
-  app.get("/telegram-mini-app/api/samples", async (_req, res) => {
-    try {
-      const sampleIds = (process.env.SAMPLE_PROJECT_IDS || "").split(",").map(s => s.trim()).filter(Boolean);
-      if (sampleIds.length === 0) { res.json({ samples: [] }); return; }
-      const samples = [];
-      for (const id of sampleIds) {
-        const p = await projectService.getProject(id);
-        if (!p) continue;
-        let avatarUrl = avatarCache.get(id);
-        if (!avatarUrl) {
-          try {
-            const token = await projectService.getProjectToken(id);
-            if (token) {
-              const meRes = await fetch(`https://api.telegram.org/bot${token}/getMe`);
-              const meData = await meRes.json() as any;
-              if (meData.ok && meData.result?.id) {
-                const r = await fetch(`https://api.telegram.org/bot${token}/getUserProfilePhotos?user_id=${meData.result.id}&limit=1`);
-                const d: any = await r.json();
-                if (d.ok && d.result?.photos?.length > 0) {
-                  const photo = d.result.photos[0];
-                  const biggest = photo[photo.length - 1];
-                  const fr = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${biggest.file_id}`);
-                  const fd: any = await fr.json();
-                  if (fd.ok) {
-                    avatarUrl = `https://api.telegram.org/file/bot${token}/${fd.result.file_path}`;
-                    avatarCache.set(id, avatarUrl);
-                  }
-                }
-              }
-            }
-          } catch {}
-        }
-        samples.push({
-          id: p.id,
-          name: p.name,
-          description: p.description || "",
-          botUsername: p.botUsername || "",
-          avatarUrl: avatarUrl || null,
-        });
-      }
-      res.json({ samples });
-    } catch (err) {
-      console.error("[MiniApp API] Samples error:", err);
-      res.json({ samples: [] });
-    }
-  });
 
   app.post("/telegram-mini-app/api/language", async (req, res) => {
     try {
@@ -3285,6 +3277,47 @@ export function createWebServer() {
 
   const storeUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
+  // Shared helper: generate an image via OpenRouter Recraft API, return Buffer.
+  const _aiGenerateImage = async (opts: {
+    projectId: string;
+    apiKey: string;
+    prompt: string;
+    filename: string;
+    aspectRatio?: string;
+    style?: string; // Recraft V3 style (e.g. "Illustration", "Vector art"). Omit for V4 Pro.
+  }): Promise<Buffer | null> => {
+    if (!opts.apiKey) return null;
+    const useStyle = typeof opts.style === "string" && opts.style.trim().length > 0;
+    const model = useStyle ? "recraft/recraft-v3" : "recraft/recraft-v4-pro";
+    const image_config: Record<string, unknown> = { image_size: "1K" };
+    if (opts.aspectRatio) image_config.aspect_ratio = opts.aspectRatio;
+    if (useStyle) image_config.style = opts.style!.trim();
+    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${opts.apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": `https://${config.domain}`,
+        "X-Title": "Apps Father",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: opts.prompt }],
+        modalities: ["image"],
+        image_config,
+      }),
+      signal: AbortSignal.timeout(90_000),
+    });
+    if (!resp.ok) { console.warn(`[AI Gen] image API ${resp.status}`); return null; }
+    const data = await resp.json() as Record<string, any>;
+    const imgUrl: string | undefined =
+      data?.choices?.[0]?.message?.images?.[0]?.image_url?.url ??
+      data?.choices?.[0]?.message?.images?.[0]?.imageUrl?.url;
+    if (!imgUrl) { console.warn("[AI Gen] no image in response"); return null; }
+    const base64 = imgUrl.replace(/^data:image\/[a-z]+;base64,/, "");
+    return Buffer.from(base64, "base64");
+  };
+
   // Resolve listing → owner-validated; admins are allowed too.
   const requireListingOwner = async (req: any, res: any): Promise<{ ok: false } | { ok: true; userId: number; isAdmin: boolean; listing: any }> => {
     const auth = validateAuth(req);
@@ -3468,6 +3501,208 @@ export function createWebServer() {
     },
   );
 
+  // ── AI content generation (SSE) ─────────────────────────────────────────
+  // items: array of "texts" | "avatar" | "banner" | "screenshots"
+  app.post("/telegram-mini-app/api/store/listings/:listingId/ai-generate", async (req, res) => {
+    // SSE setup
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
+
+    const emit = (data: Record<string, unknown>) => {
+      try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch {}
+    };
+
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { emit({ type: "error", message: "Unauthorized" }); res.end(); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const listingId = req.params.listingId as string;
+      const items: string[] = Array.isArray(req.body?.items) ? req.body.items : ["texts", "avatar", "banner", "screenshots"];
+
+      const listing = await prisma.appListing.findUnique({
+        where: { id: listingId },
+        include: { project: { select: { id: true, userId: true, name: true, projectSummary: true } } },
+      });
+      if (!listing) { emit({ type: "error", message: "Listing not found" }); res.end(); return; }
+      if (listing.project?.userId !== user.id && !isAdminTelegramId(auth.telegramId)) {
+        emit({ type: "error", message: "Forbidden" }); res.end(); return;
+      }
+
+      const projectId = listing.projectId;
+      const appName = (listing.appName as string | null) || listing.project?.name || "App";
+      // Use /dev/ URL — same path the VisualTestTool uses so the app is always reachable.
+      const appUrl = `${config.baseUrl}/dev/${projectId}/`;
+      const results: Record<string, unknown> = {};
+      let pct = 0;
+
+      // ── 1. Texts (names, descriptions, tags, category in EN/RU/UA) ──────────
+      if (items.includes("texts")) {
+        pct = 5;
+        emit({ type: "progress", step: "texts", percent: pct, message: "Analyzing your app…" });
+
+        const apiKey = runtimeConfig.getOpenRouterApiKey() || config.openrouterApiKey;
+        if (!apiKey) { emit({ type: "error", message: "No API key configured" }); res.end(); return; }
+
+        const existingDesc = (listing.shortDescription as string | null) || "";
+        const summary = (listing.project?.projectSummary as string | null) || "";
+
+        const prompt = `You are a professional App Store copywriter. Generate listing content for a Telegram Mini App.
+
+App name: "${appName}"${existingDesc ? `\nCurrent description: "${existingDesc}"` : ""}${summary ? `\nApp context: "${summary.slice(0, 600)}"` : ""}
+
+Return ONLY valid JSON (no markdown, no fences):
+{
+  "en": { "name": "...", "shortDescription": "...", "longDescription": "...", "tags": ["tag1",...], "category": "..." },
+  "ru": { "name": "...", "shortDescription": "...", "longDescription": "..." },
+  "ua": { "name": "...", "shortDescription": "...", "longDescription": "..." }
+}
+
+Rules:
+- name: max 32 chars, catchy
+- shortDescription: max 120 chars, one compelling sentence
+- longDescription: 300-600 chars, features and benefits
+- tags: 5-8 relevant lowercase tags (hyphens ok, no spaces)
+- category: ONE of: Finance, Social, Games, Tools, Education, Shopping, News, Health, Entertainment, Business
+- Translate ru and ua naturally`;
+
+        pct = 10;
+        emit({ type: "progress", step: "texts", percent: pct, message: "Writing descriptions…" });
+
+        const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": `https://${config.domain}`,
+            "X-Title": "Apps Father",
+          },
+          body: JSON.stringify({
+            model: "anthropic/claude-3-5-haiku",
+            messages: [{ role: "user", content: prompt }],
+            max_tokens: 2000,
+          }),
+          signal: AbortSignal.timeout(30_000),
+        });
+
+        const respData = await resp.json() as Record<string, any>;
+        const raw: string = respData?.choices?.[0]?.message?.content || "";
+        const jsonMatch = raw.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try {
+            const gen = JSON.parse(jsonMatch[0]);
+            results.texts = gen;
+            await prisma.appListing.update({
+              where: { id: listingId },
+              data: {
+                appName: gen.en?.name || appName,
+                shortDescription: gen.en?.shortDescription || null,
+                longDescription: gen.en?.longDescription || null,
+                category: gen.en?.category || null,
+                tags: gen.en?.tags || [],
+                translations: {
+                  ru: { name: gen.ru?.name || "", short: gen.ru?.shortDescription || "", long: gen.ru?.longDescription || "" },
+                  ua: { name: gen.ua?.name || "", short: gen.ua?.shortDescription || "", long: gen.ua?.longDescription || "" },
+                },
+              },
+            });
+          } catch {}
+        }
+        pct = 25;
+        emit({ type: "result", step: "texts", data: results.texts });
+        emit({ type: "progress", step: "texts", percent: pct, message: "Descriptions done ✓" });
+      }
+
+      // ── 2. Avatar ────────────────────────────────────────────────────────────
+      if (items.includes("avatar")) {
+        pct = 30;
+        emit({ type: "progress", step: "avatar", percent: pct, message: "Creating app icon…" });
+        try {
+          const avatarBuf = await _aiGenerateImage({
+            projectId, apiKey: runtimeConfig.getOpenRouterApiKey() || config.openrouterApiKey,
+            prompt: `App icon for "${appName}" Telegram mini app. Bold single graphic symbol centered on a rich vibrant gradient background. Clean minimal design, no text, no letters, no words. Square composition. Professional mobile app icon.`,
+            filename: `ai-avatar-${Date.now()}.png`,
+            aspectRatio: "1:1",
+          });
+          if (avatarBuf) {
+            const filename = await appStoreService.setAppLogo(listingId, projectId, avatarBuf, "png");
+            results.avatar = { filename, url: `/bucket/${projectId}/${filename}` };
+            emit({ type: "result", step: "avatar", data: results.avatar });
+          }
+        } catch (e: any) { console.warn("[AI Gen] avatar:", e.message); }
+        pct = 50;
+        emit({ type: "progress", step: "avatar", percent: pct, message: "Icon done ✓" });
+      }
+
+      // ── 3. Banner ────────────────────────────────────────────────────────────
+      if (items.includes("banner")) {
+        pct = 52;
+        emit({ type: "progress", step: "banner", percent: pct, message: "Creating banner…" });
+        try {
+          const bannerBuf = await _aiGenerateImage({
+            projectId, apiKey: runtimeConfig.getOpenRouterApiKey() || config.openrouterApiKey,
+            prompt: `App Store header banner for a Telegram Mini App called "${appName}". Dark atmospheric background gradient from near-black to deep navy. Abstract thematic illustration — glowing geometric shapes, subtle UI motifs, vibrant accent lighting. App name "${appName}" in clean bold white text. No photos of people. Wide cinematic landscape format. Professional, modern, high quality.`,
+            filename: `ai-banner-${Date.now()}.png`,
+            aspectRatio: "16:9",
+          });
+          if (bannerBuf) {
+            const filename = await appStoreService.setBanner(listingId, projectId, bannerBuf, "png");
+            results.banner = { filename, url: `/bucket/${projectId}/${filename}` };
+            emit({ type: "result", step: "banner", data: results.banner });
+          }
+        } catch (e: any) { console.warn("[AI Gen] banner:", e.message); }
+        pct = 72;
+        emit({ type: "progress", step: "banner", percent: pct, message: "Banner done ✓" });
+      }
+
+      // ── 4. Screenshots via Playwright ────────────────────────────────────────
+      if (items.includes("screenshots")) {
+        pct = 74;
+        emit({ type: "progress", step: "screenshots", percent: pct, message: "Opening your app…" });
+        try {
+          const { runVisualTest } = await import("../services/visual-test.service");
+          // Build unsigned initData so the app doesn't 401
+          const initData = `auth_date=${Math.floor(Date.now()/1000)}&user=${encodeURIComponent(JSON.stringify({ id: 999999999, first_name: "Preview", username: "preview_user", language_code: "en" }))}&hash=visualtest_unsigned`;
+          const screenshotFilenames: string[] = [];
+
+          const scrollAmounts = [0, 300, 600, 900];
+          for (let i = 0; i < 4; i++) {
+            pct = 74 + i * 5;
+            emit({ type: "progress", step: "screenshots", percent: pct, message: `Screenshot ${i + 1}/4…` });
+            try {
+              const scenario = scrollAmounts[i] > 0
+                ? [{ target: "body", type: "scroll" as const, amount: scrollAmounts[i] }]
+                : undefined;
+              const result = await runVisualTest(appUrl, {
+                viewportWidth: 390, viewportHeight: 844,
+                timeout: 20000, settleMs: 2500 + i * 300,
+                emulateTelegram: true,
+                initDataHash: initData,
+                scenario: scenario as any,
+              });
+              if (result.screenshotBase64) {
+                const buf = Buffer.from(result.screenshotBase64, "base64");
+                const filename = await appStoreService.addScreenshot(listingId, projectId, buf, "png");
+                screenshotFilenames.push(filename);
+              }
+            } catch (e: any) { console.warn(`[AI Gen] screenshot ${i}:`, e.message); }
+          }
+          results.screenshots = screenshotFilenames;
+          emit({ type: "result", step: "screenshots", data: { filenames: screenshotFilenames } });
+        } catch (e: any) { console.warn("[AI Gen] screenshots:", e.message); }
+        pct = 98;
+        emit({ type: "progress", step: "screenshots", percent: pct, message: "Screenshots done ✓" });
+      }
+
+      emit({ type: "progress", step: "done", percent: 100, message: "All done!" });
+      emit({ type: "done", data: results });
+    } catch (err: any) {
+      emit({ type: "error", message: err.message || "Generation failed" });
+    }
+    res.end();
+  });
+
   // Submit for review (returns wallet address + comment to use in TonConnect).
   app.post("/telegram-mini-app/api/store/listings/:listingId/submit", async (req, res) => {
     try {
@@ -3491,6 +3726,354 @@ export function createWebServer() {
       res.json({ ok: true, ...result });
     } catch (err: any) {
       res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ── Wallet TON top-up ────────────────────────────────────────────────────
+
+  // Step 1: create a pending topup record and return the platform wallet + amount.
+  app.post("/telegram-mini-app/api/wallet/topup-create", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+
+      const amountTon = parseFloat(req.body.amountTon);
+      if (isNaN(amountTon) || amountTon < 0.1) {
+        res.status(400).json({ error: "Minimum top-up is 0.1 TON" });
+        return;
+      }
+      if (amountTon > 1000) {
+        res.status(400).json({ error: "Maximum top-up is 1000 TON" });
+        return;
+      }
+
+      const amountNano = String(BigInt(Math.round(amountTon * 1e9)));
+      const topup = await prisma.tonTopup.create({
+        data: {
+          userId: user.id,
+          amountTon: amountTon,
+          amountNano,
+          status: "pending",
+        },
+      });
+
+      res.json({
+        topupId: topup.id,
+        walletAddress: appStoreService.platformWalletAddress(),
+        amountNano,
+        comment: `topup:${topup.id}`,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Step 2: poll for topup status (called by frontend after tx is sent).
+  app.get("/telegram-mini-app/api/wallet/topup-status/:topupId", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const topup = await prisma.tonTopup.findUnique({ where: { id: req.params.topupId } });
+      if (!topup || topup.userId !== user.id) { res.status(404).json({ error: "Not found" }); return; }
+      res.json({ status: topup.status, confirmedAt: topup.confirmedAt });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Real TON price (CoinGecko, 60 s cache) ──────────────────────────────
+  let _tonPriceCache: { usd: number; fetchedAt: number } = { usd: 5.50, fetchedAt: 0 };
+  async function getTonPriceUsd(): Promise<number> {
+    const now = Date.now();
+    if (now - _tonPriceCache.fetchedAt < 60_000) return _tonPriceCache.usd;
+    try {
+      const r = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd", {
+        headers: { "Accept": "application/json" },
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (r.ok) {
+        const d = await r.json() as any;
+        const usd = d?.["the-open-network"]?.usd;
+        if (typeof usd === "number" && usd > 0) _tonPriceCache = { usd, fetchedAt: now };
+      }
+    } catch { /* keep cached */ }
+    return _tonPriceCache.usd;
+  }
+
+  app.get("/telegram-mini-app/api/wallet/ton-price", async (_req, res) => {
+    try {
+      const usd = await getTonPriceUsd();
+      res.json({ usd });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Market tokens (all tokens available to swap into) ────────────────────
+  app.get("/telegram-mini-app/api/wallet/market-tokens", async (req, res) => {
+    try {
+      const { spotPriceNano: ammSpot } = await import("../services/liquidity-amm.service");
+      const tokens = await prisma.appToken.findMany({
+        where: { status: "live" },
+        include: {
+          listing: {
+            select: {
+              id: true, appName: true, status: true, appLogoFilename: true,
+              project: { select: { id: true, name: true } },
+            },
+          },
+        },
+      });
+      const rows = tokens.map((t) => {
+        let tonRes = t.realTonReserve;
+        let tokRes = t.realTokenReserve;
+        if ((tonRes === 0n || tokRes === 0n) && t.creationLockedLiquidityTon) {
+          const initTon = BigInt(Math.round(Number(t.creationLockedLiquidityTon) * 1e9));
+          const initTok = (t.totalSupply * 9n) / 10n;
+          tonRes = initTon; tokRes = initTok;
+        }
+        const state = { realTonReserve: tonRes, realTokenReserve: tokRes, lpTotalShares: t.lpTotalShares };
+        const pNano = ammSpot(state);
+        const priceTon = Number(pNano) / 1e9;
+        const mcapTon = (Number(pNano) * Number(t.totalSupply)) / 1e18;
+        const displayLogo = (t.listing as any)?.appLogoFilename || t.logoFilename || null;
+        return {
+          tokenId: t.id,
+          listingId: t.listingId,
+          projectId: t.projectId,
+          name: t.name,
+          symbol: t.symbol,
+          logoFilename: displayLogo,
+          priceTon,
+          mcapTon,
+        };
+      });
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Swap quote (read-only). direction: "buy" (TON→token) or "sell" (token→TON) ─
+  app.get("/telegram-mini-app/api/wallet/swap-quote", async (req, res) => {
+    try {
+      const { quoteBuy, quoteSell, spotPriceNano: ammSpot } = await import("../services/liquidity-amm.service");
+      const direction = (req.query.direction as string) || "buy";
+      const amountIn = parseFloat(req.query.amountIn as string || req.query.tonAmount as string || "0");
+      const tokenId = String(req.query.tokenId || "");
+      if (!tokenId || amountIn <= 0) { res.status(400).json({ error: "tokenId and amountIn required" }); return; }
+      const t = await prisma.appToken.findUnique({ where: { id: tokenId } });
+      if (!t) { res.status(404).json({ error: "Token not found" }); return; }
+      let tonRes = t.realTonReserve;
+      let tokRes = t.realTokenReserve;
+      if ((tonRes === 0n || tokRes === 0n) && t.creationLockedLiquidityTon) {
+        tonRes = BigInt(Math.round(Number(t.creationLockedLiquidityTon) * 1e9));
+        tokRes = (t.totalSupply * 9n) / 10n;
+      }
+      const feePercent = runtimeConfig.get().appStore.tradingFeePercent;
+      const state = { realTonReserve: tonRes, realTokenReserve: tokRes, lpTotalShares: t.lpTotalShares };
+      const priceBefore = Number(ammSpot(state)) / 1e9;
+
+      if (direction === "sell") {
+        const tokensInAtomic = BigInt(Math.round(amountIn * 1e9));
+        const quote = quoteSell(state, tokensInAtomic, feePercent);
+        const priceAfter = quote.newTokenReserve > 0n
+          ? Number((quote.newTonReserve * BigInt(1e9)) / quote.newTokenReserve) / 1e9
+          : priceBefore;
+        res.json({
+          direction: "sell",
+          amountOut: Number(quote.tonOutNet) / 1e9,
+          feePercent,
+          priceImpactBps: quote.priceImpactBps,
+          priceTonBefore: priceBefore,
+          priceTonAfter: priceAfter,
+        });
+        return;
+      }
+
+      // buy: TON → token
+      const tonInNano = BigInt(Math.round(amountIn * 1e9));
+      const quote = quoteBuy(state, tonInNano, feePercent);
+      const priceAfter = quote.newTokenReserve > 0n
+        ? Number((quote.newTonReserve * BigInt(1e9)) / quote.newTokenReserve) / 1e9
+        : priceBefore;
+      res.json({
+        direction: "buy",
+        amountOut: Number(quote.tokensOut) / 1e9,
+        // legacy field for older client code
+        tokensOut: Number(quote.tokensOut) / 1e9,
+        feePercent,
+        priceImpactBps: quote.priceImpactBps,
+        priceTonBefore: priceBefore,
+        priceTonAfter: priceAfter,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Execute internal swap (TON ↔ token, no TonConnect needed) ────────────
+  // Body: { tokenId, direction: "buy"|"sell", amountIn }
+  // Backwards-compatible: { tokenId, tonAmountIn } → buy
+  app.post("/telegram-mini-app/api/wallet/swap", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const { quoteBuy, quoteSell, spotPriceNano: ammSpot, marketCapNano } = await import("../services/liquidity-amm.service");
+      const tokenId = String(req.body?.tokenId || "");
+      const direction = (String(req.body?.direction || "buy")) as "buy" | "sell";
+      const amountIn = parseFloat(req.body?.amountIn ?? req.body?.tonAmountIn ?? 0);
+      if (!tokenId || amountIn <= 0) { res.status(400).json({ error: "tokenId and amountIn required" }); return; }
+
+      const result = await prisma.$transaction(async (tx) => {
+        const t = await tx.appToken.findUniqueOrThrow({ where: { id: tokenId } });
+        if (t.status !== "live") throw new Error("Token is not live");
+
+        // Auto-seed pool if first trade
+        let tonRes = t.realTonReserve;
+        let tokRes = t.realTokenReserve;
+        if ((tonRes === 0n || tokRes === 0n) && t.creationLockedLiquidityTon) {
+          tonRes = BigInt(Math.round(Number(t.creationLockedLiquidityTon) * 1e9));
+          tokRes = (t.totalSupply * 9n) / 10n;
+        }
+        if (tonRes === 0n || tokRes === 0n) throw new Error("Token pool not initialized — no initial liquidity");
+
+        const feePercent = runtimeConfig.get().appStore.tradingFeePercent;
+        const state = { realTonReserve: tonRes, realTokenReserve: tokRes, lpTotalShares: t.lpTotalShares };
+
+        if (direction === "sell") {
+          // SELL: token → TON
+          const tokensInAtomic = BigInt(Math.round(amountIn * 1e9));
+          const holding = await tx.tokenHolding.findUnique({
+            where: { tokenId_userId: { tokenId, userId: user.id } },
+          });
+          if (!holding || holding.balance < tokensInAtomic) throw new Error(`Insufficient ${t.symbol} balance`);
+          const quote = quoteSell(state, tokensInAtomic, feePercent);
+          if (quote.tonOutNet <= 0n) throw new Error("Swap yields zero TON — amount too small or pool too small");
+
+          const priceNano = tokensInAtomic > 0n ? (quote.tonOutGross * BigInt(1e9)) / tokensInAtomic : 0n;
+          const mcap = marketCapNano({ realTonReserve: quote.newTonReserve, realTokenReserve: quote.newTokenReserve, lpTotalShares: t.lpTotalShares }, t.totalSupply);
+
+          // Update pool
+          await tx.appToken.update({
+            where: { id: tokenId },
+            data: {
+              realTonReserve: quote.newTonReserve,
+              realTokenReserve: quote.newTokenReserve,
+              feeBalanceNanoTon: { increment: quote.feeNano },
+            },
+          });
+
+          // Decrement user holding
+          const newBal = holding.balance - tokensInAtomic;
+          await tx.tokenHolding.update({
+            where: { tokenId_userId: { tokenId, userId: user.id } },
+            data: { balance: newBal },
+          });
+
+          // Credit TON to user
+          const tonOutFloat = Number(quote.tonOutNet) / 1e9;
+          await tx.user.update({ where: { id: user.id }, data: { tonBalance: { increment: tonOutFloat as any } } });
+
+          // Listing volume + mcap
+          await tx.appListing.update({
+            where: { id: t.listingId },
+            data: { volume24hNanoTon: { increment: quote.tonOutGross }, marketCapNanoTon: mcap },
+          });
+
+          // Record the trade so the chart has data points
+          await tx.tokenTrade.create({
+            data: {
+              tokenId,
+              userId: user.id,
+              type: "sell",
+              tonAmount: quote.tonOutNet,
+              tokenAmount: tokensInAtomic,
+              priceNanoTon: priceNano,
+              feeTonAmount: quote.feeNano,
+              status: "settled",
+            },
+          });
+
+          return {
+            direction: "sell",
+            amountOut: tonOutFloat,
+            feePercent,
+            priceImpactBps: quote.priceImpactBps,
+            newPriceTon: Number(ammSpot({ realTonReserve: quote.newTonReserve, realTokenReserve: quote.newTokenReserve, lpTotalShares: t.lpTotalShares })) / 1e9,
+            outSymbol: "TON",
+          };
+        }
+
+        // BUY: TON → token
+        const u = await tx.user.findUnique({ where: { id: user.id }, select: { tonBalance: true } });
+        if (!u) throw new Error("User not found");
+        if (Number(u.tonBalance) < amountIn) throw new Error(`Insufficient TON balance`);
+        const tonInNano = BigInt(Math.round(amountIn * 1e9));
+        const quote = quoteBuy(state, tonInNano, feePercent);
+        if (quote.tokensOut <= 0n) throw new Error("Swap yields zero tokens — amount too small or pool exhausted");
+
+        const priceNano = tonInNano > 0n ? (tonInNano * BigInt(1e9)) / quote.tokensOut : 0n;
+        const mcap = marketCapNano({ realTonReserve: quote.newTonReserve, realTokenReserve: quote.newTokenReserve, lpTotalShares: t.lpTotalShares }, t.totalSupply);
+
+        await tx.user.update({ where: { id: user.id }, data: { tonBalance: { decrement: amountIn as any } } });
+        await tx.appToken.update({
+          where: { id: tokenId },
+          data: {
+            realTonReserve: quote.newTonReserve,
+            realTokenReserve: quote.newTokenReserve,
+            feeBalanceNanoTon: { increment: quote.feeNano },
+            soldSupply: { increment: quote.tokensOut },
+          },
+        });
+        await tx.appListing.update({
+          where: { id: t.listingId },
+          data: { volume24hNanoTon: { increment: tonInNano }, marketCapNanoTon: mcap },
+        });
+        const existing = await tx.tokenHolding.findUnique({
+          where: { tokenId_userId: { tokenId, userId: user.id } },
+        });
+        const newBal = (existing?.balance ?? 0n) + quote.tokensOut;
+        const newAvg = newBal > 0n
+          ? ((existing?.balance ?? 0n) * (existing?.avgBuyNanoTon ?? 0n) + quote.tokensOut * priceNano) / newBal
+          : priceNano;
+        await tx.tokenHolding.upsert({
+          where: { tokenId_userId: { tokenId, userId: user.id } },
+          create: { tokenId, userId: user.id, balance: newBal, avgBuyNanoTon: newAvg },
+          update: { balance: newBal, avgBuyNanoTon: newAvg },
+        });
+
+        // Record the trade so the chart has data points
+        await tx.tokenTrade.create({
+          data: {
+            tokenId,
+            userId: user.id,
+            type: "buy",
+            tonAmount: tonInNano,
+            tokenAmount: quote.tokensOut,
+            priceNanoTon: priceNano,
+            feeTonAmount: quote.feeNano,
+            status: "settled",
+          },
+        });
+
+        return {
+          direction: "buy",
+          amountOut: Number(quote.tokensOut) / 1e9,
+          tokensOut: Number(quote.tokensOut) / 1e9,
+          feePercent,
+          priceImpactBps: quote.priceImpactBps,
+          newPriceTon: Number(ammSpot({ realTonReserve: quote.newTonReserve, realTokenReserve: quote.newTokenReserve, lpTotalShares: t.lpTotalShares })) / 1e9,
+          outSymbol: t.symbol,
+        };
+      });
+
+      res.json({ ok: true, ...result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   });
 

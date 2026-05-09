@@ -49,6 +49,7 @@ model User {
   adminNotes      AdminUserNote[]
   taskCompletions TaskCompletion[]
   agentFeedback   AgentFeedback[]
+  tonTopups       TonTopup[]
 
   @@map("users")
 }
@@ -677,4 +678,23 @@ model AgentCodePatch {
 
   @@index([status])
   @@map("agent_code_patches")
+}
+
+/** Tracks TON top-up requests initiated from the Wallet page. */
+model TonTopup {
+  id          String    @id @default(cuid())
+  userId      Int       @map("user_id")
+  amountTon   Decimal   @map("amount_ton") @db.Decimal(18, 9)
+  amountNano  String    @map("amount_nano")
+  /** pending → confirmed | expired */
+  status      String    @default("pending")
+  txHash      String?   @map("tx_hash")
+  confirmedAt DateTime? @map("confirmed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@map("ton_topups")
 }

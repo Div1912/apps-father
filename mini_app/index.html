@@ -228,13 +228,6 @@
           </div>
         </section>
 
-        <section class="tm-section">
-          <div class="tm-section-header">
-            <h2 class="tm-section-header-text" data-i18n="samples">Samples</h2>
-          </div>
-          <div class="tm-table-wrap" id="samples-list"></div>
-          <p class="help-text" data-i18n="samples_desc">Apps built with Apps Father</p>
-        </section>
       </main>
     </div>
   </div>
@@ -1639,13 +1632,15 @@
         </div>
       </section>
 
-      <!-- Token chart with chart-mode tabs -->
+      <!-- Token chart with timeframe tabs -->
       <section class="store-d-section">
         <div class="store-d-chart-header">
           <div class="store-d-section-title" style="margin:0">Token chart</div>
           <div class="store-d-chart-modes">
-            <button class="store-d-chart-mode active" data-chart="price">Price</button>
-            <button class="store-d-chart-mode" data-chart="mcap">Mcap</button>
+            <button class="store-d-chart-mode active" data-tf="1h">1h</button>
+            <button class="store-d-chart-mode" data-tf="4h">4h</button>
+            <button class="store-d-chart-mode" data-tf="1d">1d</button>
+            <button class="store-d-chart-mode" data-tf="all">All</button>
           </div>
         </div>
         <div class="store-d-chart-card">
@@ -1653,6 +1648,7 @@
             <div class="store-d-chart-summary-val" id="store-d-chart-current">—</div>
             <div class="store-d-chart-summary-change" id="store-d-chart-change"></div>
           </div>
+          <div id="store-d-chart-ohlc" class="store-d-chart-ohlc" style="display:none"></div>
           <div class="store-d-chart-canvas-wrap">
             <canvas id="store-detail-chart"></canvas>
             <div id="store-d-chart-empty" class="store-d-chart-empty" style="display:none">No trades yet — be the first!</div>
@@ -1705,25 +1701,6 @@
           <div class="store-d-liq-cta" id="store-d-liq-connect-cta">
             Connect your wallet to see your liquidity position.
           </div>
-        </div>
-      </section>
-
-      <!-- Trade panel — sticky bottom-aligned card -->
-      <section class="store-d-section">
-        <div class="store-d-section-title">Trade &nbsp;<span class="store-d-section-title-sub">on bonding curve</span></div>
-        <div class="store-trade-card-v2">
-          <div class="store-trade-mode-v2">
-            <button class="store-trade-mode-btn-v2 active" data-mode="buy">Buy</button>
-            <button class="store-trade-mode-btn-v2" data-mode="sell">Sell</button>
-          </div>
-          <div class="store-trade-input-wrap-v2">
-            <input type="text" id="store-trade-amount" class="store-trade-input-v2" placeholder="0.00" inputmode="decimal">
-            <span id="store-trade-unit" class="store-trade-unit-v2">TON</span>
-          </div>
-          <div class="store-trade-presets" id="store-trade-presets"></div>
-          <div id="store-trade-quote" class="store-trade-quote-v2"></div>
-          <button id="store-trade-submit" class="store-trade-submit-v2">Buy with TON</button>
-          <div id="store-trade-status" class="store-trade-status-v2"></div>
         </div>
       </section>
 
@@ -1848,12 +1825,141 @@
         </div>
       </div>
 
+      <div class="pf2-section">
+        <div class="pf2-section-title">Socials</div>
+
+        <div class="pf2-field">
+          <div class="pf2-field-label">Telegram Channel / Group</div>
+          <div class="pf2-input-icon-wrap">
+            <span class="pf2-input-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.562 8.248-1.97 9.289c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.833.932z"/></svg>
+            </span>
+            <input type="text" id="pf2-social-tg" class="pf2-input pf2-input--icon" placeholder="https://t.me/yourchannel" autocomplete="off">
+          </div>
+        </div>
+
+        <div class="pf2-field">
+          <div class="pf2-field-label">X / Twitter</div>
+          <div class="pf2-input-icon-wrap">
+            <span class="pf2-input-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.747l7.73-8.835L1.254 2.25H8.08l4.253 5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+            </span>
+            <input type="text" id="pf2-social-twitter" class="pf2-input pf2-input--icon" placeholder="https://x.com/yourapp" autocomplete="off">
+          </div>
+        </div>
+
+        <div class="pf2-field">
+          <div class="pf2-field-label">Website</div>
+          <div class="pf2-input-icon-wrap">
+            <span class="pf2-input-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            </span>
+            <input type="text" id="pf2-social-website" class="pf2-input pf2-input--icon" placeholder="https://yourapp.com" autocomplete="off">
+          </div>
+        </div>
+      </div>
+
       <div class="pf2-submit-area">
         <div class="pf2-submit-msg" id="pf2-info-msg" style="display:none"></div>
         <button class="pf2-submit-btn" id="pf2-info-submit-btn">Save Changes</button>
       </div>
 
     </main>
+
+    <!-- Generate by AI floating button -->
+    <button class="pf2-ai-fab" id="pf2-ai-fab-btn">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/></svg>
+      Generate by AI
+    </button>
+  </div>
+
+  <!-- AI Generate Modal -->
+  <div id="pf2-ai-modal" class="pf2-ai-modal" style="display:none" aria-hidden="true">
+    <div class="pf2-ai-backdrop" id="pf2-ai-backdrop"></div>
+    <div class="pf2-ai-sheet">
+      <!-- Idle state: checklist -->
+      <div id="pf2-ai-idle">
+        <div class="pf2-ai-header">
+          <div class="pf2-ai-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/></svg>
+            Generate by AI
+          </div>
+          <button class="pf2-ai-close" id="pf2-ai-close">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div class="pf2-ai-desc">Select what to generate. Existing content will be replaced.</div>
+        <div class="pf2-ai-checklist" id="pf2-ai-checklist">
+          <label class="pf2-ai-item">
+            <input type="checkbox" value="texts" checked>
+            <span class="pf2-ai-item-icon">✍️</span>
+            <div class="pf2-ai-item-text">
+              <div class="pf2-ai-item-label">Texts (all languages)</div>
+              <div class="pf2-ai-item-hint">Name, descriptions, tags, category · EN / RU / UA</div>
+            </div>
+          </label>
+          <label class="pf2-ai-item">
+            <input type="checkbox" value="avatar" checked>
+            <span class="pf2-ai-item-icon">🎨</span>
+            <div class="pf2-ai-item-text">
+              <div class="pf2-ai-item-label">App Avatar</div>
+              <div class="pf2-ai-item-hint">AI-generated icon image</div>
+            </div>
+          </label>
+          <label class="pf2-ai-item">
+            <input type="checkbox" value="banner" checked>
+            <span class="pf2-ai-item-icon">🖼️</span>
+            <div class="pf2-ai-item-text">
+              <div class="pf2-ai-item-label">Banner</div>
+              <div class="pf2-ai-item-hint">AI-generated wide banner image</div>
+            </div>
+          </label>
+          <label class="pf2-ai-item">
+            <input type="checkbox" value="screenshots" checked>
+            <span class="pf2-ai-item-icon">📸</span>
+            <div class="pf2-ai-item-text">
+              <div class="pf2-ai-item-label">Screenshots (×4)</div>
+              <div class="pf2-ai-item-hint">Visual test of your live app</div>
+            </div>
+          </label>
+        </div>
+        <button class="pf2-ai-execute-btn" id="pf2-ai-execute-btn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Generate
+        </button>
+      </div>
+
+      <!-- Generating state: progress -->
+      <div id="pf2-ai-generating" style="display:none">
+        <div class="pf2-ai-header">
+          <div class="pf2-ai-title">
+            <span class="pf2-ai-spinner"></span>
+            Generating…
+          </div>
+        </div>
+        <div class="pf2-ai-warn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          Please don't close the app until generation is complete
+        </div>
+        <div class="pf2-ai-steps" id="pf2-ai-steps"></div>
+        <div class="pf2-ai-progress-wrap">
+          <div class="pf2-ai-progress-bar" id="pf2-ai-progress-bar"></div>
+        </div>
+        <div class="pf2-ai-progress-msg" id="pf2-ai-progress-msg">Starting…</div>
+      </div>
+
+      <!-- Done state -->
+      <div id="pf2-ai-done" style="display:none">
+        <div class="pf2-ai-header">
+          <div class="pf2-ai-title pf2-ai-title--done">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            Generation complete!
+          </div>
+        </div>
+        <div class="pf2-ai-done-list" id="pf2-ai-done-list"></div>
+        <button class="pf2-ai-execute-btn pf2-ai-execute-btn--ok" id="pf2-ai-done-btn">View Results</button>
+      </div>
+    </div>
   </div>
 
   <!-- ═══ APP TOKEN PAGE ═══ -->
@@ -2066,33 +2172,253 @@
 
   <!-- ═══ WALLET VIEW ═══ -->
   <div id="view-wallet" class="view-container hidden">
-    <main class="tm-main">
-      <section class="tm-main-intro">
-        <h1 class="tm-main-intro-header">Wallet</h1>
-      </section>
-      <section class="wallet-section">
-        <!-- TonConnect button area -->
-        <div class="wallet-connect-card" id="wallet-connect-card">
-          <div class="wallet-connect-icon">
-            <svg width="40" height="40" viewBox="0 0 56 56" fill="none">
-              <rect width="56" height="56" rx="16" fill="#0098EA"/>
-              <path d="M37.5603 15.6277H18.4386C14.9228 15.6277 12.6944 19.4202 14.4632 22.4861L26.2644 43.2496C27.0773 44.6874 29.1654 44.6874 29.9783 43.2496L41.7796 22.4861C43.5484 19.4202 41.32 15.6277 37.8042 15.6277H37.5603Z" fill="white"/>
-            </svg>
-          </div>
-          <div class="wallet-connect-title" id="wallet-connect-title">Connect TON Wallet</div>
-          <div class="wallet-connect-sub" id="wallet-connect-sub">Connect your TonKeeper, MyTonWallet or any TonConnect-compatible wallet to manage tokens and interact with the TON blockchain.</div>
-          <button class="wallet-connect-btn" id="wallet-view-connect-btn">Connect Wallet</button>
+    <main class="wal2-main">
+
+      <!-- ── Hero with gradient glow ──────────────────────────────── -->
+      <div class="wal2-hero">
+        <!-- Bottom fade so hero bleeds into token list -->
+        <div class="wal2-hero-fade"></div>
+        <div class="wal2-hero-glow"></div>
+        <div class="wal2-hero-glow wal2-hero-glow--2"></div>
+
+        <!-- Top bar -->
+        <div class="wal2-topbar">
+          <button class="wal2-topbar-btn" id="wal2-receive-btn-icon" title="Receive">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          </button>
+          <button class="wal2-topbar-pill" id="wal2-connect-pill">
+            <span class="wal2-topbar-pill-dot" id="wal2-connect-dot"></span>
+            <span class="wal2-topbar-pill-text" id="wal2-connect-pill-text">Connect Wallet</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <button class="wal2-topbar-btn" id="wal2-search-btn" title="Search">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </button>
         </div>
-        <!-- Balance after connection -->
-        <div class="wallet-balance-card hidden" id="wallet-balance-card">
-          <div class="wallet-balance-label">Wallet</div>
-          <div class="wallet-address-pill" id="wallet-address-pill">—</div>
-          <div class="wallet-balance-amount" id="wallet-balance-amount">—</div>
-          <div class="wallet-balance-sub">TON Balance</div>
-          <button class="wallet-disconnect-btn" id="wallet-view-disconnect-btn">Disconnect</button>
+
+        <!-- Balance -->
+        <div class="wal2-balance">
+          <div class="wal2-balance-amount" id="wal2-balance-amount">$0.00</div>
+          <div class="wal2-balance-change" id="wal2-balance-change">+$0.00 +0.00%</div>
         </div>
-      </section>
+
+        <!-- Action buttons -->
+        <div class="wal2-actions">
+          <button class="wal2-action" id="wal2-receive-btn">
+            <span class="wal2-action-icon">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24"><g fill="#fff" fill-rule="evenodd" clip-rule="evenodd"><path d="M5 14.997a.75.75 0 0 1 .75.75V18c0 .138.112.25.25.25h12a.25.25 0 0 0 .25-.25v-2.253a.75.75 0 0 1 1.5 0V18A1.75 1.75 0 0 1 18 19.75H6A1.75 1.75 0 0 1 4.25 18v-2.253a.75.75 0 0 1 .75-.75M12.202 4.25a.75.75 0 0 1 .75.75v8.086a.75.75 0 0 1-1.5 0V5a.75.75 0 0 1 .75-.75"/><path d="M8.322 10.626a.75.75 0 0 1 1.06-.013l2.82 2.755l2.82-2.755a.75.75 0 1 1 1.048 1.073l-3.344 3.267a.75.75 0 0 1-1.048 0l-3.344-3.267a.75.75 0 0 1-.012-1.06"/></g></svg>
+            </span>
+            <span>Receive</span>
+          </button>
+          <button class="wal2-action" id="wal2-send-btn">
+            <span class="wal2-action-icon">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24"><path fill="#fff" d="M4.4 19.425q-.5.2-.95-.088T3 18.5V14l8-2l-8-2V5.5q0-.55.45-.837t.95-.088l15.4 6.5q.625.275.625.925t-.625.925z"/></svg>
+            </span>
+            <span>Send</span>
+          </button>
+          <button class="wal2-action" id="wal2-swap-btn">
+            <span class="wal2-action-icon">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24"><path fill="#fff" d="M21.5 9a6.5 6.5 0 0 1-4 6.002V15A8.5 8.5 0 0 0 9 6.5h-.002A6.502 6.502 0 0 1 21.5 9M7 3a4 4 0 0 0-4 4v1.5h2V7a2 2 0 0 1 2-2h1.5V3zm12 12.5V17a2 2 0 0 1-2 2h-1.5v2H17a4 4 0 0 0 4-4v-1.5zm-10 6a6.5 6.5 0 1 0 0-13a6.5 6.5 0 0 0 0 13m0-9l2.5 2.5L9 17.5L6.5 15z"/></svg>
+            </span>
+            <span>Swap</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- ── Token list ───────────────────────────────────────────── -->
+      <div class="wal2-tokens" id="wal2-tokens-list">
+        <div class="wal2-loading">Loading…</div>
+      </div>
+
+      <!-- Hidden legacy nodes for older code paths -->
+      <div style="display:none" aria-hidden="true">
+        <div id="wallet-connect-card"></div>
+        <button id="wallet-view-connect-btn"></button>
+        <button id="wallet-view-disconnect-btn"></button>
+        <div id="wallet-balance-card" class="hidden"></div>
+        <div id="wallet-address-pill"></div>
+        <div id="wallet-balance-amount"></div>
+      </div>
     </main>
+
+    <!-- ── Top-up modal ──────────────────────────────────────────────────────── -->
+    <div id="topup-modal" class="topup-modal" aria-hidden="true">
+      <div class="topup-modal-backdrop" id="topup-modal-backdrop"></div>
+      <div class="topup-modal-sheet" role="dialog" aria-modal="true" aria-labelledby="topup-modal-title">
+        <!-- Handle -->
+        <div class="topup-modal-handle"></div>
+
+        <div class="topup-modal-head">
+          <div class="topup-modal-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24"><path fill="#1aa6fe" d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12s12-5.373 12-12S18.627 0 12 0M7.902 6.697h8.196c1.505 0 2.462 1.628 1.705 2.94l-5.059 8.765a.86.86 0 0 1-1.488 0L6.199 9.637c-.758-1.314.197-2.94 1.703-2.94m4.844 1.496v7.58l1.102-2.128l2.656-4.756a.465.465 0 0 0-.408-.696zM7.9 8.195a.464.464 0 0 0-.408.694l2.658 4.754l1.102 2.13V8.195z"/></svg>
+          </div>
+          <div>
+            <div class="topup-modal-title" id="topup-modal-title">Top Up Wallet</div>
+            <div class="topup-modal-sub">Send TON from your wallet</div>
+          </div>
+        </div>
+
+        <!-- Amount input -->
+        <div class="topup-amount-wrap" id="topup-idle-section">
+          <div class="topup-amount-label">Amount (TON)</div>
+          <div class="topup-amount-row">
+            <input
+              id="topup-amount-input"
+              class="topup-amount-input"
+              type="number"
+              min="0.1"
+              step="0.1"
+              placeholder="0.00"
+              inputmode="decimal"
+            />
+            <span class="topup-amount-currency">TON</span>
+          </div>
+          <div class="topup-presets">
+            <button class="topup-preset" data-amount="1">1</button>
+            <button class="topup-preset" data-amount="5">5</button>
+            <button class="topup-preset" data-amount="10">10</button>
+            <button class="topup-preset" data-amount="50">50</button>
+          </div>
+          <div class="topup-usd-hint" id="topup-usd-hint">≈ $0.00</div>
+        </div>
+
+        <!-- Sending state -->
+        <div class="topup-state topup-state--sending" id="topup-state-sending" style="display:none">
+          <div class="topup-state-spinner"></div>
+          <div class="topup-state-text">Confirm in your wallet…</div>
+          <div class="topup-state-sub">Waiting for on-chain confirmation</div>
+        </div>
+
+        <!-- Success state -->
+        <div class="topup-state topup-state--success" id="topup-state-success" style="display:none">
+          <div class="topup-state-check">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          <div class="topup-state-text">Top-up confirmed!</div>
+          <div class="topup-state-sub" id="topup-state-success-sub"></div>
+        </div>
+
+        <!-- Actions -->
+        <div class="topup-modal-actions" id="topup-idle-actions">
+          <button class="topup-btn-cancel" id="topup-btn-cancel">Cancel</button>
+          <button class="topup-btn-send" id="topup-btn-send">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"><g fill="#fff" fill-rule="evenodd" clip-rule="evenodd"><path d="M5 14.997a.75.75 0 0 1 .75.75V18c0 .138.112.25.25.25h12a.25.25 0 0 0 .25-.25v-2.253a.75.75 0 0 1 1.5 0V18A1.75 1.75 0 0 1 18 19.75H6A1.75 1.75 0 0 1 4.25 18v-2.253a.75.75 0 0 1 .75-.75M12.202 4.25a.75.75 0 0 1 .75.75v8.086a.75.75 0 0 1-1.5 0V5a.75.75 0 0 1 .75-.75"/><path d="M8.322 10.626a.75.75 0 0 1 1.06-.013l2.82 2.755l2.82-2.755a.75.75 0 1 1 1.048 1.073l-3.344 3.267a.75.75 0 0 1-1.048 0l-3.344-3.267a.75.75 0 0 1-.012-1.06"/></g></svg>
+            Top Up
+          </button>
+        </div>
+        <div class="topup-modal-actions" id="topup-success-actions" style="display:none">
+          <button class="topup-btn-send" id="topup-btn-done" style="flex:1">Done</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ SWAP VIEW ═══ -->
+  <div id="view-swap" class="view-container hidden">
+    <main class="sw-main">
+      <!-- Top bar -->
+      <div class="sw-topbar">
+        <button class="sw-icon-btn" id="sw-back-btn" aria-label="Back">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+        </button>
+        <div class="sw-title">Swap</div>
+        <button class="sw-icon-btn" id="sw-refresh-btn" aria-label="Refresh">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+        </button>
+      </div>
+
+      <!-- FROM card -->
+      <div class="sw-card" data-side="from">
+        <div class="sw-card-row1">
+          <div class="sw-card-label">You send</div>
+          <div class="sw-card-max" id="sw-from-max">Max: — TON</div>
+        </div>
+        <div class="sw-card-row2">
+          <input id="sw-from-input" class="sw-amount-input" type="text" inputmode="decimal" placeholder="0" />
+          <button class="sw-token-chip" id="sw-from-chip" type="button">
+            <span class="sw-token-chip-icon" id="sw-from-icon"></span>
+            <span class="sw-token-chip-symbol" id="sw-from-symbol">—</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </button>
+        </div>
+        <div class="sw-card-row3">
+          <span class="sw-card-usd" id="sw-from-usd">$0.00</span>
+        </div>
+      </div>
+
+      <!-- Direction toggle -->
+      <div class="sw-toggle-wrap">
+        <button class="sw-toggle-btn" id="sw-toggle-btn" aria-label="Swap direction">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="4" x2="7" y2="20"></line><polyline points="3 8 7 4 11 8"></polyline><line x1="17" y1="20" x2="17" y2="4"></line><polyline points="13 16 17 20 21 16"></polyline></svg>
+        </button>
+      </div>
+
+      <!-- TO card -->
+      <div class="sw-card" data-side="to">
+        <div class="sw-card-row1">
+          <div class="sw-card-label">You receive</div>
+          <div class="sw-card-max" id="sw-to-bal"></div>
+        </div>
+        <div class="sw-card-row2">
+          <input id="sw-to-input" class="sw-amount-input sw-amount-readonly" type="text" placeholder="0" readonly />
+          <button class="sw-token-chip" id="sw-to-chip" type="button">
+            <span class="sw-token-chip-icon" id="sw-to-icon"></span>
+            <span class="sw-token-chip-symbol" id="sw-to-symbol">Select</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </button>
+        </div>
+        <div class="sw-card-row3">
+          <span class="sw-card-usd" id="sw-to-usd">$0.00</span>
+        </div>
+      </div>
+
+      <!-- Rate / details -->
+      <div class="sw-details" id="sw-details" style="display:none">
+        <div class="sw-rate-row" id="sw-rate-row">
+          <span id="sw-rate-text">—</span>
+        </div>
+        <div class="sw-details-row">
+          <span class="sw-details-label">Price impact</span>
+          <strong id="sw-detail-impact">—</strong>
+        </div>
+        <div class="sw-details-row">
+          <span class="sw-details-label">Fee</span>
+          <strong id="sw-detail-fee">—</strong>
+        </div>
+      </div>
+
+      <!-- Error / status -->
+      <div class="sw-status" id="sw-status"></div>
+
+      <!-- Swipe to confirm -->
+      <div class="sw-swipe-wrap" id="sw-swipe-wrap">
+        <div class="sw-swipe-track" id="sw-swipe-track">
+          <span class="sw-swipe-label" id="sw-swipe-label">Swipe to swap</span>
+          <div class="sw-swipe-thumb" id="sw-swipe-thumb">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- ── Token-picker sheet (used by Swap) ──────────────────────────────── -->
+  <div id="sw-picker" class="sw-picker" aria-hidden="true">
+    <div class="sw-picker-backdrop" id="sw-picker-backdrop"></div>
+    <div class="sw-picker-sheet">
+      <div class="sw-picker-handle"></div>
+      <div class="sw-picker-head">
+        <div class="sw-picker-title">Select token</div>
+        <button class="sw-icon-btn" id="sw-picker-close" aria-label="Close">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div class="sw-picker-search">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        <input id="sw-picker-search-input" type="text" placeholder="Search by name or symbol…" />
+      </div>
+      <div class="sw-picker-list" id="sw-picker-list"></div>
+    </div>
   </div>
 
   <!-- ═══ OTHER VIEW ═══ -->
@@ -2108,23 +2434,59 @@
         </div>
       </div>
 
-      <!-- Grid of buttons -->
-      <div class="other-grid">
-
-        <button class="other-tile other-tile--blue" id="other-referral-btn">
-          <div class="other-tile-icon">
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Referral hero banner -->
+      <button class="other-referral-hero" id="other-referral-btn">
+        <!-- Decorative blobs -->
+        <div class="orh-blob orh-blob--1"></div>
+        <div class="orh-blob orh-blob--2"></div>
+        <div class="orh-blob orh-blob--3"></div>
+        <!-- Content -->
+        <div class="orh-body">
+          <div class="orh-icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
               <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
               <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
             </svg>
           </div>
-          <span class="other-tile-label">Referral</span>
-          <span class="other-tile-sub">Invite friends</span>
+          <div class="orh-text">
+            <div class="orh-title">Referral Program</div>
+            <div class="orh-desc">Invite friends &amp; earn rewards together</div>
+          </div>
+        </div>
+        <div class="orh-arrow">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
+      </button>
+
+      <!-- Grid of buttons -->
+      <div class="other-grid">
+
+        <button class="other-tile other-tile--gray" id="other-releasenotes-btn">
+          <div class="other-tile-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14,2 14,8 20,8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+            </svg>
+          </div>
+          <span class="other-tile-label">What's New</span>
+          <span class="other-tile-sub">Release notes</span>
         </button>
 
-        <button class="other-tile other-tile--purple" id="other-language-btn">
+        <button class="other-tile other-tile--gray" id="other-help-btn">
           <div class="other-tile-icon">
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>
+            </svg>
+          </div>
+          <span class="other-tile-label">Help</span>
+          <span class="other-tile-sub">Documentation</span>
+        </button>
+
+        <button class="other-tile other-tile--gray" id="other-language-btn">
+          <div class="other-tile-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="10"/>
               <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
             </svg>
@@ -2133,27 +2495,14 @@
           <span class="other-tile-sub">App language</span>
         </button>
 
-        <button class="other-tile other-tile--teal" id="other-help-btn">
+        <button class="other-tile other-tile--gray" id="other-support-btn">
           <div class="other-tile-icon">
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"/>
-              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
             </svg>
           </div>
-          <span class="other-tile-label">Help</span>
-          <span class="other-tile-sub">Support center</span>
-        </button>
-
-        <button class="other-tile other-tile--orange" id="other-releasenotes-btn">
-          <div class="other-tile-icon">
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <polyline points="14,2 14,8 20,8"/>
-              <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
-            </svg>
-          </div>
-          <span class="other-tile-label">What's New</span>
-          <span class="other-tile-sub">Release notes</span>
+          <span class="other-tile-label">Support</span>
+          <span class="other-tile-sub">Contact us</span>
         </button>
 
       </div>

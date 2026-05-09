@@ -77,6 +77,7 @@ router.get("/tokens/:id/metadata.json", async (req: Request, res: Response) => {
   try {
     const token = await prisma.appToken.findUnique({
       where: { id: req.params.id as string },
+      include: { listing: { select: { appLogoFilename: true } } },
     }) as any;
     if (!token) { res.status(404).json({ error: "Not found" }); return; }
 
@@ -94,8 +95,11 @@ router.get("/tokens/:id/metadata.json", async (req: Request, res: Response) => {
     if (token.metadataDescription && String(token.metadataDescription).trim().length > 0) {
       meta.description = String(token.metadataDescription);
     }
-    if (token.logoFilename) {
-      meta.image = `${baseUrl}/bucket/${projectId}/${token.logoFilename}`;
+    // App avatar wins over standalone token logo: a single image is used for
+    // the App Store card, the wallet, the swap UI, and the on-chain Jetton.
+    const imageFilename = token.listing?.appLogoFilename || token.logoFilename;
+    if (imageFilename) {
+      meta.image = `${baseUrl}/bucket/${projectId}/${imageFilename}`;
     }
 
     res.set("Access-Control-Allow-Origin", "*");

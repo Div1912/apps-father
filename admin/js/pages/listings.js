@@ -7,13 +7,15 @@
   const ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l1-6h16l1 6"/><path d="M5 9v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9"/><path d="M9 13h6"/></svg>`;
 
   const STATUS_META = {
-    draft:      { label: "Draft",      color: "#94a3b8", bg: "rgba(148,163,184,0.10)", border: "rgba(148,163,184,0.22)" },
-    ready:      { label: "Ready",      color: "#94a3b8", bg: "rgba(148,163,184,0.10)", border: "rgba(148,163,184,0.22)" },
-    submitting: { label: "Awaiting fee",color: "#fbbf24",bg: "rgba(251,191,36,0.12)",   border: "rgba(251,191,36,0.24)" },
-    pending:    { label: "Pending",    color: "#60a5fa", bg: "rgba(96,165,250,0.12)",  border: "rgba(96,165,250,0.24)" },
-    approved:   { label: "Deploying",  color: "#a78bfa", bg: "rgba(167,139,250,0.12)", border: "rgba(167,139,250,0.24)" },
-    published:  { label: "Live",       color: "#4ade80", bg: "rgba(74,222,128,0.12)",  border: "rgba(74,222,128,0.24)" },
-    rejected:   { label: "Rejected",   color: "#f87171", bg: "rgba(248,113,113,0.12)", border: "rgba(248,113,113,0.24)" },
+    draft:              { label: "Draft",    color: "#94a3b8", bg: "rgba(148,163,184,0.10)", border: "rgba(148,163,184,0.22)" },
+    ready:              { label: "Draft",    color: "#94a3b8", bg: "rgba(148,163,184,0.10)", border: "rgba(148,163,184,0.22)" },
+    submitting:         { label: "Draft",    color: "#94a3b8", bg: "rgba(148,163,184,0.10)", border: "rgba(148,163,184,0.22)" },
+    pending:            { label: "Review",   color: "#60a5fa", bg: "rgba(96,165,250,0.12)",  border: "rgba(96,165,250,0.24)" },
+    review:             { label: "Review",   color: "#60a5fa", bg: "rgba(96,165,250,0.12)",  border: "rgba(96,165,250,0.24)" },
+    approved:           { label: "Live",     color: "#4ade80", bg: "rgba(74,222,128,0.12)",  border: "rgba(74,222,128,0.24)" },
+    deployed_pending_lp:{ label: "Live",     color: "#4ade80", bg: "rgba(74,222,128,0.12)",  border: "rgba(74,222,128,0.24)" },
+    published:          { label: "Live",     color: "#4ade80", bg: "rgba(74,222,128,0.12)",  border: "rgba(74,222,128,0.24)" },
+    rejected:           { label: "Rejected", color: "#f87171", bg: "rgba(248,113,113,0.12)", border: "rgba(248,113,113,0.24)" },
   };
 
   function statusBadge(s) {
@@ -63,7 +65,7 @@
         <div class="page-hdr">
           <div>
             <h1>App Store Listings</h1>
-            <div class="sub">Moderation queue — review submissions, approve to deploy jetton, reject, or hide live listings.</div>
+            <div class="sub">Moderation queue — approve submissions to go live, reject with a reason, or hide live listings.</div>
           </div>
           <div class="actions">
             <button class="btn btn-sm btn-ghost" id="lst-refresh">Refresh</button>
@@ -71,8 +73,7 @@
         </div>
 
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
-          ${["pending", "approved", "published", "rejected", ""].map((s) => {
-            const label = s === "" ? "All" : (STATUS_META[s]?.label || s);
+          ${[{v:"review",l:"Review"},{v:"published",l:"Live"},{v:"rejected",l:"Rejected"},{v:"draft",l:"Draft"},{v:"",l:"All"}].map(({v:s,l:label}) => {
             const active = state.statusFilter === s;
             return `<button class="btn btn-sm ${active ? "btn-primary" : "btn-ghost"}" data-status="${s}">${label}</button>`;
           }).join("")}
@@ -113,8 +114,8 @@
                </div>`
             : `<span style="color:var(--admin-muted);font-size:12px">no token yet</span>`;
 
-          const showApprove = r.status === "pending";
-          const showReject = r.status === "pending" || r.status === "submitting";
+          const showApprove = r.status === "review" || r.status === "pending";
+          const showReject = r.status === "review" || r.status === "pending" || r.status === "submitting";
           const showHide = r.status === "published" && !r.hidden;
           const showUnhide = r.status === "published" && r.hidden;
 
@@ -142,7 +143,7 @@
               </td>
               <td style="text-align:right;white-space:nowrap">
                 ${showApprove ? `<button class="btn btn-sm btn-primary act-approve">Approve</button>` : ""}
-                ${showReject  ? `<button class="btn btn-sm" style="background:rgba(248,113,113,0.14);color:#f87171;border:1px solid rgba(248,113,113,0.28)" class="act-reject">Reject</button>` : ""}
+                ${showReject  ? `<button class="btn btn-sm act-reject" style="background:rgba(248,113,113,0.14);color:#f87171;border:1px solid rgba(248,113,113,0.28)">Reject</button>` : ""}
                 ${showHide    ? `<button class="btn btn-sm btn-ghost act-hide">Hide</button>` : ""}
                 ${showUnhide  ? `<button class="btn btn-sm btn-ghost act-unhide">Unhide</button>` : ""}
               </td>
