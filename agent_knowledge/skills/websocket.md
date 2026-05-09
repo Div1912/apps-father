@@ -49,44 +49,33 @@ module.exports.ws = function(wss, db, projectId) {
 
 ## Frontend — Connecting from app.js
 
+Always use `AF.openWS()` — never `new WebSocket()` directly. AF.openWS handles routing to the correct WS URL automatically.
+
 ```js
-const WS_URL = '{wsBaseUrl}/ws/' + PROJECT_ID;
 let ws;
-let reconnectTimer;
 
 function connectWebSocket() {
-  ws = new WebSocket(WS_URL);
-
-  ws.onopen = function() {
-    console.log('WebSocket connected');
-    clearTimeout(reconnectTimer);
-    // Always send auth immediately after connecting.
-    // Do not send a raw userId; the server must derive it from initData.
-    ws.send(JSON.stringify({ type: 'auth', initData: Telegram.WebApp.initData || '' }));
-  };
-
-  ws.onmessage = function(event) {
-    try {
-      const data = JSON.parse(event.data);
+  ws = AF.openWS({
+    onOpen: () => {
+      // Always send auth immediately after connecting.
+      // Do not send a raw userId; the server must derive it from initData.
+      ws.send(JSON.stringify({ type: 'auth', initData: AF.tg.initData || '' }));
+    },
+    onMessage: (data) => {
+      // data is already parsed JSON
       handleMessage(data);
-    } catch (err) {
-      console.error('WS parse error:', err);
-    }
-  };
-
-  ws.onclose = function() {
-    reconnectTimer = setTimeout(connectWebSocket, 2000);
-  };
-
-  ws.onerror = function(err) {
-    ws.close();
-  };
+    },
+    onClose: () => {
+      setTimeout(connectWebSocket, 2000);  // reconnect
+    },
+    onError: () => {
+      ws.close();
+    },
+  });
 }
 
 function sendWS(data) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(data));
-  }
+  if (ws) ws.send(JSON.stringify(data));
 }
 
 function handleMessage(data) {
@@ -329,33 +318,29 @@ simulate_ws({
 ### Frontend (app.js)
 
 ```js
-const WS_URL = '{wsBaseUrl}/ws/' + PROJECT_ID;
 let ws;
 
 function connectWS() {
-  ws = new WebSocket(WS_URL);
-
-  ws.onopen = () => {
-    // Authenticate immediately — server won't deliver messages before this
-    ws.send(JSON.stringify({ type: 'auth', initData: Telegram.WebApp.initData || '' }));
-  };
-
-  ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-
-    if (data.type === 'authed') {
-      console.log('WS authenticated');
-    }
-    if (data.type === 'new_msg') {
-      // data.matchId, data.msg: { from, text, ts }
-      renderMessage(data.matchId, data.msg);
-    }
-    if (data.type === 'typing') {
-      showTypingIndicator(data.matchId, data.fromUserId);
-    }
-  };
-
-  ws.onclose = () => setTimeout(connectWS, 2000);
+  ws = AF.openWS({
+    onOpen: () => {
+      // Authenticate immediately — server won't deliver messages before this
+      ws.send(JSON.stringify({ type: 'auth', initData: AF.tg.initData || '' }));
+    },
+    onMessage: (data) => {
+      // data is already parsed JSON
+      if (data.type === 'authed') {
+        console.log('WS authenticated');
+      }
+      if (data.type === 'new_msg') {
+        // data.matchId, data.msg: { from, text, ts }
+        renderMessage(data.matchId, data.msg);
+      }
+      if (data.type === 'typing') {
+        showTypingIndicator(data.matchId, data.fromUserId);
+      }
+    },
+    onClose: () => setTimeout(connectWS, 2000),
+  });
 }
 
 function sendPrivateMessage(matchId, toUserId, text) {

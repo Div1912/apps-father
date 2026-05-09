@@ -1,42 +1,75 @@
----
-name: frontend-design
-description: Create distinctive, production-grade frontend interfaces with high design quality. Use this skill when the user asks to build web components, pages, artifacts, posters, or applications (examples include websites, landing pages, dashboards, React components, HTML/CSS layouts, or when styling/beautifying any web UI). Generates creative, polished code and UI design that avoids generic AI aesthetics.
-license: Complete terms in LICENSE.txt
----
+## UI/UX DESIGN MANDATE
 
-This skill guides creation of distinctive, production-grade frontend interfaces that avoid generic "AI slop" aesthetics. Implement real working code with exceptional attention to aesthetic details and creative choices.
+Every Telegram Mini App you build must have a **modern, intentional, and visually distinctive UI**. Generic-looking apps are a failure. The design is as important as the functionality.
 
-The user provides frontend requirements: a component, page, application, or interface to build. They may include context about the purpose, audience, or technical constraints.
+### Step 1 — Pick a design direction BEFORE writing any CSS
 
-## Design Thinking
+Read the app description and plan. Then choose ONE clear aesthetic direction that fits the context:
 
-Before coding, understand the context and commit to a BOLD aesthetic direction:
-- **Purpose**: What problem does this interface solve? Who uses it?
-- **Tone**: Pick an extreme: brutally minimal, maximalist chaos, retro-futuristic, organic/natural, luxury/refined, playful/toy-like, editorial/magazine, brutalist/raw, art deco/geometric, soft/pastel, industrial/utilitarian, etc. There are so many flavors to choose from. Use these for inspiration but design one that is true to the aesthetic direction.
-- **Constraints**: Technical requirements (framework, performance, accessibility).
-- **Differentiation**: What makes this UNFORGETTABLE? What's the one thing someone will remember?
+- **Dark luxury** — near-black backgrounds, gold/amber accents, sharp edges, tight spacing
+- **Neon cyber** — deep dark base, vivid neon accents (cyan, magenta, electric green), glow effects
+- **Soft glass** — frosted glass cards, pastel gradients, light blurs, gentle shadows
+- **Bold flat** — strong solid colors, geometric shapes, heavy typography, zero gradients
+- **Minimal pro** — lots of whitespace (or dark space), one accent color, refined mono/serif type
+- **Retro** — muted warm palette, grain texture, chunky rounded shapes, vintage type
+- **Vivid game** — saturated colors, playful shapes, bouncy micro-animations, big bold numbers
+- Or invent your own direction. The above are starting points, not limits.
 
-**CRITICAL**: Choose a clear conceptual direction and execute it with precision. Bold maximalism and refined minimalism both work - the key is intentionality, not intensity.
+Commit fully. A half-executed aesthetic looks worse than a simple one done well.
 
-Then implement working code (HTML/CSS/JS, React, Vue, etc.) that is:
-- Production-grade and functional
-- Visually striking and memorable
-- Cohesive with a clear aesthetic point-of-view
-- Meticulously refined in every detail
+### Step 2 — Colors: define everything in :root, use nothing from Telegram
 
-## Frontend Aesthetics Guidelines
+```css
+:root {
+  --bg:       #0d0d12;   /* key background — must match AF.init() colors */
+  --surface:  #16161f;
+  --border:   rgba(255,255,255,0.07);
+  --accent:   #7c6cfc;
+  --accent2:  #e05cff;
+  --text:     #f0eff8;
+  --muted:    #7a7a9a;
+}
+```
+- This is the sample colors. Use your palette or another vars for your design UI variant
 
-Focus on:
-- **Typography**: Choose fonts that are beautiful, unique, and interesting. Avoid generic fonts like Arial and Inter; opt instead for distinctive choices that elevate the frontend's aesthetics; unexpected, characterful font choices. Pair a distinctive display font with a refined body font.
-- **Color & Theme**: Commit to a cohesive aesthetic. Use CSS variables for consistency. Dominant colors with sharp accents outperform timid, evenly-distributed palettes.
-- **Motion**: Use animations for effects and micro-interactions. Prioritize CSS-only solutions for HTML. Use Motion library for React when available. Focus on high-impact moments: one well-orchestrated page load with staggered reveals (animation-delay) creates more delight than scattered micro-interactions. Use scroll-triggering and hover states that surprise.
-- **Spatial Composition**: Unexpected layouts. Asymmetry. Overlap. Diagonal flow. Grid-breaking elements. Generous negative space OR controlled density.
-- **Backgrounds & Visual Details**: Create atmosphere and depth rather than defaulting to solid colors. Add contextual effects and textures that match the overall aesthetic. Apply creative forms like gradient meshes, noise textures, geometric patterns, layered transparencies, dramatic shadows, decorative borders, custom cursors, and grain overlays.
+- **NEVER** use `var(--tg-theme-*)` for colors — Telegram theme vars are forbidden (see frontend-rules.md rule 5).
+- All three `AF.init()` color params (`header`, `bottom`, `background`) must equal `--bg` exactly, so the Telegram chrome blends into the app.
+- Use CSS variables for every color — no hardcoded hex values scattered through the stylesheet.
 
-NEVER use generic AI-generated aesthetics like overused font families (Inter, Roboto, Arial, system fonts), cliched color schemes (particularly purple gradients on white backgrounds), predictable layouts and component patterns, and cookie-cutter design that lacks context-specific character.
+### Step 3 — Typography
 
-Interpret creatively and make unexpected choices that feel genuinely designed for the context. No design should be the same. Vary between light and dark themes, different fonts, different aesthetics. NEVER converge on common choices (Space Grotesk, for example) across generations.
+- Load ONE Google Font that fits the direction. Add it as a `<link>` in `<head>`.
+- Good choices: Sora, DM Sans, Outfit, Nunito, Rajdhani, Unbounded, Space Mono, Bricolage Grotesque, Plus Jakarta Sans, Manrope — but VARY across builds, never repeat the same font.
+- FORBIDDEN fonts: Inter, Roboto, Arial, system-ui, sans-serif alone. These produce generic results.
+- Set `font-family` on `body`, not just scattered elements.
 
-**IMPORTANT**: Match implementation complexity to the aesthetic vision. Maximalist designs need elaborate code with extensive animations and effects. Minimalist or refined designs need restraint, precision, and careful attention to spacing, typography, and subtle details. Elegance comes from executing the vision well.
+### Step 4 — Layout and spatial quality
 
-Remember: Claude is capable of extraordinary creative work. Don't hold back, show what can truly be created when thinking outside the box and committing fully to a distinctive vision.
+- Use CSS Grid and Flexbox confidently. Avoid inline styles for layout.
+- Cards: `border-radius: 16px–24px`, subtle border (`1px solid var(--border)`), no harsh box shadows.
+- Spacing: use a consistent scale (8px base). Padding inside cards: 16–20px. Gap between cards: 12px.
+- Touch targets: minimum 44px height for any tappable element.
+- Bottom nav (if present): fixed, blurred background, safe-area padding.
+
+### Step 5 — Motion (subtle, purposeful)
+
+- Page load: stagger-reveal list items with `animation-delay` (50ms apart max).
+- Button press: `transform: scale(0.96)` on `:active`, `transition: 0.12s`.
+- Screen transitions: `opacity + translateY(8px)` fade-in, 200ms ease-out.
+- NEVER add animation that delays interaction or loops without user trigger.
+
+### Step 6 — Background depth
+
+Don't use plain `background: var(--bg)` alone. Add ONE of:
+- Radial gradient blob: `background: radial-gradient(ellipse 60% 40% at 70% 10%, #3a1f6e22, transparent)`
+- Subtle noise texture via `background-image: url("data:image/svg+xml,...")` at low opacity
+- Grid/dot pattern at 3–5% opacity
+
+### Quality bar
+
+Before finishing, ask yourself:
+- Would this look at home in the App Store / Play Store screenshot?
+- Does it have a clear visual identity someone could describe in one sentence?
+- Are the colors, fonts, and spacing consistent throughout?
+
+If the answer to any of these is "no", iterate the CSS before deploying.

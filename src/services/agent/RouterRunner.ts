@@ -21,6 +21,10 @@ export interface RouterRunnerResult {
   text: string;
   inputTokens: number;
   outputTokens: number;
+  /** Sum of `usage.cost` across iterations. 0 if OR didn't return cost. */
+  costUsd: number;
+  costUsdInput: number;
+  costUsdOutput: number;
   /** True iff `propose_action` was called (terminal tool). */
   proposed: boolean;
 }
@@ -49,6 +53,9 @@ export class RouterRunner {
     let fullText = "";
     let inputTokens = 0;
     let outputTokens = 0;
+    let costUsd = 0;
+    let costUsdInput = 0;
+    let costUsdOutput = 0;
 
     for (let iter = 0; iter < maxIterations; iter++) {
       const params: any = {
@@ -58,7 +65,8 @@ export class RouterRunner {
         tools: openAiTools,
         tool_choice: "auto",
         ...(opts.telegramId ? { user: opts.telegramId } : {}),
-        extra_body: { session_id: opts.sessionId },
+        // Opt into OpenRouter usage accounting — see AskRunner / AgentRunner.
+        extra_body: { session_id: opts.sessionId, usage: { include: true } },
         ...(this._getProviderRouting(modelCfg.modelId, modelCfg.provider)
           ? { provider: this._getProviderRouting(modelCfg.modelId, modelCfg.provider) }
           : {}),
@@ -81,6 +89,9 @@ export class RouterRunner {
         if (fallback.usage) {
           inputTokens += fallback.usage.prompt_tokens || 0;
           outputTokens += fallback.usage.completion_tokens || 0;
+          costUsd += Number(fallback.usage.cost) || 0;
+          costUsdInput += Number(fallback.usage.cost_details?.upstream_inference_prompt_cost) || 0;
+          costUsdOutput += Number(fallback.usage.cost_details?.upstream_inference_completions_cost) || 0;
         }
         break;
       }
@@ -88,6 +99,9 @@ export class RouterRunner {
       if (response.usage) {
         inputTokens += response.usage.prompt_tokens || 0;
         outputTokens += response.usage.completion_tokens || 0;
+        costUsd += Number(response.usage.cost) || 0;
+        costUsdInput += Number(response.usage.cost_details?.upstream_inference_prompt_cost) || 0;
+        costUsdOutput += Number(response.usage.cost_details?.upstream_inference_completions_cost) || 0;
       }
 
       const choice = response.choices?.[0];
@@ -122,6 +136,9 @@ export class RouterRunner {
       text: fullText,
       inputTokens,
       outputTokens,
+      costUsd,
+      costUsdInput,
+      costUsdOutput,
       proposed: ctx.proposalEmitted,
     };
   }

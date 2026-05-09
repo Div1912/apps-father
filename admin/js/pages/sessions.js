@@ -32,6 +32,26 @@
       : `<span style="color:#f87171;font-size:11px;font-weight:600">✗ fail</span>`;
   }
 
+  // Complexity / MAX-MODE badges. Values mirror what the router stamps on
+  // each AgentSession row. Null complexity (free sessions / pre-matrix legacy
+  // rows) renders as a quiet em-dash.
+  const COMPLEXITY_META = {
+    trivial: { color: "#a3a3a3", bg: "rgba(163,163,163,0.10)", border: "rgba(163,163,163,0.20)" },
+    small:   { color: "#86efac", bg: "rgba(134,239,172,0.10)", border: "rgba(134,239,172,0.22)" },
+    medium:  { color: "#60a5fa", bg: "rgba(96,165,250,0.12)",  border: "rgba(96,165,250,0.24)" },
+    large:   { color: "#fbbf24", bg: "rgba(251,191,36,0.12)",  border: "rgba(251,191,36,0.24)" },
+    huge:    { color: "#f87171", bg: "rgba(248,113,113,0.12)", border: "rgba(248,113,113,0.24)" },
+  };
+  function complexityBadge(c) {
+    if (!c) return `<span style="color:var(--admin-muted)">—</span>`;
+    const m = COMPLEXITY_META[c] || { color: "#94a3b8", bg: "rgba(148,163,184,0.12)", border: "rgba(148,163,184,0.24)" };
+    return `<span style="display:inline-flex;align-items:center;height:18px;padding:0 7px;border-radius:999px;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;background:${m.bg};color:${m.color};border:1px solid ${m.border}">${Fmt.escapeHtml(c)}</span>`;
+  }
+  function maxModeBadge(on) {
+    if (!on) return `<span style="color:var(--admin-muted);font-size:11px">—</span>`;
+    return `<span style="display:inline-flex;align-items:center;gap:3px;height:18px;padding:0 7px;border-radius:999px;font-size:10px;font-weight:700;letter-spacing:.05em;background:rgba(255,184,77,0.14);color:#ffb84d;border:1px solid rgba(255,184,77,0.30)" title="MAX MODE was enabled by the user">⚡MAX</span>`;
+  }
+
   function fmtUsd(n, d = 4) { return "$" + Number(n || 0).toFixed(d); }
   function fmtInt(n)         { return Number(n || 0).toLocaleString("en-US"); }
   function fmtDur(ms)        {
@@ -165,6 +185,8 @@
           return `
             <tr data-id="${Fmt.escapeHtml(s.id)}">
               <td>${typeBadge(s.type)}</td>
+              <td style="text-align:center">${complexityBadge(s.complexity)}</td>
+              <td style="text-align:center">${maxModeBadge(s.isMaxMode)}</td>
               <td>
                 ${s.projectId
                   ? `<a class="app-link" href="#" data-pid="${Fmt.escapeHtml(s.projectId)}" style="font-weight:600">${Fmt.escapeHtml(s.projectName || "Unknown")}</a>
@@ -176,7 +198,16 @@
               <td style="color:var(--admin-muted);font-size:12px;white-space:nowrap">${fmtDate(s.createdAt)}</td>
               <td style="text-align:right;white-space:nowrap;font-size:12px;color:var(--admin-muted)">${fmtDur(s.durationMs)}</td>
               <td style="text-align:right;font-variant-numeric:tabular-nums;font-size:12px">${fmtInt(s.inputTokens)}&nbsp;<span style="color:var(--admin-muted)">/</span>&nbsp;${fmtInt(s.outputTokens)}</td>
-              <td style="text-align:right;font-family:ui-monospace,monospace;font-size:12px">${fmtUsd(s.costUsd, 5)}</td>
+              <td style="text-align:right;font-family:ui-monospace,monospace;font-size:12px;line-height:1.2">
+                <div>${fmtUsd(s.costUsd, 5)}</div>
+                ${s.costUsdInput != null || s.costUsdOutput != null ? `
+                  <div style="font-size:10px;color:var(--admin-muted);font-weight:500;letter-spacing:0.02em;display:flex;gap:6px;justify-content:flex-end;margin-top:2px">
+                    <span title="Input cost (upstream prompt)">in&nbsp;${fmtUsd(s.costUsdInput || 0, 5)}</span>
+                    <span style="opacity:0.4">·</span>
+                    <span title="Output cost (upstream completion)">out&nbsp;${fmtUsd(s.costUsdOutput || 0, 5)}</span>
+                  </div>
+                ` : ``}
+              </td>
               <td style="text-align:right;font-size:12px">${fmtInt(s.creditsCharged)}&nbsp;<span style="color:var(--admin-muted)">cr</span></td>
               <td style="text-align:right;font-family:ui-monospace,monospace;font-size:12px;font-weight:600;color:${mc}">${sign}${fmtUsd(Math.abs(s.marginUsd), 4)}</td>
               <td style="text-align:center">${successBadge(s.success)}</td>
@@ -193,6 +224,8 @@
               <thead>
                 <tr>
                   <th>Type</th>
+                  <th style="text-align:center">Complexity</th>
+                  <th style="text-align:center">MAX</th>
                   <th>App</th>
                   <th>Model</th>
                   <th>Input</th>

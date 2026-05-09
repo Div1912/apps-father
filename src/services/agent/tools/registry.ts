@@ -19,10 +19,10 @@ import { ServerLogsTool } from "./impl/build/ServerLogsTool";
 import { SimulateTelegramTool } from "./impl/build/SimulateTelegramTool";
 import { SimulateApiTool } from "./impl/build/SimulateApiTool";
 import { SimulateWsTool } from "./impl/build/SimulateWsTool";
-import { SetBotCommandsTool } from "./impl/build/SetBotCommandsTool";
 import { ConfigureAppTool } from "./impl/build/ConfigureAppTool";
 import { FinishTool } from "./impl/build/FinishTool";
 import { VisualTestTool } from "./impl/build/VisualTestTool";
+import { ImageGenerateTool } from "./impl/build/ImageGenerateTool";
 
 /**
  * All agent tool instances. Each exposes renderDefinition() (OpenAI schema)
@@ -46,9 +46,9 @@ export const AGENT_TOOL_INSTANCES: AgentTool[] = [
   new SimulateTelegramTool(),
   new SimulateApiTool(),
   new SimulateWsTool(),
-  new SetBotCommandsTool(),
   new ConfigureAppTool(),
   new VisualTestTool(),
+  new ImageGenerateTool(),
   new FinishTool(),
 ];
 
@@ -57,5 +57,4 @@ export const SERVER_TOOLS: any[] = [
   { type: "openrouter:datetime" },
   { type: "openrouter:web_search", parameters: { max_results: 5, max_total_results: 15 } },
   { type: "openrouter:web_fetch" },
-  { type: "openrouter:image_generation" },
 ];

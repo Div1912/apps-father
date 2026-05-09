@@ -571,7 +571,7 @@ async function createNewApp() {
       throw new Error('create failed');
     }
     const { projectId } = await res.json();
-    await loadProjects();
+    await loadProjects(0, true);
     openChat(projectId);
   } catch (err) {
     showToast(t('error_generic') || 'Something went wrong', 'error');
@@ -676,7 +676,7 @@ async function buySlot() {
     }
     slots.total = data.newSlots;
     showToast(t('toast_slot_purchased'), 'success');
-    await loadProjects();
+    await loadProjects(0, true);
     showView('list');
   } catch (err) {
     tg?.MainButton?.hideProgress();
@@ -727,7 +727,7 @@ function openTopup(returnTo) {
   topupMethod = 'ton';
   selectedBundle = null;
 
-  loadTopupBalance();
+  loadTopupBalance(true);
   loadTopupTgs();
   loadBundles();
   showView('topup');
@@ -1088,7 +1088,15 @@ function renderBalancePromptCard(el, balance, minCostOverride) {
   el.querySelector('.ifc-cta')?.addEventListener('click', () => openTopup('chat'));
 }
 
-async function loadTopupBalance() {
+let _loadBalanceLastAt = 0;
+let _loadBalanceInFlight = false;
+const LOAD_BALANCE_COOLDOWN = 30_000;
+
+async function loadTopupBalance(force = false) {
+  const now = Date.now();
+  if (_loadBalanceInFlight) return;
+  if (!force && now - _loadBalanceLastAt < LOAD_BALANCE_COOLDOWN) return;
+  _loadBalanceInFlight = true;
   try {
     const res = await fetch(`${API_BASE}/balance`, { headers: apiHeaders() });
     if (res.ok) {
@@ -1113,8 +1121,10 @@ async function loadTopupBalance() {
       if (balText) balText.innerHTML = badgeHtml;
       renderTierChip();
       updatePillPrices();
+      _loadBalanceLastAt = Date.now();
     }
   } catch { }
+  finally { _loadBalanceInFlight = false; }
 }
 
 function loadTopupTgs() {
@@ -1528,9 +1538,11 @@ function bindRatingModal() {
 }
 
 document.addEventListener('DOMContentLoaded', bindRatingModal);
+document.addEventListener('DOMContentLoaded', initBottomNav);
 // Also try to bind immediately in case the DOM is already ready.
 if (document.readyState !== 'loading') {
   try { bindRatingModal(); } catch { }
+  try { initBottomNav(); } catch { }
 }
 
 async function submitTopup() {
@@ -1572,7 +1584,7 @@ async function submitTopup() {
                 startStarsVerifying(paymentId);
               }, 500);
             }
-            setTimeout(() => loadTopupBalance(), 1500);
+            setTimeout(() => loadTopupBalance(true), 1500);
           } else if (status === 'cancelled' || status === 'failed') {
             stopStarsVerifying();
           }
@@ -1597,13 +1609,166 @@ async function submitTopup() {
   }
 }
 
+// ── Bottom Navigation ────────────────────────────────────────────────────────
+
+/**
+ * Update the bottom nav: move the sliding indicator, highlight the active tab,
+ * and show/hide the bar itself based on view depth.
+ */
+function _updateBottomNav(view) {
+  const nav = document.getElementById('bottom-nav');
+  if (!nav) return;
+
+  // Hide nav on deep (non-root) views where back arrows exist.
+  const depth = VIEW_DEPTH[view] ?? 0;
+  const isRoot = TAB_ROOT_VIEWS.has(view);
+  if (isRoot || depth === 0) {
+    nav.classList.remove('bnav-hidden');
+  } else {
+    nav.classList.add('bnav-hidden');
+  }
+
+  // Determine which tab should be active.
+  const activeTab = isRoot ? view : (VIEW_PARENT_TAB[view] || 'list');
+  const idx = TAB_ORDER.indexOf(activeTab);
+
+  // Update the CSS custom property on the pill for the sliding indicator.
+  const list = nav.querySelector('.bnav-list');
+  if (list) list.style.setProperty('--active-index', idx >= 0 ? idx : 0);
+
+  // Toggle active class on buttons.
+  nav.querySelectorAll('.bnav-item').forEach((btn) => {
+    const isActive = btn.dataset.tab === activeTab;
+    btn.classList.toggle('bnav-active', isActive);
+  });
+}
+
+/** Wire up bottom nav tab buttons and the Other/Wallet view content. */
+function initBottomNav() {
+  const nav = document.getElementById('bottom-nav');
+  if (!nav) return;
+
+  nav.querySelectorAll('.bnav-item').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      if (!tab) return;
+      if (tab === 'store') {
+        openStore();
+      } else {
+        showView(tab);
+      }
+    });
+  });
+
+  // Wallet view connect/disconnect buttons.
+  const connectBtn = document.getElementById('wallet-view-connect-btn');
+  const disconnectBtn = document.getElementById('wallet-view-disconnect-btn');
+  if (connectBtn) {
+    connectBtn.addEventListener('click', () => {
+      initTonConnect();
+      if (tonConnectUI) tonConnectUI.openModal();
+    });
+  }
+  if (disconnectBtn) {
+    disconnectBtn.addEventListener('click', () => {
+      if (tonConnectUI) tonConnectUI.disconnect();
+      _updateWalletView();
+    });
+  }
+
+  // Other page — populate profile header with Telegram user info
+  _updateOtherProfile();
+
+  // Other view buttons
+  const referralBtn = document.getElementById('other-referral-btn');
+  const langBtn = document.getElementById('other-language-btn');
+  const helpBtn = document.getElementById('other-help-btn');
+  const notesBtn = document.getElementById('other-releasenotes-btn');
+  if (referralBtn) referralBtn.addEventListener('click', () => openReferral());
+  if (langBtn) langBtn.addEventListener('click', () => openLanguage());
+  if (helpBtn) helpBtn.addEventListener('click', () => openHelp());
+  if (notesBtn) notesBtn.addEventListener('click', () => openReleaseNotes());
+
+  // Scroll-based pill shrink (disappears slightly when scrolling deep).
+  let _lastScrollY = window.scrollY;
+  let _scrollTicking = false;
+  window.addEventListener('scroll', () => {
+    if (_scrollTicking) return;
+    _scrollTicking = true;
+    requestAnimationFrame(() => {
+      const list = nav.querySelector('.bnav-list');
+      if (list) {
+        const down = window.scrollY > _lastScrollY + 4;
+        list.classList.toggle('bnav-shrunk', down);
+      }
+      _lastScrollY = window.scrollY;
+      _scrollTicking = false;
+    });
+  }, { passive: true });
+
+  // Set initial active state.
+  _updateBottomNav(currentView || 'list');
+}
+
+/** Refresh the Wallet view card based on current TonConnect state. */
+function _updateOtherProfile() {
+  const avatarEl = document.getElementById('other-profile-avatar');
+  const nameEl   = document.getElementById('other-profile-name');
+  const subEl    = document.getElementById('other-profile-sub');
+  const verEl    = document.getElementById('other-footer-version');
+
+  // Telegram user info
+  const user = tg?.initDataUnsafe?.user;
+  if (nameEl) {
+    const firstName = user?.first_name || '';
+    const lastName  = user?.last_name  || '';
+    nameEl.textContent = [firstName, lastName].filter(Boolean).join(' ') || 'Guest';
+  }
+  if (subEl && user?.username) {
+    subEl.textContent = `@${user.username}`;
+  }
+  if (avatarEl) {
+    const initials = (user?.first_name || 'G')[0].toUpperCase();
+    avatarEl.textContent = initials;
+    // Use gradient keyed on userId for consistent color
+    const uid = user?.id || 0;
+    const hue = (uid * 137 + 210) % 360;
+    avatarEl.style.background = `linear-gradient(135deg, hsl(${hue},70%,50%), hsl(${(hue+40)%360},80%,60%))`;
+  }
+  if (verEl) verEl.textContent = 'v1.0';
+}
+
+function _updateWalletView() {
+  const connectCard = document.getElementById('wallet-connect-card');
+  const balanceCard = document.getElementById('wallet-balance-card');
+  const addressPill = document.getElementById('wallet-address-pill');
+
+  if (!connectCard || !balanceCard) return;
+  const addr = tonConnectUI?.account?.address;
+  if (addr) {
+    connectCard.classList.add('hidden');
+    balanceCard.classList.remove('hidden');
+    // Abbreviate address for display.
+    const display = addr.length > 12
+      ? addr.slice(0, 6) + '…' + addr.slice(-4)
+      : addr;
+    if (addressPill) addressPill.textContent = display;
+  } else {
+    connectCard.classList.remove('hidden');
+    balanceCard.classList.add('hidden');
+  }
+}
+
 function initTonConnect() {
   if (tonConnectUI) return;
   try {
     tonConnectUI = new TON_CONNECT_UI.TonConnectUI({
       manifestUrl: `${location.origin}/telegram-mini-app/tonconnect-manifest.json`,
     });
-    tonConnectUI.onStatusChange(() => updateTonWalletPanel());
+    tonConnectUI.onStatusChange(() => {
+      updateTonWalletPanel();
+      _updateWalletView();
+    });
   } catch (err) {
     console.error('TonConnect init error:', err);
   }
@@ -1783,7 +1948,7 @@ function startStarsVerifying(paymentId) {
         stopStarsVerifying();
         showToast('Payment confirmed! Balance updated.', 'success');
         tg?.HapticFeedback?.notificationOccurred('success');
-        loadTopupBalance();
+        loadTopupBalance(true);
         return;
       }
     } catch (e) {
@@ -1925,7 +2090,7 @@ function enterPlanningMode(active) {
     pills?.classList.add('hidden');
     suggestBtn?.classList.add('hidden');
     if (inputBar) inputBar.style.display = '';
-    if (attachBtn) attachBtn.style.display = 'none';
+    if (attachBtn) attachBtn.style.display = '';
     input.placeholder = t('chat_placeholder_new');
     loadTgsAnimation();
     renderPromptSamples();
@@ -2467,18 +2632,21 @@ function handleWSMessage(data) {
   if (data.type === 'agent_narration_chunk') {
     const block = document.getElementById(`narr-${data.stepId}`);
     if (!block) return;
+    // Accumulate full text on the block element to avoid server sending redundant full-text
+    block._rawText = (block._rawText || '') + (data.delta || '');
+    const fullText = block._rawText;
     const body = block.querySelector('.agent-think-body');
     if (body) {
-      body.innerHTML = formatContent(data.text || '') + '<span class="stream-cursor"></span>';
+      body.innerHTML = formatContent(fullText) + '<span class="stream-cursor"></span>';
       body.scrollTop = body.scrollHeight;
     }
-    const plain = (data.text || '').replace(/[#*`_~\n]/g, ' ').trim();
+    const plain = fullText.replace(/[#*`_~\n]/g, ' ').trim();
     const previewText = plain.length > 72 ? plain.slice(0, 72) + '\u2026' : (plain || 'Thinking\u2026');
     // Persist: update narration body + preview
     const _apst1 = agentProcState.get(data.messageId);
     if (_apst1) {
       const _narr = _apst1.narrations.find(n => n.stepId === data.stepId);
-      if (_narr) { _narr.body = data.text || ''; _narr.preview = previewText; persistAgentProcState(data.messageId); }
+      if (_narr) { _narr.body = fullText; _narr.preview = previewText; persistAgentProcState(data.messageId); }
     }
     scrollToBottom();
     return;
@@ -2512,8 +2680,26 @@ function handleWSMessage(data) {
   if (data.type === 'agent_narration_end') {
     const block = document.getElementById(`narr-${data.stepId}`);
     if (!block) return;
-    finalizeThoughtBlock(block);
     const row = block.closest('.row.thought');
+    // Drop the row whenever no real narration text was streamed. We deliberately
+    // ignore writing-chunk viewports here: those are tool-arg previews that get
+    // wiped by finalizeThoughtBlock and replaced by their own tool step card —
+    // leaving an "empty thought" row in the chain otherwise.
+    const bodyEl = block.querySelector('.agent-think-body');
+    const hasContent = bodyEl && bodyEl.textContent.trim().length > 0;
+    if (!hasContent) {
+      row?.remove();
+      // Remove from persisted state so the chain counter stays accurate
+      const _apstDrop = agentProcState.get(data.messageId);
+      if (_apstDrop) {
+        _apstDrop.narrations = _apstDrop.narrations.filter(n => n.stepId !== data.stepId);
+        persistAgentProcState(data.messageId);
+      }
+      const _elDrop = document.getElementById(`msg-${data.messageId}`);
+      if (_elDrop) updateChainCounter(_elDrop);
+      return;
+    }
+    finalizeThoughtBlock(block);
     if (row) { row.classList.remove('running'); row.classList.add('done'); }
     // Persist: mark narration done
     const _apst2 = agentProcState.get(data.messageId);
@@ -2564,7 +2750,11 @@ function handleWSMessage(data) {
       `<span class="ping-dot"></span>running` +
       `</span>` +
       `</div>` +
-      (data.kind === 'visual' ? `<div class="vt-robot-scan"><div class="vt-screen"><div class="vt-scanline"></div><div class="vt-eye"></div></div><div class="vt-robot-label">Analysing UI…</div></div>` : '') +
+      (data.kind === 'visual' && data.toolName === 'image_generate'
+        ? `<div class="img-gen-pending"><div class="img-gen-shimmer"></div><div class="img-gen-label">🎨 Rendering image…</div></div>`
+        : data.kind === 'visual'
+        ? `<div class="vt-robot-scan"><div class="vt-screen"><div class="vt-scanline"></div><div class="vt-eye"></div></div><div class="vt-robot-label">Analysing UI…</div></div>`
+        : '') +
       `</div>`;
     rows.appendChild(row);
     moveFooterToEnd(el);
@@ -2588,13 +2778,27 @@ function handleWSMessage(data) {
       row.classList.remove('running');
       row.classList.add(ok ? 'done' : 'error');
     }
-    // Remove robot animation if present
+    // Remove loading animations
     step.querySelector('.vt-robot-scan')?.remove();
+    step.querySelector('.img-gen-pending')?.remove();
     finalizeStepCard(step, !ok);
     if (data.meta) {
       const m = data.meta;
+      // ── Generated image card ─────────────────────────────────────────────
+      if (m.imageBase64) {
+        const card = document.createElement('div');
+        card.className = 'img-gen-card';
+        const aspectLabel = m.aspectRatio ? `<span class="img-gen-badge">${esc(m.aspectRatio)}</span>` : '';
+        const styleLabel = m.style ? `<span class="img-gen-badge">${esc(m.style)}</span>` : '';
+        card.innerHTML =
+          `<img class="img-gen-preview" src="data:image/png;base64,${m.imageBase64}" alt="${esc(m.filename || 'Generated image')}" loading="lazy"/>` +
+          `<div class="img-gen-footer">` +
+          `<span class="img-gen-filename">${esc(m.filename || '')}</span>` +
+          `<div class="img-gen-badges">${aspectLabel}${styleLabel}</div>` +
+          `</div>`;
+        step.appendChild(card);
       // ── Visual test screenshot card ──────────────────────────────────────
-      if (m.screenshotBase64) {
+      } else if (m.screenshotBase64) {
         const statusEmoji = m.status === 'pass' ? '✅' : m.status === 'warn' ? '⚠️' : '❌';
         const statusCls = m.status === 'pass' ? 'vt-pass' : m.status === 'warn' ? 'vt-warn' : 'vt-fail';
         const issuesHtml = Array.isArray(m.issues) && m.issues.length
@@ -3141,14 +3345,14 @@ function escAttr(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
-async function handleLinkBotClick(projectId, btnEl) {
+async function handleLinkBotClick(projectId, btnEl, onLinked) {
   const isDev = location.hostname === 'dev.apps-father.com';
   const fatherBot = isDev ? 'apps_father_dev_bot' : 'apps_father_bot';
   const newbotUrl = `https://t.me/newbot/${fatherBot}/username_bot`;
 
   const proceed = () => {
     try { tg?.openTelegramLink(newbotUrl); } catch (_) { }
-    try { startLinkBotPolling(projectId); } catch (_) { }
+    try { startLinkBotPolling(projectId, onLinked); } catch (_) { }
     try { showLinkBotWaiting(); } catch (_) { }
   };
 
@@ -3190,6 +3394,55 @@ async function handleLinkBotClick(projectId, btnEl) {
       btnEl.disabled = false;
       btnEl.classList.remove('busy');
     }
+  }
+}
+
+async function handleUnlinkBot(projectId) {
+  const botUsername = currentProject?.botUsername || '';
+  const label = botUsername ? `@${botUsername}` : 'this bot';
+
+  if (!confirm(`Unlink ${label} from this app?\n\nThe bot will stop responding and the app will lose its Telegram connection.`)) return;
+  if (!confirm(`Are you sure? This cannot be undone automatically — you will need to connect a new bot.\n\nUnlink ${label}?`)) return;
+  if (!confirm(`Final confirmation: permanently unlink ${label} from this app?`)) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/unlink-bot`, {
+      method: 'POST',
+      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      showToast(data?.error || 'Failed to unlink bot', 'error');
+      return;
+    }
+
+    hapticNotify('success');
+    showToast('Bot unlinked from app', 'success');
+
+    // Update local project state
+    if (currentProject && currentProject.id === projectId) {
+      currentProject.botUsername = null;
+      currentProject.botUserId = null;
+      document.getElementById('detail-username').textContent = '';
+    }
+    const local = projects.find(pp => pp.id === projectId);
+    if (local) { local.botUsername = null; local.botUserId = null; }
+    renderAppList();
+
+    // Swap the bot-actions area to "Connect Bot" without full re-render
+    const botActionsEl = document.getElementById('detail-bot-actions');
+    if (botActionsEl) {
+      botActionsEl.style.marginTop = '0';
+      botActionsEl.innerHTML = `<div class="tm-active-button" id="detail-connect-bot-btn">Connect Bot</div>`;
+      botActionsEl.querySelector('#detail-connect-bot-btn')
+        .addEventListener('click', function () { handleLinkBotClick(projectId, this, () => openDetail(projectId)); });
+    }
+    // Hide the token wrap since the bot is gone
+    document.getElementById('token-wrap').style.display = 'none';
+    document.getElementById('token-help-text').style.display = 'none';
+  } catch (err) {
+    console.error('[unlink-bot] error:', err);
+    showToast('Network error — please try again.', 'error');
   }
 }
 
@@ -3603,15 +3856,18 @@ function appendMessage(msg, animate = true) {
 
 // ── v4 router proposal bubble ────────────────────────────────────────────────
 // The router emits proposals as text messages with metadata.proposal=true.
-// They have one of four kinds:
-//   answer       → no action button, just the answer
-// Proposal kinds (new session-based):
+// Pricing is dynamic now: the router classifies a `complexity` bucket
+// (trivial | small | medium | large | huge) and the server looks up the credit
+// cost from the admin-managed matrix in runtime config. The bubble just reads
+// meta.creditsCost — never hard-code a number here.
+//
+// Proposal kinds:
 //   answer       → no action button (free, already shown)
 //   suggestions  → no action button (free, already shown)
-//   build        → "Start – 100 Credits" button
-//   update       → "Start – 85 Credits" button
-//   update-plan  → plan list + "Start – N Credits" button
-//   bug-fix      → "Fix – 30 Credits" button
+//   build        → "Build – N Credits" button
+//   update       → "Start – N Credits" button
+//   update-plan  → plan list + "Start – N Credits" button (N = base + items × per-item)
+//   bug-fix      → "Fix – N Credits" button
 function renderProposalBubble(el, msg) {
   const meta = msg.metadata || {};
   const kind = String(meta.kind || 'answer');
@@ -3619,6 +3875,12 @@ function renderProposalBubble(el, msg) {
   const plan = Array.isArray(meta.plan) ? meta.plan : [];
   const creditsCost = typeof meta.creditsCost === 'number' ? meta.creditsCost : 0;
   const accepted = !!meta.accepted;
+  // MAX MODE multiplier comes from runtime config and is stamped on the
+  // proposal at emit time. We render the toggle only when (a) the kind is
+  // paid and (b) the multiplier is above 1 — otherwise it's a no-op.
+  const maxModeMultiplier = typeof meta.maxModeMultiplier === 'number' && meta.maxModeMultiplier > 1
+    ? meta.maxModeMultiplier
+    : 0;
 
   el.className = `chat-bubble chat-bubble--assistant chat-bubble--proposal proposal-${kind}`;
 
@@ -3641,16 +3903,7 @@ function renderProposalBubble(el, msg) {
 
   const FREE_KINDS = ['answer', 'suggestions'];
   if (!FREE_KINDS.includes(kind)) {
-    let actionLabel;
-    if (kind === 'bug-fix') {
-      actionLabel = creditsCost > 0 ? `Fix – ${creditsCost.toLocaleString()} Credits` : 'Fix';
-    } else if (kind === 'build') {
-      actionLabel = creditsCost > 0 ? `Build – ${creditsCost.toLocaleString()} Credits` : 'Build';
-    } else if (kind === 'update-plan') {
-      actionLabel = creditsCost > 0 ? `Start – ${creditsCost.toLocaleString()} Credits` : 'Start';
-    } else {
-      actionLabel = creditsCost > 0 ? `Start – ${creditsCost.toLocaleString()} Credits` : 'Start';
-    }
+    const verb = kind === 'bug-fix' ? 'Fix' : kind === 'build' ? 'Build' : 'Start';
     const isBugFix = kind === 'bug-fix';
     const isBuild = kind === 'build';
     const btnIcon = isBugFix
@@ -3658,10 +3911,26 @@ function renderProposalBubble(el, msg) {
       : isBuild
         ? `<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/>`
         : `<polygon points="5 3 19 12 5 21 5 3"/>`;
+
+    if (maxModeMultiplier > 0 && creditsCost > 0) {
+      const maxLabel = `×${maxModeMultiplier % 1 === 0 ? maxModeMultiplier : maxModeMultiplier.toFixed(2)}`;
+      const checkboxId = `maxmode-${esc(msg.id)}`;
+      html += `<label class="proposal-maxmode" for="${checkboxId}">`;
+      html += `<input type="checkbox" id="${checkboxId}" class="proposal-maxmode-input" data-proposal-id="${esc(msg.id)}" ${accepted ? 'disabled' : ''}/>`;
+      html += `<span class="proposal-maxmode-track"><span class="proposal-maxmode-thumb"></span></span>`;
+      html += `<div class="proposal-maxmode-text">`;
+      html += `<div class="proposal-maxmode-title"><span class="proposal-maxmode-icon">⚡</span>MAX Mode<span class="proposal-maxmode-mult">${esc(maxLabel)} price</span></div>`;
+      html += `<div class="proposal-maxmode-desc">Top-tier model, deeper thinking, more iterations. Multiplies credits by ${esc(maxLabel)}.</div>`;
+      html += `</div>`;
+      html += `</label>`;
+    }
+
     html += `<div class="proposal-actions">`;
-    html += `<button class="proposal-btn-primary" data-proposal-id="${esc(msg.id)}" ${accepted ? 'disabled' : ''}>`;
+    html += `<button class="proposal-btn-primary" data-proposal-id="${esc(msg.id)}" `;
+    html += `data-base-credits="${creditsCost}" data-multiplier="${maxModeMultiplier || 1}" `;
+    html += `data-verb="${esc(verb)}" ${accepted ? 'disabled' : ''}>`;
     html += `<svg class="proposal-btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">${btnIcon}</svg>`;
-    html += `<span>${esc(actionLabel)}</span>`;
+    html += renderProposalBtnLabel(verb, creditsCost);
     html += `</button>`;
     html += `</div>`;
   }
@@ -3673,16 +3942,55 @@ function renderProposalBubble(el, msg) {
   if (accepted) return;
 
   const btn = el.querySelector('.proposal-btn-primary');
+  const maxToggle = el.querySelector('.proposal-maxmode-input');
+
+  if (maxToggle && btn) {
+    maxToggle.addEventListener('change', () => {
+      const baseCredits = Number(btn.dataset.baseCredits || 0);
+      const mult = maxToggle.checked ? Number(btn.dataset.multiplier || 1) : 1;
+      const newPrice = Math.max(0, Math.round(baseCredits * mult));
+      btn.classList.toggle('proposal-btn-primary--max', maxToggle.checked);
+      const labelHtml = renderProposalBtnLabel(btn.dataset.verb || 'Start', newPrice);
+      // Replace just the label children (keep the leading <svg>).
+      const svg = btn.querySelector('svg');
+      btn.innerHTML = '';
+      if (svg) btn.appendChild(svg);
+      btn.insertAdjacentHTML('beforeend', labelHtml);
+    });
+  }
+
   if (btn) {
     btn.addEventListener('click', () => {
+      const useMax = !!(maxToggle && maxToggle.checked);
       btn.disabled = true;
       btn.classList.add('loading');
-      executeProposal(msg.id, btn);
+      if (maxToggle) maxToggle.disabled = true;
+      executeProposal(msg.id, btn, useMax);
     });
   }
 }
 
-async function executeProposal(proposalId, btnEl) {
+// Compose the action button's label as a structured row: verb + bullet + price
+// pill. Doing this here (rather than in template literals) keeps the toggle
+// path simple — re-render this block on max-mode change without rebuilding
+// the surrounding card or re-binding event listeners.
+function renderProposalBtnLabel(verb, credits) {
+  if (!credits || credits <= 0) {
+    return `<span class="proposal-btn-label"><span class="proposal-btn-verb">${esc(verb)}</span></span>`;
+  }
+  return (
+    `<span class="proposal-btn-label">` +
+      `<span class="proposal-btn-verb">${esc(verb)}</span>` +
+      `<span class="proposal-btn-divider"></span>` +
+      `<span class="proposal-btn-price">` +
+        `<span class="proposal-btn-price-num">${credits.toLocaleString()}</span>` +
+        `<span class="proposal-btn-price-unit">credits</span>` +
+      `</span>` +
+    `</span>`
+  );
+}
+
+async function executeProposal(proposalId, btnEl, maxMode) {
   if (!chatProjectId) return;
   // Exit planning mode immediately — the build/update session is now underway
   if (isPlanningMode) {
@@ -3693,7 +4001,7 @@ async function executeProposal(proposalId, btnEl) {
     const res = await fetch(`${API_BASE}/chat/${chatProjectId}/execute-proposal`, {
       method: 'POST',
       headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ proposalId }),
+      body: JSON.stringify({ proposalId, max_mode: !!maxMode }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -3767,7 +4075,16 @@ function restoreAgentProcessCard(el, state, isRunning) {
   // Merge narrations and steps into a single chronological list using the
   // `order` stamp written at push time. Items without an order (legacy saves)
   // fall back to narrations-then-steps to preserve previous behaviour.
-  const narrations = (state.narrations || []).map(n => ({ ...n, _kind: 'narration' }));
+  // Drop narrations with no actual body text — they render as empty "thought"
+  // rows (tool-arg-only streams that finalizeThoughtBlock wiped). Persisted
+  // saves from before the fix may still contain these; strip them here too.
+  const rawNarrations = state.narrations || [];
+  const filteredNarrations = rawNarrations.filter(n => (n.body || '').trim().length > 0);
+  if (filteredNarrations.length !== rawNarrations.length) {
+    state.narrations = filteredNarrations;
+    try { persistAgentProcState(el.id?.replace(/^msg-/, '') || ''); } catch (_) {}
+  }
+  const narrations = filteredNarrations.map(n => ({ ...n, _kind: 'narration' }));
   const steps = (state.steps || []).map(s => ({ ...s, _kind: 'step' }));
   const hasOrder = [...narrations, ...steps].some(x => typeof x.order === 'number');
   const items = hasOrder
@@ -4223,11 +4540,21 @@ async function sendMessage() {
   // are added by the server over WS so we do NOT add them locally.
   setTyping(true);
 
+  // Upload any pending files before routing so the server can attach them
+  // to the proposal and forward to the build agent.
+  let uploadedAttachments = [];
+  if (pendingFiles.length > 0) {
+    uploadedAttachments = await uploadFiles([...pendingFiles]);
+  }
+
   try {
     const res = await fetch(`${API_BASE}/chat/${chatProjectId}/route`, {
       method: 'POST',
       headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({
+        text,
+        attachmentIds: uploadedAttachments.length > 0 ? uploadedAttachments : undefined,
+      }),
     });
 
     if (!res.ok) {
@@ -4479,24 +4806,7 @@ async function releaseLatest() {
   });
 }
 
-// Open the player for a project. For users who never deposited and haven't
-// already paid the one-time 20-credit unlock, we first show a fullscreen
-// in-app iframe of /dev/{projectId}/ with a frosted overlay asking them
-// to spend 20 credits — initData is only valid against the MAIN bot, so
-// the gate has to live here (in the main mini-app) instead of inside the
-// player itself.
-async function openTestPreview(projectId) {
-  let state = null;
-  try {
-    const res = await fetch(`${API_BASE}/preview/${encodeURIComponent(projectId)}/state`, { headers: apiHeaders() });
-    if (res.ok) state = await res.json();
-  } catch (err) {
-    console.warn('[preview] state check failed, falling open:', err);
-  }
-  if (state?.requiresPayment) {
-    openLockedPreview(projectId, state);
-    return;
-  }
+function openTestPreview(projectId) {
   launchPlayer(projectId);
 }
 
@@ -4507,110 +4817,6 @@ function launchPlayer(projectId) {
   tg?.openTelegramLink(`https://t.me/apps_father_player_bot/player?startapp=${startapp}`);
 }
 
-function openLockedPreview(projectId, state) {
-  closeLockedPreview();
-  const fee = Number(state?.fee || 20);
-  const balance = Number(state?.balance || 0);
-  const insufficient = balance < fee;
-  const iframeSrc = `${location.origin}/dev/${encodeURIComponent(projectId)}/`;
-
-  // Inline coin glyphs sized for each context. Gold (#fde68a → #f59e0b)
-  // for the price, dimmer for the balance row.
-  const ctaCoin = coinSvg(18, 12, '#fde68a');
-  const balCoin = coinSvg(13, 9, '#fbbf24');
-
-  const overlay = document.createElement('div');
-  overlay.id = 'locked-preview-overlay';
-  overlay.className = 'locked-preview-overlay';
-  overlay.innerHTML = `
-    <iframe class="locked-preview-iframe" src="${iframeSrc}" title="App preview"></iframe>
-    <div class="locked-preview-blur"></div>
-    <button type="button" class="locked-preview-close" id="locked-preview-close" aria-label="Close">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
-    </button>
-    <div class="locked-preview-card">
-      <div class="locked-preview-msg">${esc(t('paywall_message') || 'See what you built — unlock for')}&nbsp;${ctaCoin}&nbsp;<b>${fee.toLocaleString()}</b></div>
-      <button type="button" class="locked-preview-cta" id="locked-preview-cta">
-        <span class="lpv-cta-label">${esc(t('paywall_unlock_btn_v2') || 'Unlock for')}</span>
-        <span class="lpv-cta-price">${ctaCoin}<b>${fee.toLocaleString()}</b></span>
-      </button>
-      <div class="locked-preview-balance" id="locked-preview-balance">
-        ${esc(t('paywall_balance_v2') || 'Balance')}&nbsp;${balCoin}&nbsp;<b>${balance.toLocaleString()}</b>${insufficient ? ` <span class="lpv-low">· ${esc(t('paywall_insufficient_short') || 'top up')}</span>` : ''}
-      </div>
-    </div>
-  `;
-  document.body.appendChild(overlay);
-  if (insufficient) {
-    overlay.querySelector('.locked-preview-cta')?.classList.add('lpv-cta--low');
-  }
-  document.getElementById('locked-preview-close')?.addEventListener('click', closeLockedPreview);
-  document.getElementById('locked-preview-cta')?.addEventListener('click', () => unlockPreview(projectId));
-
-  // Let the "Made by Apps Father" splash inside the iframe play out (~1.8s + 0.5s fade)
-  // before revealing the blur + paywall card, so users perceive the app actually
-  // loading before being asked to unlock it.
-  overlay.classList.add('lpv-arming');
-  setTimeout(() => {
-    if (!overlay.isConnected) return;
-    overlay.classList.remove('lpv-arming');
-    overlay.classList.add('lpv-armed');
-    haptic('medium');
-  }, 2300);
-}
-
-function closeLockedPreview() {
-  const overlay = document.getElementById('locked-preview-overlay');
-  if (!overlay) return;
-  overlay.style.transition = 'opacity 0.2s';
-  overlay.style.opacity = '0';
-  setTimeout(() => overlay.remove(), 200);
-}
-
-async function unlockPreview(projectId) {
-  const cta = document.getElementById('locked-preview-cta');
-  if (!cta) return;
-  cta.disabled = true;
-  cta.classList.add('busy');
-  const originalHtml = cta.innerHTML;
-  cta.innerHTML = `<span class="lpv-cta-label">${esc(t('paywall_unlocking') || 'Unlocking…')}</span>`;
-  try {
-    const res = await fetch(`${API_BASE}/preview/${encodeURIComponent(projectId)}/unlock`, {
-      method: 'POST',
-      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok && data?.ok) {
-      if (typeof data.newCredits === 'number') {
-        userCredits = data.newCredits;
-        try { loadBalance(); } catch (_) { }
-      }
-      hapticNotify('success');
-      closeLockedPreview();
-      setTimeout(() => launchPlayer(projectId), 220);
-      return;
-    }
-    if (res.status === 402) {
-      closeLockedPreview();
-      showToast(t('paywall_insufficient') || 'Not enough credits — top up first.', 'error');
-      setTimeout(() => { try { openTopup(currentView || 'list'); } catch (_) { } }, 200);
-      return;
-    }
-    showToast(data?.error || 'Could not unlock', 'error');
-    cta.disabled = false;
-    cta.classList.remove('busy');
-    cta.innerHTML = originalHtml;
-  } catch (err) {
-    console.error('[preview] unlock failed:', err);
-    showToast('Network error — please try again.', 'error');
-    cta.disabled = false;
-    cta.classList.remove('busy');
-    cta.innerHTML = originalHtml;
-  }
-}
-
-function closeTestPreview() {
-  // no-op: kept for any residual onclick references
-}
 
 /** Full-screen log viewer inside WebApp (iframe + #initData for API auth). */
 function openAgentLogViewer(projectId, versionNum) {
@@ -4697,7 +4903,7 @@ function updateAttachPreview() {
 }
 
 async function uploadFiles(files) {
-  if (!chatProjectId || files.length === 0) return;
+  if (!chatProjectId || files.length === 0) return [];
   const formData = new FormData();
   for (const f of files) formData.append('files', f);
 
@@ -4709,11 +4915,12 @@ async function uploadFiles(files) {
     });
     if (res.ok) {
       const data = await res.json();
-      console.log('Uploaded:', data.files);
+      return data.files || [];
     }
   } catch (err) {
     console.error('Upload error:', err);
   }
+  return [];
 }
 
 // ── Detail view (settings) ──
@@ -4724,7 +4931,7 @@ async function openDetail(id) {
   currentProject = p;
 
   document.getElementById('detail-name').textContent = p.name;
-  document.getElementById('detail-username').textContent = p.botUsername ? `@${p.botUsername}` : '';
+  document.getElementById('detail-username').textContent = p.botUsername ? `@${p.botUsername}` : 'No bot connected';
 
   const avatarEl = document.getElementById('detail-avatar');
   if (p.avatarUrl) {
@@ -4735,6 +4942,10 @@ async function openDetail(id) {
     avatarEl.textContent = getInitials(p.name);
     avatarEl.style.background = `linear-gradient(135deg, ${c1}, ${c2})`;
   }
+
+  // ── New AS3 publish status panel ──
+  fetchPublishReadiness(p.id);
+  _bindAs3SettingsRows(p);
 
   const version = p.currentVersion || 0;
   const cost = p.totalCostUsd ? `$${Number(p.totalCostUsd).toFixed(2)}` : '$0.00';
@@ -4764,21 +4975,36 @@ async function openDetail(id) {
   const webappUrlRow = document.getElementById('webapp-url-row');
   const webappUrlSpoiler = document.getElementById('webapp-url-spoiler');
   document.getElementById('webapp-url-text').textContent = webappUrl;
-  webappUrlRow.style.display = isLive ? '' : 'none';
+  webappUrlRow.style.display = '';
   webappUrlSpoiler.classList.add('spoiler-active');
   webappUrlSpoiler.classList.remove('js-spoiler-revealed');
   destroySpoilerPoints(webappUrlSpoiler);
   setTimeout(() => generateSpoilerPoints(webappUrlSpoiler), 50);
 
   currentToken = null;
-  const tokenSection = document.getElementById('section-token');
   const spoiler = document.getElementById('token-spoiler');
   spoiler.classList.add('spoiler-active');
   spoiler.classList.remove('js-spoiler-revealed');
   document.getElementById('token-text').textContent = '';
-  tokenSection.style.display = 'none';
+  document.getElementById('token-wrap').style.display = 'none';
+  document.getElementById('token-help-text').style.display = 'none';
+  document.getElementById('detail-bot-actions').style.marginTop = '0';
+
+  // Bot action buttons — always visible in the token section
+  const botActionsEl = document.getElementById('detail-bot-actions');
+  if (p.botUsername) {
+    botActionsEl.innerHTML = `<div class="tm-revoke-button" id="detail-unlink-bot-btn">Unlink Bot</div>`;
+    botActionsEl.querySelector('#detail-unlink-bot-btn')
+      .addEventListener('click', () => handleUnlinkBot(p.id));
+  } else {
+    botActionsEl.innerHTML = `<div class="tm-active-button" id="detail-connect-bot-btn">Connect Bot</div>`;
+    botActionsEl.querySelector('#detail-connect-bot-btn')
+      .addEventListener('click', function () { handleLinkBotClick(p.id, this, () => openDetail(p.id)); });
+  }
+
   fetchToken(p.id);
 
+  // App rows (live only) — shown inside the section-app mini-card
   let appRows = '';
   if (isLive) {
     appRows += menuRowAction(t('detail_test_app'), 'af-icon-test', 'open-test-preview');
@@ -4794,20 +5020,20 @@ async function openDetail(id) {
   document.getElementById('detail-app-rows').querySelector('[data-action="open-bot"]')
     ?.addEventListener('click', () => tg?.openTelegramLink(`https://t.me/${p.botUsername}`));
 
-  let devRows = menuRowAction(t('detail_update_app'), 'af-icon-update', 'open-update');
-  if (isLive) devRows += menuRowAction(t('detail_release_version'), 'af-icon-release', 'open-release');
-  devRows += menuRowAction(t('detail_versions'), 'af-icon-versions', 'open-versions');
-  devRows += menuRowAction(t('detail_suggestions'), 'af-icon-suggest', 'open-suggestions');
+  // Dev rows — Versions, Update App
+  let devRows = menuRowAction(t('detail_update_app') || 'Update App', 'af-icon-update', 'open-update');
+  if (isLive) devRows += menuRowAction(t('detail_release_version') || 'Release Version', 'af-icon-release', 'open-release');
+  devRows += menuRowAction(t('detail_versions') || 'Versions', 'af-icon-versions', 'open-versions');
   document.getElementById('detail-dev-rows').innerHTML = devRows;
 
-  let moneyRows = menuRowAction(t('detail_features'), 'af-icon-features', 'open-features');
-  // if (hasFeature(p, 'ton_payment')) moneyRows += menuRow('Wallet', 'af-icon-wallet');
+  // Money rows — Paid Functions only (App Store progress is in the panel now)
+  let moneyRows = menuRowAction(t('detail_features') || 'Paid Functions', 'af-icon-features', 'open-features');
   document.getElementById('detail-money-rows').innerHTML = moneyRows;
-  document.getElementById('section-monetization').style.display = '';
 
+  // Settings rows
   let settingsRows = '';
-  settingsRows += menuRowAction(t('detail_edit_info'), 'af-icon-edit-info', 'open-edit-info');
-  if (isAdmin) settingsRows += menuRowAction(t('detail_regen_context'), 'af-icon-refresh', 'open-regen-context');
+  settingsRows += menuRowAction(t('detail_edit_info') || 'Change App Information', 'af-icon-edit-info', 'open-edit-info');
+  if (isAdmin) settingsRows += menuRowAction(t('detail_regen_context') || 'Regenerate Context', 'af-icon-refresh', 'open-regen-context');
   if (hasFeature(p, 'get_code')) settingsRows += menuRow('Edit Code', 'af-icon-code', `${baseUrl}/editor/${p.id}/`);
   settingsRows += menuRowAction(t('detail_env_vars') || 'Environment Variables', 'af-icon-code', 'open-env-vars');
   settingsRows += menuRowAction('File Bucket', 'af-icon-features', 'open-bucket');
@@ -4822,8 +5048,11 @@ async function openDetail(id) {
   document.getElementById('detail-settings-rows').querySelector('[data-action="open-bucket"]')
     ?.addEventListener('click', () => openBucket(p.id));
 
+
   document.getElementById('detail-money-rows').querySelector('[data-action="open-features"]')
     ?.addEventListener('click', () => openFeatures(p.id));
+  document.getElementById('detail-money-rows').querySelector('[data-action="open-publish"]')
+    ?.addEventListener('click', () => openPublish(p.id));
 
   document.getElementById('detail-dev-rows').querySelector('[data-action="open-update"]')
     ?.addEventListener('click', () => {
@@ -4857,7 +5086,7 @@ async function openDetail(id) {
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
             const d = await r.json();
             showToast(`Version #${d.released} released!`, 'success');
-            await loadProjects();
+            await loadProjects(0, true);
             openDetail(p.id);
           } catch (err) {
             console.error('Release error:', err);
@@ -4889,6 +5118,165 @@ async function openDetail(id) {
   showView('detail');
 }
 
+// ── New AS3 publish-status panel renderer ─────────────────────────────────
+async function fetchPublishReadiness(projectId) {
+  const pill = document.getElementById('as3-publish-status-pill');
+  const fill = document.getElementById('as3-publish-progress-fill');
+  const txt  = document.getElementById('as3-publish-progress-text');
+  const btn  = document.getElementById('as3-publish-btn');
+  if (!pill) return;
+
+  try {
+    const r = await fetch(`${API_BASE}/store/projects/${projectId}/readiness`, { headers: apiHeaders() });
+    if (!r.ok) {
+      _renderAs3Publish({ checks: { created: true, bot: false, info: false, token: false }, status: 'draft' });
+      return;
+    }
+    const data = await r.json();
+    const steps = data.steps || [];
+    const findStep = (key) => steps.find(s => s.key === key) || { done: false };
+    const checks = {
+      created: findStep('created').done,
+      bot:     findStep('bot').done,
+      info:    findStep('info').done && findStep('page').done,
+      token:   findStep('token').done,
+    };
+    _renderAs3Publish({
+      checks,
+      status: data.status || 'draft',
+      rejectedReason: data.rejectedReason || null,
+      missing: { info: [...(findStep('info').missing || []), ...(findStep('page').missing || [])] },
+    });
+    // Hand the readiness data over to publishState for openPublish/submit
+    publishState.readiness = data;
+    publishState.listingId = data.listingId;
+  } catch (e) {
+    _renderAs3Publish({ checks: { created: true, bot: false, info: false, token: false }, status: 'draft' });
+  }
+  // Wire submit button
+  if (btn && !btn._wired) {
+    btn._wired = true;
+    btn.onclick = () => onAs3PublishClick();
+  }
+}
+
+function _renderAs3Publish({ checks, status, rejectedReason, missing }) {
+  const pill = document.getElementById('as3-publish-status-pill');
+  const fill = document.getElementById('as3-publish-progress-fill');
+  const txt  = document.getElementById('as3-publish-progress-text');
+  const btn  = document.getElementById('as3-publish-btn');
+  const rejBox = document.getElementById('as3-rejection');
+  const rejReason = document.getElementById('as3-rejection-reason');
+
+  // Status pill
+  const statusMap = {
+    draft:     { txt: 'Draft',       cls: 'as3-publish-status-pill--draft' },
+    review:    { txt: 'In Review',   cls: 'as3-publish-status-pill--review' },
+    pending:   { txt: 'In Review',   cls: 'as3-publish-status-pill--review' },
+    approved:  { txt: 'Approved',    cls: 'as3-publish-status-pill--review' },
+    published: { txt: 'Published',   cls: 'as3-publish-status-pill--published' },
+    rejected:  { txt: 'Rejected',    cls: 'as3-publish-status-pill--rejected' },
+  };
+  const s = statusMap[status] || statusMap.draft;
+  if (pill) { pill.textContent = s.txt; pill.className = 'as3-publish-status-pill ' + s.cls; }
+
+  // Checklist
+  const sub = {
+    created: 'Project exists',
+    bot:     checks.bot ? 'Bot is connected' : 'Connect a Telegram bot',
+    info:    checks.info ? 'All fields filled' : (missing?.info?.length ? `Missing: ${missing.info.join(', ')}` : 'Fill the App Information'),
+    token:   checks.token ? 'Token is created' : 'Create the App Token',
+  };
+  ['created', 'bot', 'info', 'token'].forEach((k) => {
+    const row = document.querySelector(`.as3-check[data-check="${k}"]`);
+    if (!row) return;
+    row.classList.toggle('is-done', !!checks[k]);
+    const subEl = row.querySelector('.as3-check-sub');
+    if (subEl) subEl.textContent = sub[k];
+  });
+
+  // Progress
+  const doneCount = Object.values(checks).filter(Boolean).length;
+  const pct = Math.round((doneCount / 4) * 100);
+  if (fill) fill.style.width = pct + '%';
+  if (txt)  txt.textContent = `${doneCount} / 4`;
+
+  // Rejection box
+  if (status === 'rejected' && rejectedReason) {
+    if (rejBox) rejBox.style.display = '';
+    if (rejReason) rejReason.textContent = rejectedReason;
+  } else if (rejBox) {
+    rejBox.style.display = 'none';
+  }
+
+  // Submit button label/style by status + readiness
+  if (btn) {
+    btn.disabled = false;
+    btn.classList.remove('as3-publish-btn--success', 'as3-publish-btn--neutral');
+    if (status === 'published') {
+      btn.textContent = 'View in App Store';
+      btn.classList.add('as3-publish-btn--success');
+    } else if (status === 'review' || status === 'pending' || status === 'approved') {
+      btn.textContent = 'Awaiting moderator…';
+      btn.classList.add('as3-publish-btn--neutral');
+      btn.disabled = true;
+    } else if (status === 'rejected') {
+      btn.textContent = 'Resubmit for Review';
+    } else if (doneCount === 4) {
+      btn.textContent = 'Send for Review';
+    } else {
+      btn.textContent = 'Send for Review';
+      btn.disabled = true;
+    }
+  }
+}
+
+async function onAs3PublishClick() {
+  if (!currentProject) return;
+  const status = publishState.readiness?.status;
+  if (status === 'published') {
+    openStoreApp(publishState.listingId || currentProject.id);
+    return;
+  }
+  if (!publishState.listingId) {
+    showToast('Please fill App Information first.', 'info');
+    return;
+  }
+  const btn = document.getElementById('as3-publish-btn');
+  btn.disabled = true;
+  btn.textContent = 'Submitting…';
+  try {
+    const r = await fetch(`${API_BASE}/store/listings/${publishState.listingId}/submit`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...apiHeaders() }, body: '{}',
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'Submit failed');
+    showToast('Sent for review!', 'success');
+    fetchPublishReadiness(currentProject.id);
+  } catch (e) {
+    showToast(e.message || 'Submit failed', 'error');
+    btn.disabled = false;
+    btn.textContent = 'Send for Review';
+  }
+}
+
+// Wire AS3 settings rows (App Info, App Token, Versions, etc.)
+function _bindAs3SettingsRows(p) {
+  const wire = (id, fn) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.onclick = fn;
+  };
+  wire('as3-row-info',     () => openAppInfo(p.id));
+  wire('as3-row-token',    () => openAppToken(p.id));
+  wire('as3-row-versions', () => openVersions(p.id));
+  wire('as3-row-paid',     () => openFeatures(p.id));
+  wire('as3-row-env',      () => openProjectEnv(p.id));
+  wire('as3-row-bucket',   () => openBucket(p.id));
+  wire('as3-row-transfer', () => openTransfer());
+  wire('as3-row-delete',   () => openDeleteApp());
+}
+
 async function fetchToken(projectId) {
   try {
     const res = await fetch(`${API_BASE}/token/${projectId}`, { headers: apiHeaders() });
@@ -4896,7 +5284,8 @@ async function fetchToken(projectId) {
     const data = await res.json();
     currentToken = data.token;
     document.getElementById('token-text').textContent = currentToken;
-    document.getElementById('section-token').style.display = '';
+    document.getElementById('token-wrap').style.display = '';
+    document.getElementById('token-help-text').style.display = '';
     const spoiler = document.getElementById('token-spoiler');
     generateSpoilerPoints(spoiler);
   } catch (err) {
@@ -5058,7 +5447,7 @@ async function saveEditInfo() {
         currentProject.description = description;
       }
       editPhotoFile = null;
-      await loadProjects();
+      await loadProjects(0, true);
       openDetail(currentProject.id);
     }
   } catch (err) {
@@ -5101,7 +5490,7 @@ async function submitTransfer() {
     showToast(`App transferred to @${data.transferredTo}`, 'success');
     currentProject = null;
     currentToken = null;
-    await loadProjects();
+    await loadProjects(0, true);
     showView('list');
   } catch (err) {
     tg?.MainButton?.hideProgress();
@@ -5148,7 +5537,7 @@ async function submitDelete() {
     currentProject = null;
     currentToken = null;
     chatProjectId = null;
-    await loadProjects();
+    await loadProjects(0, true);
     showView('list');
   } catch (err) {
     tg?.MainButton?.hideProgress();
@@ -5590,7 +5979,7 @@ async function applyAiAvatar(imageUrl, previousBg) {
     }
     showToast(t('ai_avatar_applied') || 'Avatar updated!', 'success');
     // Reload list so the new avatar shows up everywhere; pulls a fresh URL.
-    await loadProjects();
+    await loadProjects(0, true);
     const fresh = projects.find(p => p.id === currentProject.id);
     if (fresh) {
       currentProject.avatarUrl = fresh.avatarUrl;
@@ -7210,48 +7599,116 @@ async function openAdmConfig() {
   } catch (err) { el.innerHTML = `<div class="adm-empty">Failed to load config</div>`; }
 }
 
-function showView(view) {
+// Navigation depth — higher = deeper in the hierarchy → forward animation
+const VIEW_DEPTH = {
+  list: 0, onboarding: 0, wallet: 0, other: 0,
+  chat: 1, detail: 1, topup: 1, tasks: 1, language: 1,
+  help: 1, referral: 1, partner: 1, 'slots-full': 1,
+  store: 1, portfolio: 1,
+  'edit-info': 2, transfer: 2, delete: 2, versions: 2,
+  features: 2, 'project-env': 2, bucket: 2, 'release-notes': 2,
+  'store-app': 2, publish: 2,
+  admin: 1, 'adm-dashboard': 2, 'adm-sources': 2, 'adm-activities': 2,
+  'adm-users': 2, 'adm-apps': 2, 'adm-vouchers': 2, 'adm-config': 2,
+  'adm-source-users': 3, 'admin-user': 3, 'version-detail': 3,
+};
+
+const ALL_VIEW_IDS = [
+  'list', 'detail', 'edit-info', 'transfer', 'delete', 'partner',
+  'referral', 'help', 'release-notes', 'admin', 'adm-dashboard',
+  'adm-sources', 'adm-source-users', 'adm-activities', 'adm-users',
+  'adm-apps', 'adm-vouchers', 'adm-config', 'admin-user',
+  'versions', 'version-detail', 'features', 'tasks', 'slots-full',
+  'topup', 'language', 'onboarding', 'project-env', 'bucket', 'chat',
+  'store', 'store-app', 'publish', 'app-info', 'app-token', 'portfolio', 'wallet', 'other',
+];
+
+// Which top-level views belong to which bottom-nav tab.
+const TAB_VIEWS = {
+  list: 'list',
+  store: 'store',
+  wallet: 'wallet',
+  other: 'other',
+};
+// Views that are depth-0 / top-level tabs (the nav stays visible here).
+const TAB_ROOT_VIEWS = new Set(['list', 'store', 'wallet', 'other']);
+// For deeper views, which tab should remain highlighted?
+const VIEW_PARENT_TAB = {
+  chat: 'list', detail: 'list', 'edit-info': 'list', transfer: 'list',
+  delete: 'list', partner: 'list', topup: 'list', tasks: 'list',
+  'slots-full': 'list', versions: 'list', 'version-detail': 'list',
+  features: 'list', 'project-env': 'list', bucket: 'list',
+  portfolio: 'store', 'store-app': 'store', publish: 'store',
+  'app-info': 'list', 'app-token': 'list',
+  referral: 'other', help: 'other', 'release-notes': 'other', language: 'other',
+  admin: 'other', 'adm-dashboard': 'other', 'adm-sources': 'other',
+  'adm-activities': 'other', 'adm-users': 'other', 'adm-apps': 'other',
+  'adm-vouchers': 'other', 'adm-config': 'other', 'adm-source-users': 'other',
+  'admin-user': 'other',
+};
+const TAB_ORDER = ['list', 'store', 'wallet', 'other'];
+
+let _viewTransitioning = false;
+
+function showView(view, explicitDir) {
+  const prevView = currentView;
   currentView = view;
+
   document.body.classList.toggle('scroll-lock', view === 'chat');
   if (view === 'list') loadProjects();
-  document.getElementById('view-list').classList.toggle('hidden', view !== 'list');
-  document.getElementById('view-detail').classList.toggle('hidden', view !== 'detail');
-  document.getElementById('view-edit-info').classList.toggle('hidden', view !== 'edit-info');
-  document.getElementById('view-transfer').classList.toggle('hidden', view !== 'transfer');
-  document.getElementById('view-delete').classList.toggle('hidden', view !== 'delete');
-  document.getElementById('view-partner').classList.toggle('hidden', view !== 'partner');
-  document.getElementById('view-referral').classList.toggle('hidden', view !== 'referral');
-  document.getElementById('view-help').classList.toggle('hidden', view !== 'help');
-  document.getElementById('view-release-notes').classList.toggle('hidden', view !== 'release-notes');
-  document.getElementById('view-admin').classList.toggle('hidden', view !== 'admin');
-  document.getElementById('view-adm-dashboard').classList.toggle('hidden', view !== 'adm-dashboard');
-  document.getElementById('view-adm-sources').classList.toggle('hidden', view !== 'adm-sources');
-  document.getElementById('view-adm-source-users').classList.toggle('hidden', view !== 'adm-source-users');
-  document.getElementById('view-adm-activities').classList.toggle('hidden', view !== 'adm-activities');
-  document.getElementById('view-adm-users').classList.toggle('hidden', view !== 'adm-users');
-  document.getElementById('view-adm-apps').classList.toggle('hidden', view !== 'adm-apps');
-  document.getElementById('view-adm-vouchers').classList.toggle('hidden', view !== 'adm-vouchers');
-  document.getElementById('view-adm-config').classList.toggle('hidden', view !== 'adm-config');
-  document.getElementById('view-admin-user').classList.toggle('hidden', view !== 'admin-user');
-  document.getElementById('view-versions').classList.toggle('hidden', view !== 'versions');
-  document.getElementById('view-version-detail').classList.toggle('hidden', view !== 'version-detail');
-  document.getElementById('view-features').classList.toggle('hidden', view !== 'features');
-  document.getElementById('view-tasks').classList.toggle('hidden', view !== 'tasks');
-  document.getElementById('view-slots-full').classList.toggle('hidden', view !== 'slots-full');
-  document.getElementById('view-topup').classList.toggle('hidden', view !== 'topup');
-  document.getElementById('view-language').classList.toggle('hidden', view !== 'language');
-  document.getElementById('view-onboarding').classList.toggle('hidden', view !== 'onboarding');
-  document.getElementById('view-project-env')?.classList.toggle('hidden', view !== 'project-env');
-  document.getElementById('view-bucket')?.classList.toggle('hidden', view !== 'bucket');
+
+  // Determine direction
+  const isForward = explicitDir
+    ? explicitDir === 'forward'
+    : (VIEW_DEPTH[view] ?? 0) >= (VIEW_DEPTH[prevView] ?? 0);
+
+  // Can we animate?
+  const oldEl = prevView && prevView !== view
+    ? document.getElementById(`view-${prevView}`)
+    : null;
+  const shouldAnimate = !_viewTransitioning && !!oldEl && !oldEl.classList.contains('hidden');
+
+  if (shouldAnimate) {
+    _viewTransitioning = true;
+    const exitCls = isForward ? 'view-exit-fwd' : 'view-exit-back';
+    const enterCls = isForward ? 'view-enter-fwd' : 'view-enter-back';
+    // Fix old view in place so it stays visible while we run the toggle loop
+    oldEl.classList.add('view-is-exiting', exitCls);
+
+    // Show/hide all views — skip the exiting one so it stays visible
+    for (const v of ALL_VIEW_IDS) {
+      const el = document.getElementById(`view-${v}`);
+      if (!el) continue;
+      if (v === prevView) continue; // keep exiting view visible during animation
+      el.classList.toggle('hidden', v !== view);
+    }
+
+    // Apply enter animation to the new view
+    const newEl = document.getElementById(`view-${view}`);
+    if (newEl) newEl.classList.add('view-is-entering', enterCls);
+
+    setTimeout(() => {
+      oldEl.classList.remove('view-is-exiting', exitCls);
+      oldEl.classList.add('hidden');
+      if (newEl) newEl.classList.remove('view-is-entering', enterCls);
+      _viewTransitioning = false;
+    }, 240);
+  } else {
+    // No animation — instant switch
+    for (const v of ALL_VIEW_IDS) {
+      const el = document.getElementById(`view-${v}`);
+      if (!el) continue;
+      el.classList.toggle('hidden', v !== view);
+    }
+  }
+
+  // Update bottom nav active state and visibility.
+  _updateBottomNav(view);
 
   const headerDropdown = document.getElementById('chat-header-dropdown');
   if (headerDropdown) headerDropdown.classList.add('hidden');
 
-  const chatEl = document.getElementById('view-chat');
-  if (chatEl) chatEl.classList.toggle('hidden', view !== 'chat');
-  if (view === 'chat' && isProcessing) {
-    showStopButton();
-  }
+  if (view === 'chat' && isProcessing) showStopButton();
 
   if (tg) {
     try { tg.setHeaderColor('#000000'); } catch { }
@@ -7260,11 +7717,8 @@ function showView(view) {
   }
 
   if (tg?.BackButton) {
-    if (view === 'list') {
-      tg.BackButton.hide();
-    } else {
-      tg.BackButton.show();
-    }
+    if (view === 'list') tg.BackButton.hide();
+    else tg.BackButton.show();
   }
 
   if (tg?.MainButton) {
@@ -7288,8 +7742,6 @@ function showView(view) {
       tg.MainButton.color = tg.themeParams?.button_color || '#3390ec';
       tg.MainButton.textColor = tg.themeParams?.button_text_color || '#ffffff';
       tg.MainButton.show();
-    } else if (view === 'topup') {
-      tg.MainButton.hide();
     } else {
       tg.MainButton.hide();
     }
@@ -7298,7 +7750,21 @@ function showView(view) {
 
 // ── Init ──
 
-async function loadProjects(retry = 0) {
+let _loadProjectsLastAt = 0;   // timestamp of last successful fetch
+let _loadProjectsInFlight = false; // prevent concurrent fetches
+const LOAD_PROJECTS_COOLDOWN = 30_000; // ms — don't re-fetch within 30 s
+
+async function loadProjects(retry = 0, force = false) {
+  const now = Date.now();
+  // Skip if a fetch is already in flight.
+  if (_loadProjectsInFlight) return;
+  // Skip if data is fresh enough and this is a routine navigation call.
+  if (!force && retry === 0 && now - _loadProjectsLastAt < LOAD_PROJECTS_COOLDOWN) {
+    // Data is fresh — just re-render without fetching.
+    renderAppList();
+    return;
+  }
+  _loadProjectsInFlight = true;
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
@@ -7308,17 +7774,21 @@ async function loadProjects(retry = 0) {
     const data = await res.json();
     projects = data.projects || data;
     slots = data.slots || { used: projects.length, total: 5 };
+    _loadProjectsLastAt = Date.now();
     renderAppList();
     loadTopupBalance();
     loadSamples();
   } catch (err) {
     console.error('Failed to load projects:', err);
     if (retry < 2) {
-      setTimeout(() => loadProjects(retry + 1), 1500);
+      _loadProjectsInFlight = false;
+      setTimeout(() => loadProjects(retry + 1, force), 1500);
       return;
     }
     document.getElementById('app-list').innerHTML =
       `<div class="tm-row-container tm-row-results-empty"><b>Failed to load apps</b><div>${esc(err.message)}</div></div>`;
+  } finally {
+    _loadProjectsInFlight = false;
   }
 }
 
@@ -7330,7 +7800,8 @@ async function loadSamples() {
     if (!res.ok) return;
     const data = await res.json();
     const list = document.getElementById('samples-list');
-    if (!data.samples?.length) { list.closest('section')?.remove(); return; }
+    if (!list) { samplesLoaded = true; return; }
+    if (!data.samples?.length) { list.closest('section')?.remove(); samplesLoaded = true; return; }
     let html = '';
     for (const s of data.samples) {
       const avatar = s.avatarUrl
@@ -8163,36 +8634,36 @@ async function init() {
       if (currentView === 'version-detail') {
         openVersions(currentProject.id);
       } else if (currentView === 'versions') {
-        showView('detail');
+        showView('detail', 'back');
       } else if (currentView === 'features') {
         const ret = featuresReturnView || 'detail';
         featuresReturnView = null;
-        showView(ret);
+        showView(ret, 'back');
       } else if (currentView === 'edit-info') {
-        showView('detail');
+        showView('detail', 'back');
       } else if (currentView === 'project-env') {
-        showView('detail');
+        showView('detail', 'back');
       } else if (currentView === 'transfer') {
-        showView('detail');
+        showView('detail', 'back');
       } else if (currentView === 'delete') {
-        showView('detail');
+        showView('detail', 'back');
       } else if (currentView === 'tasks') {
-        showView('list');
+        showView('list', 'back');
       } else if (currentView === 'slots-full') {
-        showView('list');
+        showView('list', 'back');
       } else if (currentView === 'topup') {
-        showView(topupReturnView || 'list');
+        showView(topupReturnView || 'list', 'back');
         topupReturnView = null;
       } else if (currentView === 'partner') {
-        showView('list');
+        showView('list', 'back');
       } else if (currentView === 'referral') {
-        showView('list');
+        showView('list', 'back');
       } else if (currentView === 'help') {
-        showView('list');
+        showView('list', 'back');
       } else if (currentView === 'release-notes') {
-        showView('list');
+        showView('list', 'back');
       } else if (currentView === 'language') {
-        showView('list');
+        showView('list', 'back');
       } else if (currentView === 'onboarding') {
         // Treat Back the same as the final "Begin" button so people
         // who hit it early aren't dumped onto a half-shown carousel.
@@ -8212,9 +8683,9 @@ async function init() {
       } else if (currentView === 'adm-dashboard' || currentView === 'adm-sources' || currentView === 'adm-activities' || currentView === 'adm-users' || currentView === 'adm-apps' || currentView === 'adm-vouchers' || currentView === 'adm-config') {
         openAdmin();
       } else if (currentView === 'admin') {
-        showView('list');
+        showView('list', 'back');
       } else if (currentView === 'detail') {
-        showView('chat');
+        showView('chat', 'back');
       } else if (currentView === 'chat') {
         wsGeneration++;
         if (chatWs) { try { chatWs.onclose = null; chatWs.close(); } catch { } chatWs = null; }
@@ -8225,10 +8696,10 @@ async function init() {
           admChatReturn = false;
           openAdmin();
         } else {
-          showView('list');
+          showView('list', 'back');
         }
       } else {
-        showView('list');
+        showView('list', 'back');
         currentProject = null;
         currentToken = null;
       }
@@ -8301,6 +8772,8 @@ async function init() {
 
   document.getElementById('btn-topup')?.addEventListener('click', () => openTopup('list'));
   document.getElementById('btn-earn-credits')?.addEventListener('click', () => openTasks());
+  document.getElementById('btn-store-page')?.addEventListener('click', () => openStore());
+  document.getElementById('btn-portfolio-page')?.addEventListener('click', () => openPortfolio());
   document.getElementById('btn-referral-page').addEventListener('click', () => openReferral());
   document.getElementById('btn-release-notes-page').addEventListener('click', () => openReleaseNotes());
   document.getElementById('btn-help-page').addEventListener('click', () => openHelp());
@@ -8370,7 +8843,7 @@ async function init() {
   checkAdmin();
   checkPartner();
   loadBalance();
-  await loadProjects();
+  await loadProjects(0, true);
   maybeHandleReservedStartParam();
 }
 
@@ -8907,6 +9380,2507 @@ async function deleteBucketFile(filename) {
     showToast(e.message, 'error');
   }
 }
+
+// ── Splash screen ───────────────────────────────────────────────────────────
+(function initSplash() {
+  const splash = document.getElementById('app-splash');
+  if (!splash) return;
+  const dismiss = () => {
+    // Animate the first visible view in while the splash fades out
+    const firstView = ALL_VIEW_IDS
+      .map(v => document.getElementById(`view-${v}`))
+      .find(el => el && !el.classList.contains('hidden'));
+    if (firstView) {
+      firstView.classList.add('view-is-entering', 'view-enter-fwd');
+      setTimeout(() => firstView.classList.remove('view-is-entering', 'view-enter-fwd'), 380);
+    }
+    splash.classList.add('fade-out');
+    setTimeout(() => { try { splash.remove(); } catch {} }, 400);
+  };
+  setTimeout(dismiss, 2000);
+})();
+
+// ─────────────────────────────────────────────────────────────────────────
+// ── App Store ────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────
+
+let storeState = { tab: 'trending', q: '', items: [] };
+let storeDetailState = {
+  listingId: null,
+  listing: null,
+  tradeMode: 'buy',
+  quoteTimer: null,
+  pollTimer: null,
+  chartMode: 'price',
+  tradesCache: [],
+  totalSupply: 1e9,
+  scrollHandler: null,
+  resizeHandler: null,
+};
+
+// Redraw the chart when the view container resizes (e.g. orientation change,
+// keyboard show/hide). Installed once.
+window.addEventListener('resize', () => {
+  if (typeof drawTokenChart === 'function' && storeDetailState && storeDetailState.tradesCache) {
+    const view = document.getElementById('view-store-app');
+    if (view && !view.classList.contains('hidden')) drawTokenChart();
+  }
+});
+let publishState = {
+  listing: null,
+  projectId: null,
+  // Publisher-controlled liquidity inputs (used when sealing the deploy).
+  initialLiquidityTon: 5,
+  initialLiquidityTokenShare: 0.5,
+  publishConfig: null,
+  // Deploy-flow runtime state.
+  deployStep: 'connect',  // connect → deploy → lp → done
+  jettonMasterAddress: null,
+};
+
+function fmtTon(n, d) {
+  if (n === null || n === undefined || isNaN(n)) return '—';
+  if (n === 0) return '0';
+  const dec = d != null ? d : (Math.abs(n) < 0.0001 ? 8 : Math.abs(n) < 0.01 ? 6 : Math.abs(n) < 1 ? 4 : 2);
+  return Number(n).toFixed(dec).replace(/\.?0+$/, '');
+}
+
+function fmtCompact(n) {
+  if (n === null || n === undefined) return '—';
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(2) + 'K';
+  return Number(n).toFixed(2);
+}
+
+async function openStore() {
+  showView('store', 'forward');
+  if (tg?.BackButton) {
+    tg.BackButton.show();
+    tg.BackButton.onClick(() => showView('list', 'back'));
+  }
+  if (tg?.MainButton) tg.MainButton.hide();
+
+  // Wire tabs once.
+  document.querySelectorAll('#view-store .store-tab').forEach((btn) => {
+    btn.onclick = () => {
+      document.querySelectorAll('#view-store .store-tab').forEach(b => b.classList.toggle('active', b === btn));
+      storeState.tab = btn.dataset.tab;
+      loadStoreList();
+    };
+  });
+  const search = document.getElementById('store-search');
+  if (search) {
+    let t = null;
+    search.oninput = () => {
+      clearTimeout(t);
+      t = setTimeout(() => { storeState.q = search.value.trim(); loadStoreList(); }, 250);
+    };
+  }
+  loadStoreList();
+}
+
+async function loadStoreList() {
+  const list = document.getElementById('store-list');
+  list.innerHTML = '<div class="store-loading">Loading…</div>';
+  try {
+    const params = new URLSearchParams({ tab: storeState.tab, limit: '20' });
+    if (storeState.q) params.set('q', storeState.q);
+    const r = await fetch(`/api/store/listings?${params.toString()}`);
+    if (!r.ok) throw new Error('failed');
+    const data = await r.json();
+    storeState.items = data.items || [];
+    renderStoreList(data.items || []);
+  } catch (e) {
+    list.innerHTML = '<div class="store-loading">Failed to load</div>';
+  }
+}
+
+function renderStoreList(items) {
+  const list = document.getElementById('store-list');
+  const featuredEl = document.getElementById('store-featured');
+  const listHeader = document.getElementById('store-list-header');
+  const listCount = document.getElementById('store-list-count');
+
+  if (!items.length) {
+    if (featuredEl) featuredEl.style.display = 'none';
+    if (listHeader) listHeader.style.display = 'none';
+    list.innerHTML = '<div class="store-empty">No apps yet — be the first to publish your app to the store.</div>';
+    return;
+  }
+
+  // Featured banner: first item in Trending tab gets the large hero card
+  let listItems = items;
+  if (featuredEl) {
+    if (storeState.tab === 'trending' && items.length > 0) {
+      const f = items[0];
+      const ft = f.token || {};
+      const flogo = ft.logoFilename ? `/bucket/${f.projectId}/${ft.logoFilename}` : '';
+      featuredEl.innerHTML = `
+        ${flogo ? `<div class="store-featured-bg" style="background-image:url('${flogo}')"></div>` : ''}
+        <div class="store-featured-content">
+          ${flogo
+            ? `<img class="store-featured-logo" src="${flogo}" alt="">`
+            : `<div class="store-featured-logo store-card-logo-fallback">${(f.projectName || '?')[0]}</div>`}
+          <div class="store-featured-text">
+            <div class="store-featured-eyebrow">★ Featured</div>
+            <div class="store-featured-name">${escHtml(f.projectName || ft.name || '—')}</div>
+            <div class="store-featured-desc">${escHtml(f.shortDescription || '')}</div>
+            <span class="store-featured-cta">Open
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </span>
+          </div>
+        </div>
+      `;
+      featuredEl.style.display = '';
+      featuredEl.onclick = () => openStoreApp(f.listingId);
+      listItems = items.slice(1);
+    } else {
+      featuredEl.style.display = 'none';
+    }
+  }
+
+  if (listHeader) {
+    listHeader.style.display = listItems.length ? '' : 'none';
+    if (listCount) listCount.textContent = listItems.length === 1 ? '1 app' : `${listItems.length} apps`;
+  }
+
+  // Alternate full/minimized every ~3 items to mirror iOS App Store rhythm:
+  // items 0,1 → minimized; item 2 → full (has screenshots); repeat
+  list.innerHTML = listItems.map((it, idx) => _renderStoreCard(it, idx)).join('');
+  list.querySelectorAll('.store-card').forEach((card) => {
+    card.onclick = () => openStoreApp(card.dataset.id);
+  });
+}
+
+function _renderStoreCard(it, idx) {
+  const t = it.token || {};
+  const logo = t.logoFilename ? `/bucket/${it.projectId}/${t.logoFilename}` : '';
+  const showRank = storeState.tab === 'top' || storeState.tab === 'trending';
+
+  // Price change badge (if available)
+  const priceTon = t.priceTon || 0;
+  const priceFmt = priceTon > 0 ? `${fmtTon(priceTon)} TON` : null;
+  const change24h = t.change24h; // percent or null
+  let changeHtml = '';
+  if (change24h != null && change24h !== 0) {
+    const cls = change24h > 0 ? 'up' : 'down';
+    const sign = change24h > 0 ? '+' : '';
+    changeHtml = ` <span class="store-card-badge-change ${cls}">${sign}${change24h.toFixed(1)}%</span>`;
+  }
+
+  // Icon markup
+  const iconHtml = logo
+    ? `<img src="${logo}" alt="">`
+    : `<div class="store-card-logo-fallback">${escHtml((it.projectName || t.symbol || '?')[0].toUpperCase())}</div>`;
+
+  // Badge below icon: ticker + price (or change)
+  const badgeContent = t.symbol
+    ? `$${escHtml(t.symbol)}${changeHtml}`
+    : (priceFmt ? escHtml(priceFmt) : '');
+  const badgeHtml = badgeContent ? `<div class="store-card-badge">${badgeContent}</div>` : '';
+
+  // Screenshots strip — shown for every 3rd item (full display)
+  const screenshots = it.screenshots || [];
+  const isFull = screenshots.length > 0 && (idx % 3 === 2);
+  let screensHtml = '';
+  if (isFull) {
+    const displayShots = screenshots.slice(0, 3);
+    const thumbs = displayShots.map(s => {
+      const src = `/bucket/${it.projectId}/${s}`;
+      return `<div class="store-card-screen"><img src="${src}" alt="" loading="lazy"></div>`;
+    });
+    // Pad to 3 placeholders if fewer screenshots
+    while (thumbs.length < 3) thumbs.push(`<div class="store-card-screen"><div class="store-card-screen-placeholder"></div></div>`);
+    screensHtml = `<div class="store-card-screens">${thumbs.join('')}</div>`;
+  }
+
+  // Category / meta subtitle
+  const catText = it.category || '';
+  const mcapText = `MC ${fmtCompact(t.marketCapTon || 0)} TON`;
+  const metaParts = [];
+  if (t.symbol) metaParts.push(`<span class="store-card-meta-ticker">$${escHtml(t.symbol)}</span>`);
+  if (catText) metaParts.push(`<span class="store-card-meta-sep">·</span><span class="store-card-meta-mcap">${escHtml(catText)}</span>`);
+  else metaParts.push(`<span class="store-card-meta-mcap">${mcapText}</span>`);
+
+  return `
+    <div class="store-card" data-id="${it.listingId}">
+      <div class="store-card-row">
+        ${showRank ? `<div class="store-card-rank">${idx + 1}</div>` : ''}
+        <div class="store-card-logo">
+          ${iconHtml}
+          ${badgeHtml}
+        </div>
+        <div class="store-card-body">
+          <div class="store-card-name">${escHtml(it.projectName || t.name || '—')}</div>
+          <div class="store-card-desc">${escHtml(it.shortDescription || it.description || '')}</div>
+          <div class="store-card-meta">${metaParts.join('')}</div>
+        </div>
+        <div class="store-card-side">
+          <div class="store-card-get">${priceFmt ? escHtml(priceFmt) : 'Open'}</div>
+          ${priceFmt ? '<div class="store-card-price-sub">per token</div>' : ''}
+        </div>
+      </div>
+      ${screensHtml}
+    </div>
+  `;
+}
+
+function escHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+async function openStoreApp(listingId) {
+  storeDetailState.listingId = listingId;
+  showView('store-app', 'forward');
+  if (tg?.BackButton) {
+    tg.BackButton.show();
+    tg.BackButton.onClick(() => {
+      stopStoreAppPolling();
+      showView('store', 'back');
+    });
+  }
+  await loadStoreApp(listingId);
+}
+
+function stopStoreAppPolling() {
+  if (storeDetailState.pollTimer) { clearTimeout(storeDetailState.pollTimer); storeDetailState.pollTimer = null; }
+  if (storeDetailState.quoteTimer) { clearTimeout(storeDetailState.quoteTimer); storeDetailState.quoteTimer = null; }
+}
+
+async function loadStoreApp(listingId) {
+  try {
+    const r = await fetch(`/api/store/listings/${listingId}`);
+    if (!r.ok) throw new Error('not found');
+    const data = await r.json();
+    storeDetailState.listing = data;
+    renderStoreApp(data);
+  } catch (e) {
+    document.getElementById('store-detail-name').textContent = 'Not found';
+  }
+}
+
+function renderStoreApp(d) {
+  const t = d.token || {};
+
+  // ── Hero ────────────────────────────────────────────────────────────────
+  document.getElementById('store-detail-name').textContent = d.projectName || t.name || '—';
+  document.getElementById('store-detail-tagline').textContent = d.shortDescription || '';
+
+  const logo = t.logoFilename ? `/bucket/${d.projectId}/${t.logoFilename}` : '';
+  const logoEl = document.getElementById('store-detail-logo');
+  if (logo) {
+    logoEl.src = logo; logoEl.style.display = '';
+  } else {
+    logoEl.style.display = 'none';
+  }
+
+  // Banner: explicit bannerFilename or blurred logo as fallback
+  const bannerEl = document.getElementById('store-detail-banner');
+  if (bannerEl) {
+    const bannerSrc = d.bannerFilename
+      ? `/bucket/${d.projectId}/${d.bannerFilename}`
+      : logo || '';
+    bannerEl.style.backgroundImage = bannerSrc ? `url('${bannerSrc}')` : 'none';
+    // When using logo as banner, apply extra blur + saturate for an atmospheric look
+    bannerEl.classList.toggle('store-d-banner--blurred', !d.bannerFilename && !!logo);
+  }
+
+  const tickerPill = document.getElementById('store-detail-ticker-pill');
+  if (t.symbol) {
+    tickerPill.textContent = `$${t.symbol}`;
+    tickerPill.style.display = '';
+  } else {
+    tickerPill.style.display = 'none';
+  }
+
+  const openBtn = document.getElementById('store-d-open-app');
+  if (d.botUsername) {
+    openBtn.style.display = '';
+    openBtn.onclick = () => tg?.openTelegramLink?.(`https://t.me/${d.botUsername}`);
+  } else {
+    openBtn.style.display = 'none';
+  }
+
+  // ── Quick stats bar ─────────────────────────────────────────────────────
+  document.getElementById('store-d-stat-price').textContent = `${fmtTon(t.priceTon)} TON`;
+  document.getElementById('store-d-stat-mcap').textContent = `${fmtCompact(t.marketCapTon || 0)} TON`;
+  document.getElementById('store-d-stat-holders').textContent = String(d.holdersCount || 0);
+
+  // 24h price-change (computed from earliest vs latest trade in window).
+  const trades = d.trades || [];
+  const priceSubEl = document.getElementById('store-d-stat-price-sub');
+  if (trades.length >= 2) {
+    const first = trades[0].priceTon;
+    const last = trades[trades.length - 1].priceTon;
+    const pct = first > 0 ? ((last - first) / first) * 100 : 0;
+    const cls = pct > 0.01 ? 'up' : pct < -0.01 ? 'down' : '';
+    priceSubEl.textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+    priceSubEl.className = `store-d-quickbar-sub ${cls}`;
+  } else {
+    priceSubEl.textContent = 'New';
+    priceSubEl.className = 'store-d-quickbar-sub';
+  }
+
+  // ── Screenshots carousel ────────────────────────────────────────────────
+  const screensWrap = document.getElementById('store-detail-screens');
+  const dotsWrap = document.getElementById('store-detail-screens-dots');
+  const screensSection = document.getElementById('store-detail-screens-section');
+  const screens = d.screenshots || [];
+  if (screens.length) {
+    screensWrap.innerHTML = screens.map((f) =>
+      `<div class="store-d-screen"><img src="/bucket/${d.projectId}/${escHtml(f)}" alt=""></div>`
+    ).join('');
+    dotsWrap.innerHTML = screens.map((_, i) =>
+      `<div class="store-d-screens-dot${i === 0 ? ' active' : ''}"></div>`
+    ).join('');
+    screensSection.style.display = '';
+    // Sync dots to scroll position.
+    if (storeDetailState.scrollHandler) {
+      screensWrap.removeEventListener('scroll', storeDetailState.scrollHandler);
+    }
+    storeDetailState.scrollHandler = () => {
+      const items = screensWrap.querySelectorAll('.store-d-screen');
+      if (!items.length) return;
+      // Pick the screen whose center is closest to the viewport center.
+      const wrapRect = screensWrap.getBoundingClientRect();
+      const center = wrapRect.left + wrapRect.width / 2;
+      let best = 0, bestDist = Infinity;
+      items.forEach((el, i) => {
+        const r = el.getBoundingClientRect();
+        const c = r.left + r.width / 2;
+        const dist = Math.abs(c - center);
+        if (dist < bestDist) { bestDist = dist; best = i; }
+      });
+      dotsWrap.querySelectorAll('.store-d-screens-dot').forEach((dot, idx) => {
+        dot.classList.toggle('active', idx === best);
+      });
+    };
+    screensWrap.addEventListener('scroll', storeDetailState.scrollHandler, { passive: true });
+  } else {
+    screensSection.style.display = 'none';
+  }
+
+  // ── About ───────────────────────────────────────────────────────────────
+  const descEl = document.getElementById('store-detail-desc');
+  const descToggle = document.getElementById('store-d-desc-toggle');
+  const longDesc = d.longDescription || d.shortDescription || 'No description.';
+  descEl.textContent = longDesc;
+  descEl.classList.remove('expanded');
+  // Show "Read more" if content is taller than collapsed max-height.
+  requestAnimationFrame(() => {
+    const overflows = descEl.scrollHeight > descEl.clientHeight + 2;
+    descToggle.style.display = overflows ? '' : 'none';
+    descToggle.textContent = 'Read more';
+    descToggle.onclick = () => {
+      const isExpanded = descEl.classList.toggle('expanded');
+      descToggle.textContent = isExpanded ? 'Show less' : 'Read more';
+    };
+  });
+
+  // ── Token chart ─────────────────────────────────────────────────────────
+  storeDetailState.chartMode = 'price';
+  storeDetailState.tradesCache = trades;
+  storeDetailState.totalSupply = t.totalSupply ? Number(t.totalSupply) / 1e9 : 1e9;
+  document.querySelectorAll('#view-store-app .store-d-chart-mode').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.chart === 'price');
+    btn.onclick = () => {
+      storeDetailState.chartMode = btn.dataset.chart;
+      document.querySelectorAll('#view-store-app .store-d-chart-mode').forEach(b =>
+        b.classList.toggle('active', b === btn));
+      drawTokenChart();
+    };
+  });
+  drawTokenChart();
+
+  // ── Token info card ─────────────────────────────────────────────────────
+  document.getElementById('store-d-token-symbol').textContent = t.symbol ? `$${t.symbol}` : '—';
+  document.getElementById('store-d-token-supply').textContent = t.totalSupply
+    ? fmtCompact(Number(t.totalSupply) / 1e9) : '—';
+  document.getElementById('store-d-token-sold').textContent = t.soldSupply
+    ? fmtCompact(Number(t.soldSupply) / 1e9) : '0';
+  document.getElementById('store-d-token-vol').textContent = `${fmtCompact(t.volume24hTon || 0)} TON`;
+  const addrRow = document.getElementById('store-d-token-addr-row');
+  const addrLink = document.getElementById('store-d-token-addr');
+  if (t.jettonMasterAddress && !t.jettonMasterAddress.startsWith('SIM_')) {
+    const addr = t.jettonMasterAddress;
+    addrLink.textContent = addr.slice(0, 6) + '…' + addr.slice(-4);
+    addrLink.href = `https://tonviewer.com/${addr}`;
+    addrRow.style.display = '';
+  } else {
+    addrRow.style.display = 'none';
+  }
+
+  // ── Socials ─────────────────────────────────────────────────────────────
+  const socialsSection = document.getElementById('store-detail-socials-section');
+  const socialsWrap = document.getElementById('store-detail-socials');
+  if (d.socials && typeof d.socials === 'object') {
+    const items = [];
+    if (d.socials.telegram) items.push(`<a href="${escHtml(d.socials.telegram)}" target="_blank">Telegram</a>`);
+    if (d.socials.twitter) items.push(`<a href="${escHtml(d.socials.twitter)}" target="_blank">Twitter</a>`);
+    if (d.socials.website) items.push(`<a href="${escHtml(d.socials.website)}" target="_blank">Website</a>`);
+    if (items.length) {
+      socialsWrap.innerHTML = items.join('');
+      socialsSection.style.display = '';
+    } else socialsSection.style.display = 'none';
+  } else {
+    socialsSection.style.display = 'none';
+  }
+
+  // Hide Telegram MainButton — we have an Open App button in the hero now.
+  if (tg?.MainButton) tg.MainButton.hide();
+
+  // ── Trade module ────────────────────────────────────────────────────────
+  setupTradeModule(t);
+
+  // ── Liquidity card (pool reserves + LP owner + your position) ─────────
+  renderLiquidityCard(d.listingId, t);
+
+  // Owner row — link to Tonviewer.
+  if (t.ownerWalletAddress) {
+    const row = document.getElementById('store-d-token-owner-row');
+    const link = document.getElementById('store-d-token-owner');
+    if (row && link) {
+      const a = t.ownerWalletAddress;
+      link.textContent = a.slice(0, 6) + '…' + a.slice(-4);
+      link.href = `https://tonviewer.com/${a}`;
+      row.style.display = '';
+    }
+  } else {
+    const row = document.getElementById('store-d-token-owner-row');
+    if (row) row.style.display = 'none';
+  }
+}
+
+async function renderLiquidityCard(listingId, token) {
+  const section = document.getElementById('store-d-liquidity-section');
+  if (!section) return;
+
+  // Hide the card if the token isn't live yet (no real reserves).
+  const realTon = Number(token.realTonReserve || 0) / 1e9;
+  const realTokens = Number(token.realTokenReserve || 0) / 1e9;
+  if (realTon <= 0 && realTokens <= 0) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+
+  document.getElementById('store-d-liq-ton').textContent = `${fmtCompact(realTon)} TON`;
+  document.getElementById('store-d-liq-tokens').textContent = `${fmtCompact(realTokens)} ${token.symbol ? '$' + token.symbol : ''}`.trim();
+
+  initTonConnect();
+  const userWallet = tonConnectUI?.account?.address;
+  const mineEl = document.getElementById('store-d-liq-mine');
+  const ctaEl = document.getElementById('store-d-liq-connect-cta');
+
+  // Public stats (LP-providers count) — pulled from a fresh fetch since the
+  // detail JSON includes lpProvidersCount but only on the latest schema.
+  try {
+    const r = await fetch(`/api/store/listings/${listingId}/liquidity${userWallet ? '?userWallet=' + encodeURIComponent(userWallet) : ''}`);
+    const data = await r.json();
+    document.getElementById('store-d-liq-providers').textContent = data.lpProviders ?? data.lpProvidersCount ?? '1';
+
+    if (userWallet && Number(data.yourShares) > 0) {
+      mineEl.style.display = '';
+      ctaEl.style.display = 'none';
+      document.getElementById('store-d-liq-mine-pct').textContent = `${(data.yourSharePct || 0).toFixed(2)}%`;
+      const yourTon = Number(data.yourTonNano || 0) / 1e9;
+      const yourTokens = Number(data.yourTokens || 0) / 1e9;
+      document.getElementById('store-d-liq-mine-worth').textContent =
+        `${fmtTon(yourTon, 4)} TON + ${fmtCompact(yourTokens)} ${token.symbol || 'tokens'}`;
+
+      document.getElementById('store-d-liq-add').onclick = () => openLpAddModal(listingId, token, data, userWallet);
+      document.getElementById('store-d-liq-remove').onclick = () => openLpRemoveModal(listingId, token, data, userWallet);
+    } else {
+      mineEl.style.display = 'none';
+      ctaEl.style.display = '';
+      ctaEl.textContent = userWallet
+        ? 'You don\'t hold a liquidity position in this token.'
+        : 'Connect your wallet to see your liquidity position.';
+    }
+  } catch (e) { /* keep card minimal */ }
+}
+
+async function openLpAddModal(listingId, token, _info, userWallet) {
+  const ton = prompt(`How many TON to add to liquidity?\n(matching ${token.symbol || 'tokens'} pulled from your balance at current pool ratio.)`, '1');
+  if (!ton) return;
+  const tonNum = Number(ton);
+  if (!Number.isFinite(tonNum) || tonNum <= 0) { alert('Invalid amount'); return; }
+  try {
+    const r = await fetch(`${API_BASE}/store/listings/${listingId}/lp-add`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+      body: JSON.stringify({ userWalletAddress: userWallet, tonAmount: tonNum }),
+    });
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    if (!tonConnectUI.connected) await tonConnectUI.openModal();
+    await tonConnectUI.sendTransaction({ validUntil: data.validUntil, messages: data.messages });
+    alert('Liquidity tx signed! It will land in the pool within 1 minute.');
+  } catch (e) { alert('Add failed: ' + (e.message || e)); }
+}
+
+async function openLpRemoveModal(listingId, token, _info, userWallet) {
+  const pctStr = prompt('Withdraw what % of your position? (1-100)', '100');
+  if (!pctStr) return;
+  const pct = Number(pctStr);
+  if (!Number.isFinite(pct) || pct < 1 || pct > 100) { alert('Invalid %'); return; }
+  try {
+    const r = await fetch(`${API_BASE}/store/listings/${listingId}/lp-remove-preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+      body: JSON.stringify({ userWalletAddress: userWallet, fraction: pct / 100 }),
+    });
+    const preview = await r.json();
+    if (preview.error) throw new Error(preview.error);
+
+    const tonOut = Number(preview.tonOutNano) / 1e9;
+    const tokOut = Number(preview.tokenOut) / 1e9;
+    const ok = confirm(`Withdraw ${pct}% of your position?\nYou will receive:\n  • ${fmtTon(tonOut, 4)} TON\n  • ${fmtCompact(tokOut)} ${token.symbol || 'tokens'}\n\nTON arrives instantly, jetton payout is queued.`);
+    if (!ok) return;
+
+    const r2 = await fetch(`${API_BASE}/store/listings/${listingId}/lp-remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+      body: JSON.stringify({ userWalletAddress: userWallet, fraction: pct / 100 }),
+    });
+    const out = await r2.json();
+    if (out.error) throw new Error(out.error);
+    alert(`Done!\nTON paid out: ${out.tonPayoutTxHash ? out.tonPayoutTxHash.slice(0, 10) + '…' : 'queued'}\nJetton payout pending admin processing.`);
+    setTimeout(() => loadStoreApp(listingId), 2000);
+  } catch (e) { alert('Remove failed: ' + (e.message || e)); }
+}
+
+function drawTokenChart() {
+  const canvas = document.getElementById('store-detail-chart');
+  const emptyEl = document.getElementById('store-d-chart-empty');
+  const summaryEl = document.getElementById('store-d-chart-current');
+  const changeEl = document.getElementById('store-d-chart-change');
+  if (!canvas) return;
+
+  const trades = storeDetailState.tradesCache || [];
+  const mode = storeDetailState.chartMode || 'price';
+  const totalSupply = storeDetailState.totalSupply || 1e9;
+
+  // High-DPI canvas sizing — width follows the parent container.
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.parentElement.clientWidth || canvas.clientWidth || 320;
+  const cssH = 180;
+  if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+    canvas.width = Math.round(cssW * dpr);
+    canvas.height = Math.round(cssH * dpr);
+  }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  if (!trades.length) {
+    emptyEl.style.display = '';
+    summaryEl.textContent = '—';
+    changeEl.textContent = '';
+    return;
+  }
+  emptyEl.style.display = 'none';
+
+  // Series selection.
+  const series = trades.map((t) => mode === 'mcap' ? t.priceTon * totalSupply : t.priceTon);
+  const min = Math.min(...series);
+  const max = Math.max(...series);
+  const span = (max - min) || max || 1;
+  const padX = 4, padY = 18;
+  const w = cssW, h = cssH;
+  const innerW = w - padX * 2;
+  const innerH = h - padY * 2;
+  const stepX = innerW / Math.max(1, series.length - 1);
+
+  // Gradient fill under line.
+  const grad = ctx.createLinearGradient(0, padY, 0, h);
+  grad.addColorStop(0, 'rgba(58,141,240,0.45)');
+  grad.addColorStop(1, 'rgba(58,141,240,0)');
+
+  ctx.beginPath();
+  series.forEach((v, i) => {
+    const x = padX + i * stepX;
+    const y = padY + innerH - ((v - min) / span) * innerH;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.lineTo(padX + (series.length - 1) * stepX, h - padY);
+  ctx.lineTo(padX, h - padY);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Line stroke.
+  ctx.beginPath();
+  series.forEach((v, i) => {
+    const x = padX + i * stepX;
+    const y = padY + innerH - ((v - min) / span) * innerH;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = '#3a8df0';
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+
+  // Last-point dot.
+  const lastV = series[series.length - 1];
+  const lx = padX + (series.length - 1) * stepX;
+  const ly = padY + innerH - ((lastV - min) / span) * innerH;
+  ctx.beginPath();
+  ctx.arc(lx, ly, 4, 0, Math.PI * 2);
+  ctx.fillStyle = '#1aa6fe';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(lx, ly, 7, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(58,141,240,0.4)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Header summary.
+  const first = series[0];
+  const last = series[series.length - 1];
+  const pct = first > 0 ? ((last - first) / first) * 100 : 0;
+  if (mode === 'mcap') {
+    summaryEl.textContent = `${fmtCompact(last)} TON`;
+  } else {
+    summaryEl.textContent = `${fmtTon(last)} TON`;
+  }
+  const cls = pct > 0.01 ? 'up' : pct < -0.01 ? 'down' : 'flat';
+  changeEl.className = `store-d-chart-summary-change ${cls}`;
+  const arrow = pct > 0.01 ? '↑' : pct < -0.01 ? '↓' : '·';
+  changeEl.textContent = `${arrow} ${pct >= 0 ? '+' : ''}${pct.toFixed(2)}% all-time`;
+}
+
+function setupTradeModule(token) {
+  const modeBtns = document.querySelectorAll('#view-store-app .store-trade-mode-btn-v2');
+  const submitBtn = document.getElementById('store-trade-submit');
+  const amountInput = document.getElementById('store-trade-amount');
+  const unitLabel = document.getElementById('store-trade-unit');
+  const quoteEl = document.getElementById('store-trade-quote');
+  const statusEl = document.getElementById('store-trade-status');
+  const presetsEl = document.getElementById('store-trade-presets');
+
+  storeDetailState.tradeMode = 'buy';
+  amountInput.value = '';
+  quoteEl.textContent = '';
+  statusEl.textContent = '';
+
+  // Preset amount chips. Buy presets are TON; sell presets are % of holdings,
+  // but for V1 we keep it simple with absolute token amounts.
+  const buyPresets = ['0.1', '0.5', '1', '5'];
+  const sellPresets = ['1k', '10k', '100k', '1M'];
+  function renderPresets() {
+    const presets = storeDetailState.tradeMode === 'buy' ? buyPresets : sellPresets;
+    presetsEl.innerHTML = presets.map(p => `<button class="store-trade-preset" data-v="${p}">${p}</button>`).join('');
+    presetsEl.querySelectorAll('.store-trade-preset').forEach((b) => {
+      b.onclick = () => {
+        const raw = b.dataset.v;
+        const numeric = raw.endsWith('k') ? Number(raw.slice(0, -1)) * 1000
+          : raw.endsWith('M') ? Number(raw.slice(0, -1)) * 1_000_000
+          : Number(raw);
+        amountInput.value = String(numeric);
+        refreshQuote();
+      };
+    });
+  }
+
+  function applyMode() {
+    modeBtns.forEach(b => b.classList.toggle('active', b.dataset.mode === storeDetailState.tradeMode));
+    if (storeDetailState.tradeMode === 'buy') {
+      unitLabel.textContent = 'TON';
+      submitBtn.textContent = `Buy ${token.symbol ? '$' + token.symbol : 'tokens'}`;
+      submitBtn.classList.remove('sell');
+    } else {
+      unitLabel.textContent = token.symbol ? `$${token.symbol}` : 'tokens';
+      submitBtn.textContent = `Sell ${token.symbol ? '$' + token.symbol : 'tokens'}`;
+      submitBtn.classList.add('sell');
+    }
+    renderPresets();
+    refreshQuote();
+  }
+  modeBtns.forEach((b) => {
+    b.onclick = () => { storeDetailState.tradeMode = b.dataset.mode; applyMode(); };
+  });
+
+  let quoteAbort = null;
+  async function refreshQuote() {
+    if (storeDetailState.quoteTimer) { clearTimeout(storeDetailState.quoteTimer); storeDetailState.quoteTimer = null; }
+    const v = amountInput.value.trim();
+    if (!v.match(/^\d+(\.\d+)?$/) || Number(v) <= 0) {
+      quoteEl.textContent = '';
+      return;
+    }
+    if (quoteAbort) quoteAbort.abort();
+    quoteAbort = new AbortController();
+    try {
+      const r = await fetch(`/api/store/tokens/${token.id}/quote?type=${storeDetailState.tradeMode}&amount=${encodeURIComponent(v)}`, { signal: quoteAbort.signal });
+      const data = await r.json();
+      if (data.error) { quoteEl.textContent = data.error; return; }
+      if (storeDetailState.tradeMode === 'buy') {
+        quoteEl.innerHTML = `≈ <b>${fmtCompact(data.tokensOut)} ${token.symbol ? '$' + token.symbol : 'tokens'}</b> &nbsp;·&nbsp; fee ${fmtTon(data.feeTon)} TON`;
+      } else {
+        quoteEl.innerHTML = `≈ <b>${fmtTon(data.tonOutNet)} TON</b> &nbsp;·&nbsp; fee ${fmtTon(data.feeTon)} TON`;
+      }
+    } catch (e) { /* aborted */ }
+  }
+  amountInput.oninput = () => {
+    if (storeDetailState.quoteTimer) clearTimeout(storeDetailState.quoteTimer);
+    storeDetailState.quoteTimer = setTimeout(refreshQuote, 200);
+  };
+
+  submitBtn.onclick = async () => {
+    const v = amountInput.value.trim();
+    if (!v.match(/^\d+(\.\d+)?$/) || Number(v) <= 0) {
+      statusEl.textContent = 'Enter a valid amount';
+      return;
+    }
+    submitBtn.disabled = true;
+    statusEl.textContent = 'Preparing transaction...';
+    try {
+      const path = storeDetailState.tradeMode === 'buy' ? 'buy' : 'sell';
+      const body = storeDetailState.tradeMode === 'buy' ? { tonAmount: v } : { tokenAmount: v };
+      const r = await fetch(`${API_BASE}/store/tokens/${token.id}/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (data.error) throw new Error(data.error);
+
+      initTonConnect();
+      if (!tonConnectUI) {
+        statusEl.innerHTML = `Send <b>${storeDetailState.tradeMode === 'buy' ? v + ' TON' : v + ' tokens'}</b> to <code>${escHtml(data.walletAddress)}</code> with comment <code>${escHtml(data.comment)}</code>`;
+        startTradePolling(data.tradeId);
+        return;
+      }
+      if (!tonConnectUI.connected) await tonConnectUI.openModal();
+
+      if (storeDetailState.tradeMode === 'buy') {
+        const payload = await encodeTextComment(data.comment);
+        const amountNano = String(Math.round(Number(v) * 1e9));
+        await tonConnectUI.sendTransaction({
+          validUntil: Math.floor(Date.now() / 1000) + 600,
+          messages: [{ address: data.walletAddress, amount: amountNano, payload }],
+        });
+        statusEl.textContent = 'Confirming on TON…';
+      } else {
+        statusEl.innerHTML = `Send <b>${v} ${token.symbol ? '$' + token.symbol : 'tokens'}</b> from your wallet to <code>${escHtml(data.walletAddress)}</code> with comment <code>${escHtml(data.comment)}</code>. We'll detect it.`;
+      }
+      startTradePolling(data.tradeId);
+    } catch (e) {
+      statusEl.textContent = 'Failed: ' + (e.message || e);
+    } finally {
+      submitBtn.disabled = false;
+    }
+  };
+
+  applyMode();
+}
+
+function startTradePolling(tradeId) {
+  let attempts = 0;
+  const statusEl = document.getElementById('store-trade-status');
+  async function poll() {
+    attempts++;
+    try {
+      const r = await fetch(`${API_BASE}/store/trades/${tradeId}`, { headers: apiHeaders() });
+      const data = await r.json();
+      if (data.status === 'received' || data.status === 'settled') {
+        statusEl.innerHTML = `Trade ${data.status}! Refreshing…`;
+        if (storeDetailState.listingId) loadStoreApp(storeDetailState.listingId);
+        return;
+      }
+      if (attempts > 30) { statusEl.textContent = 'Still waiting for on-chain confirmation… (will auto-update)'; return; }
+      storeDetailState.pollTimer = setTimeout(poll, 10_000);
+    } catch (e) {
+      if (attempts < 30) storeDetailState.pollTimer = setTimeout(poll, 10_000);
+    }
+  }
+  storeDetailState.pollTimer = setTimeout(poll, 5_000);
+}
+
+// ── Portfolio ─────────────────────────────────────────────────────────────
+
+async function openPortfolio() {
+  showView('portfolio', 'forward');
+  if (tg?.BackButton) {
+    tg.BackButton.show();
+    tg.BackButton.onClick(() => showView('list', 'back'));
+  }
+  if (tg?.MainButton) tg.MainButton.hide();
+
+  const list = document.getElementById('portfolio-list');
+  list.innerHTML = '<div class="store-loading">Loading…</div>';
+  try {
+    const r = await fetch(`${API_BASE}/store/portfolio`, { headers: apiHeaders() });
+    const data = await r.json();
+    if (!data.items || !data.items.length) {
+      list.innerHTML = '<div class="store-empty">You don\'t hold any app tokens yet. Buy from the App Store.</div>';
+      document.getElementById('portfolio-summary').textContent = 'No holdings';
+      return;
+    }
+    const totalValue = data.items.reduce((a, i) => a + (i.valueTon || 0), 0);
+    const totalCost = data.items.reduce((a, i) => a + (i.costTon || 0), 0);
+    const totalPnl = totalValue - totalCost;
+    document.getElementById('portfolio-summary').innerHTML =
+      `Total value <b>${fmtTon(totalValue)} TON</b> · P&L <b style="color:${totalPnl >= 0 ? '#4ade80' : '#f87171'}">${totalPnl >= 0 ? '+' : ''}${fmtTon(totalPnl)} TON</b>`;
+    list.innerHTML = data.items.map((it) => {
+      const logo = it.logoFilename ? `/bucket/${it.projectId}/${it.logoFilename}` : '';
+      const pnlPct = it.costTon > 0 ? ((it.pnlTon / it.costTon) * 100).toFixed(1) : '0.0';
+      const pnlColor = it.pnlTon >= 0 ? '#4ade80' : '#f87171';
+      return `
+        <div class="portfolio-row" data-listing="${it.listingId}">
+          <div class="portfolio-row-logo">${logo ? `<img src="${logo}">` : `<div class="store-card-logo-fallback">${(it.symbol || '?')[0]}</div>`}</div>
+          <div class="portfolio-row-body">
+            <div class="portfolio-row-title">${it.name} <span class="portfolio-row-ticker">$${it.symbol}</span></div>
+            <div class="portfolio-row-balance">${fmtCompact(it.balance)} tokens</div>
+          </div>
+          <div class="portfolio-row-value">
+            <div>${fmtTon(it.valueTon)} TON</div>
+            <div style="color:${pnlColor};font-size:11px">${it.pnlTon >= 0 ? '+' : ''}${fmtTon(it.pnlTon)} (${pnlPct}%)</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+    list.querySelectorAll('.portfolio-row').forEach((row) => {
+      row.onclick = () => openStoreApp(row.dataset.listing);
+    });
+  } catch (e) {
+    list.innerHTML = '<div class="store-loading">Failed to load</div>';
+  }
+}
+
+// ── Publish flow ──────────────────────────────────────────────────────────
+
+// ════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════
+// PF2 — Publish Form v2 (single-page form replacing 7-step pubflow)
+// ════════════════════════════════════════════════════════════════════════
+
+const PUBFLOW_CATEGORIES = [
+  'Games', 'Social', 'Finance', 'Productivity', 'Education',
+  'Entertainment', 'Utilities', 'Crypto', 'AI', 'Lifestyle', 'Other',
+];
+
+// Per-language draft data (EN is primary and gets sent to backend)
+let pf2Langs = { en: {}, ru: {}, ua: {} };
+let pf2ActiveLang = 'en';
+
+// Backward-compat: openPublish now routes to App Information page
+async function openPublish(projectId) { return openAppInfo(projectId); }
+
+// ── Open App Information page (formerly the publish form, no token block) ──
+async function openAppInfo(projectId) {
+  publishState.projectId = projectId;
+  pf2ActiveLang = 'en';
+  pf2Langs = { en: {}, ru: {}, ua: {} };
+
+  showView('app-info', 'forward');
+  if (tg?.BackButton) { tg.BackButton.show(); tg.BackButton.onClick(() => showView('detail', 'back')); }
+  if (tg?.MainButton) tg.MainButton.hide();
+
+  try {
+    const r = await fetch(`${API_BASE}/store/projects/${projectId}/listing`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+      body: '{}',
+    });
+    const data = await r.json();
+    if (!data.listing) throw new Error(data.error || 'failed');
+    publishState.listing = data.listing;
+    publishState.listingId = data.listing.id;
+  } catch (e) { console.warn('listing bootstrap failed', e); }
+
+  await _pf2Bind();
+}
+
+// ── Open App Token page (creation form OR locked view) ──────────────────────
+async function openAppToken(projectId) {
+  publishState.projectId = projectId;
+  showView('app-token', 'forward');
+  if (tg?.BackButton) { tg.BackButton.show(); tg.BackButton.onClick(() => showView('detail', 'back')); }
+
+  // Bootstrap listing
+  try {
+    const r = await fetch(`${API_BASE}/store/projects/${projectId}/listing`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+      body: '{}',
+    });
+    const data = await r.json();
+    if (data.listing) {
+      publishState.listing  = data.listing;
+      publishState.listingId = data.listing.id;
+    }
+  } catch {}
+
+  await _tkBind();
+}
+
+// ── App Token binder ────────────────────────────────────────────────────────
+async function _tkBind() {
+  const listing = publishState.listing || {};
+  const token = listing.token || null;
+  const proj = projects?.find(p => p.id === publishState.projectId) || currentProject;
+  const isCreated = !!(token && token.creationPaidAt);
+
+  // Back button
+  const backBtn = document.getElementById('pf2-token-back-btn');
+  if (backBtn) backBtn.onclick = () => showView('detail', 'back');
+
+  // Status badge
+  const statusBadge = document.getElementById('pf2-token-status-badge');
+  if (statusBadge) {
+    statusBadge.textContent = isCreated ? 'Live' : 'New';
+    statusBadge.className = 'pf2-status-badge' + (isCreated ? ' pf2-status-badge--published' : '');
+  }
+
+  // Toggle layers
+  document.getElementById('tk-create').style.display  = isCreated ? 'none' : '';
+  document.getElementById('tk-created').style.display = isCreated ? '' : 'none';
+
+  if (isCreated) {
+    // ── Locked view ───────────────────────────────────────────────────────
+    const iconImg = document.getElementById('tk-created-icon-img');
+    const iconLetters = document.getElementById('tk-created-icon-letters');
+    if (proj?.avatarUrl && iconImg) { iconImg.src = proj.avatarUrl; iconImg.style.display = 'block'; if (iconLetters) iconLetters.textContent = ''; }
+    else if (iconLetters) { iconLetters.textContent = (token.symbol || '?').slice(0,2); if (iconImg) iconImg.style.display = 'none'; }
+    document.getElementById('tk-created-name').textContent = listing.appName || proj?.name || token.name || '—';
+    document.getElementById('tk-created-ticker').textContent = '$' + (token.symbol || '—');
+    document.getElementById('tk-stat-liquidity').textContent =
+      (token.creationLockedLiquidityTon ?? listing.initialLiquidityTon ?? '—') + ' TON';
+    return;
+  }
+
+  // ── Creation form ─────────────────────────────────────────────────────────
+  const tkIcon       = document.getElementById('tk-icon');
+  const tkIconImg    = document.getElementById('tk-icon-img');
+  const tkIconLetters= document.getElementById('tk-icon-letters');
+  const tickerEl     = document.getElementById('tk-ticker');
+  const nameDisp     = document.getElementById('tk-name-display');
+  const liqEl        = document.getElementById('tk-liquidity');
+  const balanceEl    = document.getElementById('tk-balance');
+  const balanceCard  = document.querySelector('.tk-balance-card');
+  const topupBtn     = document.getElementById('tk-balance-topup');
+  const createBtn    = document.getElementById('tk-create-btn');
+  const msgEl        = document.getElementById('tk-msg');
+
+  if (proj?.avatarUrl && tkIconImg) { tkIconImg.src = proj.avatarUrl; tkIconImg.style.display = 'block'; if (tkIconLetters) tkIconLetters.textContent = ''; }
+  if (nameDisp) nameDisp.textContent = listing.appName || proj?.name || '—';
+
+  _pf2Counter('tk-ticker', 'tk-ticker-counter', 10);
+  if (tickerEl) {
+    if (token?.symbol) tickerEl.value = token.symbol.toUpperCase();
+    tickerEl.oninput = () => {
+      tickerEl.value = tickerEl.value.toUpperCase();
+      _updateTkButton();
+    };
+  }
+  if (liqEl) {
+    if (listing.initialLiquidityTon) liqEl.value = listing.initialLiquidityTon;
+    liqEl.oninput = () => _updateTkButton();
+  }
+
+  // Fetch user TON balance
+  let userBalance = 0;
+  try {
+    const r = await fetch(`${API_BASE}/wallet/ton-balance`, { headers: apiHeaders() });
+    const d = await r.json();
+    userBalance = Number(d.tonBalance) || 0;
+  } catch {}
+  if (balanceEl) balanceEl.textContent = userBalance.toFixed(4) + ' TON';
+
+  if (topupBtn) topupBtn.onclick = () => { showView('wallet', 'forward'); };
+
+  function _updateTkButton() {
+    const liq = parseFloat(liqEl?.value || '0');
+    const ticker = (tickerEl?.value || '').trim();
+    const validTicker = /^[A-Z0-9]{3,10}$/.test(ticker);
+    const validLiq = liq >= 5;
+    const enoughBalance = userBalance >= liq;
+    if (createBtn) {
+      createBtn.textContent = `Create Token (${liq || 0} TON)`;
+      createBtn.disabled = !(validTicker && validLiq && enoughBalance);
+    }
+    if (balanceCard) balanceCard.classList.toggle('tk-balance-card--low', !enoughBalance && liq > 0);
+  }
+  _updateTkButton();
+
+  function _showMsg(text, ok) {
+    if (!msgEl) return;
+    msgEl.textContent = text;
+    msgEl.className = 'pf2-submit-msg' + (ok ? ' pf2-submit-msg--ok' : '');
+    msgEl.style.display = text ? '' : 'none';
+  }
+
+  if (createBtn) createBtn.onclick = async () => {
+    _showMsg('');
+    if (!publishState.listingId) { _showMsg('Please fill App Information first.'); return; }
+    const ticker = (tickerEl?.value || '').toUpperCase().trim();
+    const liquidityTon = parseFloat(liqEl?.value || '0');
+    createBtn.disabled = true;
+    createBtn.textContent = 'Creating…';
+    try {
+      const r = await fetch(`${API_BASE}/store/listings/${publishState.listingId}/create-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+        body: JSON.stringify({ ticker, liquidityTon }),
+      });
+      const d = await r.json();
+      if (!r.ok || d.error) throw new Error(d.error || 'Failed to create token');
+      _showMsg('Token created!', true);
+      // Re-fetch listing → re-render in locked state
+      const lr = await fetch(`${API_BASE}/store/projects/${publishState.projectId}/listing`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...apiHeaders() }, body: '{}',
+      });
+      const ld = await lr.json();
+      if (ld.listing) { publishState.listing = ld.listing; publishState.listingId = ld.listing.id; }
+      await _tkBind();
+    } catch (err) {
+      _showMsg(err.message || 'Failed to create token');
+      createBtn.disabled = false;
+      _updateTkButton();
+    }
+  };
+}
+
+function onPubflowBack() { showView('detail', 'back'); }
+
+function showPubflowLayer() { /* no-op: new PF2 uses single layer */ }
+
+async function refreshPubflowPanel() { /* replaced by pf2 */ }
+// ────────────────────────────────────────────────────────────────────────────
+
+// ── PF2: bind the single-page publish form ──────────────────────────────────
+async function _pf2Bind() {
+  const listing = publishState.listing;
+  const projectId = publishState.projectId;
+
+  // ── Back button ───────────────────────────────────────────────────────────
+  const backBtn = document.getElementById('pf2-info-back-btn');
+  if (backBtn) backBtn.onclick = () => showView('detail', 'back');
+  const topSaveBtn = document.getElementById('pf2-info-save-btn');
+  if (topSaveBtn) topSaveBtn.onclick = () => document.getElementById('pf2-info-submit-btn')?.click();
+
+  // ── Language tabs ─────────────────────────────────────────────────────────
+  document.querySelectorAll('.pf2-lang-tab').forEach((tab) => {
+    tab.onclick = () => {
+      _pf2SaveCurrentLang();
+      pf2ActiveLang = tab.dataset.lang;
+      document.querySelectorAll('.pf2-lang-tab').forEach(t => t.classList.toggle('pf2-lang-tab--active', t === tab));
+      _pf2LoadLang(pf2ActiveLang);
+    };
+  });
+
+  // ── Avatar ────────────────────────────────────────────────────────────────
+  const avatarInput = document.getElementById('pf2-avatar-input');
+  const avatarImg   = document.getElementById('pf2-avatar-img');
+
+  // Pre-fill: prefer App Store-specific logo, fall back to bot avatar
+  const proj = projects?.find(p => p.id === projectId);
+  if (avatarImg) {
+    if (listing?.appLogoFilename)      avatarImg.src = `/bucket/${projectId}/${listing.appLogoFilename}?t=${Date.now()}`;
+    else if (proj?.avatarUrl)          avatarImg.src = proj.avatarUrl;
+    else                                avatarImg.removeAttribute('src');
+  }
+  if (avatarInput) {
+    avatarInput.onchange = async (e) => {
+      const file = e.target.files[0]; e.target.value = ''; if (!file) return;
+      const previewUrl = URL.createObjectURL(file);
+      if (avatarImg) avatarImg.src = previewUrl;
+      if (!publishState.listingId) return;
+      const fd = new FormData(); fd.append('file', file);
+      try {
+        const r = await fetch(`${API_BASE}/store/listings/${publishState.listingId}/app-logo`, {
+          method: 'POST', headers: apiHeaders(), body: fd,
+        });
+        const d = await r.json();
+        if (d.error) throw new Error(d.error);
+        if (avatarImg && d.url) avatarImg.src = `${d.url}?t=${Date.now()}`;
+        if (publishState.listing) publishState.listing.appLogoFilename = d.filename;
+        // Reflect on App Settings hero too
+        if (proj && d.url) {
+          proj.avatarUrl = d.url;
+          const heroAvatar = document.getElementById('detail-avatar');
+          if (heroAvatar) {
+            heroAvatar.textContent = '';
+            heroAvatar.style.background = `url(${d.url}?t=${Date.now()}) center/cover no-repeat`;
+          }
+        }
+      } catch (err) {
+        console.warn('app logo upload failed', err);
+        showToast?.('Avatar upload failed.', 'error');
+      }
+    };
+  }
+
+  // ── Text inputs with counters ─────────────────────────────────────────────
+  _pf2Counter('pf2-name',  'pf2-name-counter',  32);
+  _pf2Counter('pf2-short', 'pf2-short-counter', 120);
+  _pf2Counter('pf2-long',  'pf2-long-counter',  2000);
+
+  // Pre-fill EN fields from listing
+  if (listing) {
+    _pf2SetField('pf2-name',  listing.appName  || proj?.name || '');
+    _pf2SetField('pf2-short', listing.shortDescription || '');
+    _pf2SetField('pf2-long',  listing.longDescription  || '');
+    // Pre-fill RU/UA from translations
+    const tr = listing.translations || {};
+    if (tr.ru) pf2Langs.ru = { name: tr.ru.name || '', short: tr.ru.short || '', long: tr.ru.long || '' };
+    if (tr.ua) pf2Langs.ua = { name: tr.ua.name || '', short: tr.ua.short || '', long: tr.ua.long || '' };
+  }
+  pf2Langs.en = _pf2ReadFields();
+
+  // ── Banner ────────────────────────────────────────────────────────────────
+  const bannerLabel  = document.getElementById('pf2-banner-label');
+  const bannerInput  = document.getElementById('pf2-banner-input');
+  const bannerImg    = document.getElementById('pf2-banner-img');
+  const bannerEmpty  = document.getElementById('pf2-banner-empty');
+  const bannerRemove = document.getElementById('pf2-banner-remove');
+
+  const setBannerImg = (url) => {
+    if (!bannerImg) return;
+    if (url) {
+      bannerImg.src = url;
+      if (bannerEmpty) bannerEmpty.style.display = 'none';
+      if (bannerRemove) bannerRemove.style.display = '';
+    } else {
+      bannerImg.removeAttribute('src');
+      if (bannerEmpty) bannerEmpty.style.display = '';
+      if (bannerRemove) bannerRemove.style.display = 'none';
+    }
+  };
+  if (listing?.bannerFilename) setBannerImg(`/bucket/${projectId}/${listing.bannerFilename}`);
+  if (bannerInput) bannerInput.onchange = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    setBannerImg(URL.createObjectURL(file));
+    if (!publishState.listingId) return;
+    const fd = new FormData(); fd.append('file', file);
+    try {
+      await fetch(`${API_BASE}/store/listings/${publishState.listingId}/banner`, { method: 'POST', headers: apiHeaders(), body: fd });
+    } catch (err) { console.warn('banner upload failed', err); }
+  };
+  if (bannerRemove) bannerRemove.onclick = async () => {
+    setBannerImg(null);
+    if (!publishState.listingId) return;
+    try { await fetch(`${API_BASE}/store/listings/${publishState.listingId}/banner`, { method: 'DELETE', headers: apiHeaders() }); } catch {}
+  };
+
+  // ── Screenshots ───────────────────────────────────────────────────────────
+  const shotsGrid  = document.getElementById('pf2-shots-grid');
+  const shotsInput = document.getElementById('pf2-shots-input');
+  const shotsCount = document.getElementById('pf2-shots-counter');
+  let screenshots  = Array.isArray(listing?.screenshots) ? [...listing.screenshots] : [];
+
+  const MIN_SHOTS = 3;
+  const MAX_SHOTS = 6;
+  const renderShots = () => {
+    if (!shotsGrid) return;
+    if (shotsCount) shotsCount.textContent = `${screenshots.length} / ${MAX_SHOTS}`;
+    shotsGrid.innerHTML = screenshots.map((fn, i) => `
+      <div class="pf2-shot-thumb">
+        <img src="/bucket/${projectId}/${fn}" loading="lazy">
+        <button class="pf2-shot-del" data-i="${i}">×</button>
+      </div>`).join('');
+    shotsGrid.querySelectorAll('.pf2-shot-del').forEach((btn) => {
+      btn.onclick = async () => {
+        const fn = screenshots[Number(btn.dataset.i)];
+        screenshots.splice(Number(btn.dataset.i), 1);
+        renderShots();
+        if (!publishState.listingId) return;
+        try { await fetch(`${API_BASE}/store/listings/${publishState.listingId}/screenshots/${fn}`, { method: 'DELETE', headers: apiHeaders() }); } catch {}
+      };
+    });
+  };
+  renderShots();
+  if (shotsInput) shotsInput.onchange = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (!files.length || !publishState.listingId) return;
+    const slots = MAX_SHOTS - screenshots.length;
+    const toUpload = files.slice(0, slots);
+    for (const file of toUpload) {
+      const fd = new FormData(); fd.append('file', file);
+      try {
+        const r = await fetch(`${API_BASE}/store/listings/${publishState.listingId}/screenshots`, { method: 'POST', headers: apiHeaders(), body: fd });
+        const d = await r.json();
+        if (d.filename) { screenshots.push(d.filename); renderShots(); }
+      } catch (err) { console.warn('screenshot upload failed', err); }
+    }
+    if (files.length > slots) showToast?.(`Only ${slots} slot(s) left — ${files.length - slots} skipped.`, 'info');
+  };
+
+  // ── Category chips ────────────────────────────────────────────────────────
+  const catWrap = document.getElementById('pf2-categories');
+  let selectedCat = listing?.category || '';
+  if (catWrap) {
+    catWrap.innerHTML = PUBFLOW_CATEGORIES.map(c =>
+      `<button class="pf2-chip${c === selectedCat ? ' pf2-chip--active' : ''}" data-cat="${c}">${c}</button>`
+    ).join('');
+    catWrap.querySelectorAll('.pf2-chip').forEach((btn) => {
+      btn.onclick = () => {
+        selectedCat = btn.dataset.cat;
+        catWrap.querySelectorAll('.pf2-chip').forEach(b => b.classList.toggle('pf2-chip--active', b === btn));
+      };
+    });
+  }
+
+  // ── Tags ──────────────────────────────────────────────────────────────────
+  const tagInput   = document.getElementById('pf2-tag-input');
+  const tagAddBtn  = document.getElementById('pf2-tag-add');
+  const tagList    = document.getElementById('pf2-tag-list');
+  const tagCounter = document.getElementById('pf2-tags-counter');
+  let tags = Array.isArray(listing?.tags) ? [...listing.tags] : [];
+
+  const renderTags = () => {
+    if (tagCounter) tagCounter.textContent = `${tags.length} / 10`;
+    if (!tagList) return;
+    tagList.innerHTML = tags.map((t, i) =>
+      `<span class="pf2-tag-pill">${escHtml(t)}<button class="pf2-tag-pill-del" data-i="${i}">×</button></span>`
+    ).join('');
+    tagList.querySelectorAll('.pf2-tag-pill-del').forEach((btn) => {
+      btn.onclick = () => { tags.splice(Number(btn.dataset.i), 1); renderTags(); };
+    });
+  };
+  renderTags();
+  const addTag = () => {
+    if (!tagInput) return;
+    const v = tagInput.value.trim().toLowerCase().replace(/\s+/g, '-');
+    if (!v || tags.length >= 10 || tags.includes(v)) return;
+    tags.push(v); tagInput.value = ''; renderTags();
+  };
+  if (tagAddBtn) tagAddBtn.onclick = addTag;
+  if (tagInput)  tagInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag(); } };
+
+  // ── Save ──────────────────────────────────────────────────────────────────
+  const submitBtn = document.getElementById('pf2-info-submit-btn');
+  const submitMsg = document.getElementById('pf2-info-msg');
+  const showMsg = (txt, ok) => {
+    if (!submitMsg) return;
+    submitMsg.textContent = txt;
+    submitMsg.className = 'pf2-submit-msg' + (ok ? ' pf2-submit-msg--ok' : '');
+    submitMsg.style.display = txt ? '' : 'none';
+  };
+
+  if (submitBtn) submitBtn.onclick = async () => {
+    showMsg('');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Saving…';
+    try {
+      if (!publishState.listingId) throw new Error('No listing. Refresh and try again.');
+      _pf2SaveCurrentLang();
+      const lang = pf2Langs.en;
+      const patch = {
+        appName:          lang.name || '',
+        shortDescription: lang.short || '',
+        longDescription:  lang.long  || '',
+        category:         selectedCat || null,
+        tags,
+        translations:     { ru: pf2Langs.ru, ua: pf2Langs.ua },
+      };
+      const r = await fetch(`${API_BASE}/store/listings/${publishState.listingId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+        body: JSON.stringify(patch),
+      });
+      const d = await r.json();
+      if (!r.ok || d.error) throw new Error(d.error || 'Save failed');
+      submitBtn.textContent = 'Save Changes';
+      submitBtn.disabled = false;
+      if (publishState.projectId) fetchPublishReadiness(publishState.projectId);
+      showToast('App Information saved!', 'success');
+      setTimeout(() => showView('detail', 'back'), 300);
+    } catch (err) {
+      showMsg(err.message || 'Something went wrong.');
+      submitBtn.textContent = 'Save Changes';
+      submitBtn.disabled = false;
+    }
+  };
+
+  window.scrollTo(0, 0);
+}
+
+// Reads current visible form fields into an object
+function _pf2ReadFields() {
+  return {
+    name:  document.getElementById('pf2-name')?.value  || '',
+    short: document.getElementById('pf2-short')?.value || '',
+    long:  document.getElementById('pf2-long')?.value  || '',
+  };
+}
+
+// Save current lang before switching
+function _pf2SaveCurrentLang() {
+  pf2Langs[pf2ActiveLang] = _pf2ReadFields();
+}
+
+// Load saved lang into fields
+function _pf2LoadLang(lang) {
+  const d = pf2Langs[lang] || {};
+  _pf2SetField('pf2-name',  d.name  || '');
+  _pf2SetField('pf2-short', d.short || '');
+  _pf2SetField('pf2-long',  d.long  || '');
+  // Update counters
+  _pf2Counter('pf2-name',  'pf2-name-counter',  32);
+  _pf2Counter('pf2-short', 'pf2-short-counter', 120);
+  _pf2Counter('pf2-long',  'pf2-long-counter',  2000);
+}
+
+// Set an input/textarea value
+function _pf2SetField(id, val) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.value = val;
+  // Dispatch input event so counters update
+  el.dispatchEvent(new Event('input'));
+}
+
+// Wire a char counter
+function _pf2Counter(inputId, counterId, max) {
+  const inp = document.getElementById(inputId);
+  const cnt = document.getElementById(counterId);
+  if (!inp || !cnt) return;
+  const update = () => { cnt.textContent = max - inp.value.length; };
+  inp.addEventListener('input', update);
+  update();
+}
+
+// Sync the token icon preview from avatar URL or ticker initials
+function _pf2SyncTokenIcon(avatarUrl, ticker) {
+  const iconEl   = document.getElementById('pf2-token-icon');
+  const iconImg  = document.getElementById('pf2-token-icon-img');
+  const iconLetters = document.getElementById('pf2-token-icon-letters');
+  if (!iconEl) return;
+  if (avatarUrl) {
+    if (iconImg) { iconImg.src = avatarUrl; iconImg.style.display = 'block'; }
+    if (iconLetters) iconLetters.textContent = '';
+  } else if (ticker) {
+    if (iconImg) iconImg.style.display = 'none';
+    if (iconLetters) iconLetters.textContent = ticker.slice(0, 3);
+  }
+}
+
+function renderPubflowPanel(readiness) { /* no-op — replaced by pf2 single-form */ void readiness; }
+
+async function openPubflowStep(stepId) { /* no-op: replaced by pf2 */
+  void stepId; /*
+    case 1: bindPubflowStep1(); break;
+    case 2: bindPubflowStep2(); break;
+  */ }
+// ── End of openPubflowStep stub ──────────────────────────────────────────────
+
+// Helper: html-escape (used to render user-supplied strings safely).
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+// ── OLD PUBFLOW STEP FUNCTIONS (renamed, kept for reference) ────────────────
+function bindPubflowStep1() {
+  const summary = document.getElementById('pubflow-step1-summary');
+  const project = (currentProject || {});
+  if (summary) {
+    summary.innerHTML = `
+      <div><b>${escHtml(project.name || 'Your project')}</b> exists in Apps Father.</div>
+      <div style="opacity:0.65">Created ${project.createdAt ? new Date(project.createdAt).toLocaleDateString() : 'recently'}.</div>
+    `;
+  }
+  const next = document.querySelector('.pubflow-step-page[data-step="1"] .pubflow-continue');
+  if (next) next.onclick = () => onPubflowBack();
+}
+
+// ── STEP 2 · Connect bot ────────────────────────────────────────────────
+function bindPubflowStep2() {
+  const project = currentProject || {};
+  const titleEl = document.getElementById('pubflow-step2-bot-name');
+  const subEl = document.getElementById('pubflow-step2-bot-username');
+  const connectBtn = document.getElementById('pubflow-step2-connect');
+  const continueBtn = document.getElementById('pubflow-step2-continue');
+
+  const refresh = () => {
+    if (project.botUsername) {
+      titleEl.textContent = project.botUsername;
+      subEl.textContent = 'Bot connected — you can continue.';
+      connectBtn.textContent = 'Reconnect bot';
+      continueBtn.disabled = false;
+    } else {
+      titleEl.textContent = 'No bot connected';
+      subEl.textContent = 'Connect a bot from @BotFather to continue.';
+      connectBtn.textContent = 'Connect bot';
+      continueBtn.disabled = true;
+    }
+  };
+  refresh();
+
+  connectBtn.onclick = () => {
+    handleLinkBotClick(project.id, connectBtn, async () => {
+      // currentProject is mutated by handleLinkBotClick; re-render.
+      refresh();
+      await refreshPubflowPanel();
+    });
+  };
+  continueBtn.onclick = () => onPubflowBack();
+}
+
+// ── STEP 3 · App information (avatar, name, short, long) ────────────────
+async function bindPubflowStep3() {
+  const project = currentProject || {};
+  const nameEl = document.getElementById('pubflow-step3-name');
+  const shortEl = document.getElementById('pubflow-step3-short');
+  const longEl = document.getElementById('pubflow-step3-long');
+  const avatarImg = document.getElementById('pubflow-step3-avatar-img');
+  const avatarLabel = document.getElementById('pubflow-step3-avatar-label');
+  const avatarInput = document.getElementById('pubflow-step3-avatar-input');
+  const avatarEdit = document.getElementById('pubflow-step3-avatar-edit');
+  const continueBtn = document.querySelector('.pubflow-step-page[data-step="3"] .pubflow-continue');
+
+  // Pre-fill: name comes from the project; short/long descriptions live on
+  // the *listing* (the user-edited App Store copy). Fallback to the
+  // AI-generated project description if the listing is still empty.
+  const listing = publishState.listing || {};
+  nameEl.value = project.name || '';
+  shortEl.value = listing.shortDescription || project.appDescription || '';
+  longEl.value = listing.longDescription || project.appLongDescription || '';
+
+  // Show the current bot avatar from Telegram (project.avatarUrl is the
+  // CDN URL returned by the backend after /bot-info uploads the photo).
+  if (project.avatarUrl) {
+    avatarImg.src = project.avatarUrl;
+    avatarLabel.classList.add('has-image');
+  } else {
+    avatarLabel.classList.remove('has-image');
+  }
+
+  bindCounter(nameEl, 'pubflow-step3-name-counter', 32);
+  bindCounter(shortEl, 'pubflow-step3-short-counter', 120);
+  bindCounter(longEl, 'pubflow-step3-long-counter', 2000);
+
+  avatarEdit.onclick = (e) => { e.preventDefault(); avatarInput.click(); };
+  avatarInput.onchange = async (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const fd = new FormData(); fd.append('photo', file);
+    try {
+      const r = await fetch(`${API_BASE}/bot-info/${project.id}`, { method: 'POST', headers: apiHeaders(), body: fd });
+      const d = await r.json();
+      if (d.errors?.length) throw new Error(d.errors.join(' '));
+      // Update local + reload projects so subsequent screens see the new avatar.
+      const reload = await fetch(`${API_BASE}/projects`, { headers: apiHeaders() });
+      const proj = (await reload.json()).projects?.find((p) => p.id === project.id);
+      if (proj) {
+        Object.assign(currentProject, proj);
+        if (proj.avatarUrl) {
+          avatarImg.src = `${proj.avatarUrl}${proj.avatarUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+          avatarLabel.classList.add('has-image');
+        }
+      }
+    } catch (err) { showToast('Avatar upload failed: ' + err.message, 'error'); }
+    e.target.value = '';
+  };
+
+  continueBtn.onclick = async () => {
+    try {
+      continueBtn.disabled = true;
+      // 1) Save the bot name on Telegram (bot-info also persists project.name).
+      //    Avatar uploads happen as soon as the user picks a file (above), so
+      //    here we only need to push the name change if it differs.
+      if (nameEl.value.trim() && nameEl.value.trim() !== project.name) {
+        const fd = new FormData();
+        fd.append('name', nameEl.value.trim());
+        const r1 = await fetch(`${API_BASE}/bot-info/${project.id}`, { method: 'POST', headers: apiHeaders(), body: fd });
+        const d1 = await r1.json();
+        if (d1.errors?.length) throw new Error(d1.errors.join(' '));
+        currentProject.name = nameEl.value.trim();
+      }
+      // 2) Save the App Store-facing copy on the listing. shortDescription /
+      //    longDescription drive both the App Store card and the readiness
+      //    check for Step 3.
+      if (publishState.listingId) {
+        const r2 = await fetch(`${API_BASE}/store/listings/${publishState.listingId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+          body: JSON.stringify({
+            shortDescription: shortEl.value.trim(),
+            longDescription: longEl.value.trim(),
+          }),
+        });
+        const d2 = await r2.json();
+        if (d2.error) throw new Error(d2.error);
+        publishState.listing = d2.listing;
+      }
+      onPubflowBack();
+    } catch (e) {
+      showToast('Save failed: ' + e.message, 'error');
+    } finally {
+      continueBtn.disabled = false;
+    }
+  };
+}
+
+// ── STEP 4 · App Store page (category, tags, banner, screenshots) ───────
+async function bindPubflowStep4() {
+  const listingId = publishState.listingId;
+  if (!listingId) { showToast('Listing not ready yet', 'error'); return; }
+
+  // Always re-fetch listing so we have the latest tags/banner/screenshots.
+  const r = await fetch(`${API_BASE}/store/listings/${listingId}`, { headers: apiHeaders() });
+  const data = await r.json();
+  publishState.listing = data.listing;
+  const listing = data.listing;
+
+  // ── Categories ──
+  const catsBox = document.getElementById('pubflow-step4-categories');
+  catsBox.innerHTML = PUBFLOW_CATEGORIES.map((c) =>
+    `<div class="pubflow-chip ${listing.category === c ? 'is-selected' : ''}" data-cat="${escHtml(c)}">${escHtml(c)}</div>`
+  ).join('');
+  catsBox.querySelectorAll('.pubflow-chip').forEach((chip) => {
+    chip.onclick = () => {
+      catsBox.querySelectorAll('.pubflow-chip').forEach((c) => c.classList.remove('is-selected'));
+      chip.classList.add('is-selected');
+      publishState._selectedCategory = chip.dataset.cat;
+    };
+  });
+  publishState._selectedCategory = listing.category || null;
+
+  // ── Tags ──
+  const tagInput = document.getElementById('pubflow-step4-tag-input');
+  const tagAdd = document.getElementById('pubflow-step4-tag-add');
+  const tagList = document.getElementById('pubflow-step4-tag-list');
+  const tagCounter = document.getElementById('pubflow-step4-tags-counter');
+  publishState._tags = Array.isArray(listing.tags) ? [...listing.tags] : [];
+
+  const renderTags = () => {
+    tagList.innerHTML = publishState._tags.map((t, i) =>
+      `<span class="pubflow-tag-pill">${escHtml(t)}<button data-i="${i}" aria-label="Remove">×</button></span>`
+    ).join('');
+    tagCounter.textContent = `${publishState._tags.length} / 10`;
+    tagList.querySelectorAll('button').forEach((btn) => {
+      btn.onclick = () => {
+        publishState._tags.splice(Number(btn.dataset.i), 1);
+        renderTags();
+      };
+    });
+  };
+  renderTags();
+  const tryAddTag = () => {
+    const v = tagInput.value.trim().slice(0, 24);
+    if (!v) return;
+    if (publishState._tags.length >= 10) return;
+    if (publishState._tags.includes(v)) { tagInput.value = ''; return; }
+    publishState._tags.push(v);
+    tagInput.value = '';
+    renderTags();
+  };
+  tagAdd.onclick = tryAddTag;
+  tagInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); tryAddTag(); } };
+
+  // ── Banner ──
+  const bannerLabel = document.getElementById('pubflow-step4-banner-label');
+  const bannerImg = document.getElementById('pubflow-step4-banner-img');
+  const bannerInput = document.getElementById('pubflow-step4-banner-input');
+  if (listing.bannerFilename) {
+    bannerImg.src = `/bucket/${listing.projectId}/${listing.bannerFilename}`;
+    bannerLabel.classList.add('has-image');
+  } else {
+    bannerLabel.classList.remove('has-image');
+  }
+  bannerInput.onchange = async (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const fd = new FormData(); fd.append('file', file);
+    try {
+      const resp = await fetch(`${API_BASE}/store/listings/${listingId}/banner`, {
+        method: 'POST', headers: apiHeaders(), body: fd,
+      });
+      const d = await resp.json();
+      if (d.error) throw new Error(d.error);
+      bannerImg.src = `/bucket/${listing.projectId}/${d.filename}?t=${Date.now()}`;
+      bannerLabel.classList.add('has-image');
+    } catch (err) { showToast('Banner upload failed: ' + err.message, 'error'); }
+    e.target.value = '';
+  };
+
+  // ── Screenshots ──
+  const shotsGrid = document.getElementById('pubflow-step4-shots');
+  const shotsInput = document.getElementById('pubflow-step4-shots-input');
+  const shotsCounter = document.getElementById('pubflow-step4-shots-counter');
+  const minShots = publishState.publishConfig?.minScreenshots ?? 4;
+  const maxShots = publishState.publishConfig?.maxScreenshots ?? 6;
+
+  const renderShots = (shots) => {
+    shotsGrid.innerHTML = (shots || []).map((f) =>
+      `<div class="pubflow-shot-thumb">
+         <img src="/bucket/${listing.projectId}/${escHtml(f)}">
+         <button class="pubflow-shot-thumb-remove" data-f="${escHtml(f)}" aria-label="Remove">×</button>
+       </div>`
+    ).join('');
+    shotsCounter.textContent = `${(shots || []).length} / ${minShots}–${maxShots}`;
+    shotsGrid.querySelectorAll('.pubflow-shot-thumb-remove').forEach((b) => {
+      b.onclick = async (e) => {
+        e.stopPropagation();
+        const f = b.dataset.f;
+        await fetch(`${API_BASE}/store/listings/${listingId}/screenshots/${encodeURIComponent(f)}`, {
+          method: 'DELETE', headers: apiHeaders(),
+        });
+        const refresh = await fetch(`${API_BASE}/store/listings/${listingId}`, { headers: apiHeaders() });
+        const refreshed = await refresh.json();
+        publishState.listing = refreshed.listing;
+        renderShots(refreshed.listing.screenshots || []);
+      };
+    });
+  };
+  renderShots(listing.screenshots || []);
+  shotsInput.onchange = async (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const fd = new FormData(); fd.append('file', file);
+    try {
+      const resp = await fetch(`${API_BASE}/store/listings/${listingId}/screenshots`, {
+        method: 'POST', headers: apiHeaders(), body: fd,
+      });
+      const d = await resp.json();
+      if (d.error) throw new Error(d.error);
+      const refresh = await fetch(`${API_BASE}/store/listings/${listingId}`, { headers: apiHeaders() });
+      const refreshed = await refresh.json();
+      publishState.listing = refreshed.listing;
+      renderShots(refreshed.listing.screenshots || []);
+    } catch (err) { showToast('Upload failed: ' + err.message, 'error'); }
+    e.target.value = '';
+  };
+
+  // ── Continue: persist category + tags + banner are already saved; tags
+  //    persist on Continue so the user can edit freely without an autosave. ──
+  const continueBtn = document.getElementById('pubflow-step4-continue');
+  continueBtn.onclick = async () => {
+    try {
+      continueBtn.disabled = true;
+      const body = {
+        category: publishState._selectedCategory || null,
+        tags: publishState._tags,
+      };
+      const resp = await fetch(`${API_BASE}/store/listings/${listingId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+        body: JSON.stringify(body),
+      });
+      const d = await resp.json();
+      if (d.error) throw new Error(d.error);
+      publishState.listing = d.listing;
+      onPubflowBack();
+    } catch (e) {
+      showToast('Save failed: ' + e.message, 'error');
+    } finally {
+      continueBtn.disabled = false;
+    }
+  };
+}
+
+// ── STEP 5 · App token (icon + name + ticker + description + LP + deploy)
+async function bindPubflowStep5() {
+  const listingId = publishState.listingId;
+  if (!listingId) { showToast('Listing not ready yet', 'error'); return; }
+  const r = await fetch(`${API_BASE}/store/listings/${listingId}`, { headers: apiHeaders() });
+  const data = await r.json();
+  publishState.listing = data.listing;
+  const listing = data.listing;
+  const token = listing.token;
+
+  // Pre-fill: token name defaults to project name (matches minter.ton.org "App Name").
+  const nameEl = document.getElementById('pubflow-step5-name');
+  const tickerEl = document.getElementById('pubflow-step5-ticker');
+  const descEl = document.getElementById('pubflow-step5-desc');
+  nameEl.value = token?.name || (listing.project?.name || currentProject?.name || '').slice(0, 32);
+  tickerEl.value = token?.symbol || '';
+  descEl.value = token?.metadataDescription || '';
+  bindCounter(nameEl, 'pubflow-step5-name-counter', 32);
+  bindCounter(tickerEl, 'pubflow-step5-ticker-counter', 10);
+  bindCounter(descEl, 'pubflow-step5-desc-counter', 240);
+
+  // Icon uploader
+  const iconImg = document.getElementById('pubflow-step5-icon-img');
+  const iconLabel = document.getElementById('pubflow-step5-icon-label');
+  const iconInput = document.getElementById('pubflow-step5-icon-input');
+  const iconEdit = document.getElementById('pubflow-step5-icon-edit');
+  if (token?.logoFilename) {
+    iconImg.src = `/bucket/${listing.projectId}/${token.logoFilename}`;
+    iconLabel.classList.add('has-image');
+  } else {
+    iconLabel.classList.remove('has-image');
+  }
+  iconEdit.onclick = (e) => { e.preventDefault(); iconInput.click(); };
+  iconInput.onchange = async (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const fd = new FormData(); fd.append('file', file);
+    try {
+      const resp = await fetch(`${API_BASE}/store/listings/${listingId}/token-logo`, {
+        method: 'POST', headers: apiHeaders(), body: fd,
+      });
+      const d = await resp.json();
+      if (d.error) throw new Error(d.error);
+      iconImg.src = `/bucket/${listing.projectId}/${d.filename}?t=${Date.now()}`;
+      iconLabel.classList.add('has-image');
+    } catch (err) { showToast('Icon upload failed: ' + err.message, 'error'); }
+    e.target.value = '';
+  };
+
+  // Token preset (supply)
+  const cfg = publishState.publishConfig || {};
+  const supply = Number(cfg.tokenPreset?.defaultSupply ?? cfg.tokenTotalSupply ?? 1_000_000);
+  document.getElementById('pubflow-step5-supply').textContent = supply.toLocaleString('en-US');
+
+  // LP preview
+  const lpTon = document.getElementById('pubflow-step5-lp-ton');
+  const lpShare = document.getElementById('pubflow-step5-lp-share');
+  const lpPctLabel = document.getElementById('pubflow-step5-lp-pct');
+  const lpTokensLabel = document.getElementById('pubflow-step5-lp-tokens');
+  const lpPriceLabel = document.getElementById('pubflow-step5-lp-price');
+  const lpMcapLabel = document.getElementById('pubflow-step5-lp-mcap');
+  lpTon.value = String(cfg.initialLiquidityTon ?? 5);
+  lpShare.value = String(Math.round((cfg.initialLiquidityTokenShare ?? 0.5) * 100));
+  const updateLp = () => {
+    const ton = Number(lpTon.value) || 0;
+    const sharePct = Number(lpShare.value) || 0;
+    const share = sharePct / 100;
+    const tokensLocked = supply * share;
+    const initialPrice = tokensLocked > 0 ? ton / tokensLocked : 0;
+    const initialMcap = share > 0 ? ton / share : 0;
+    lpPctLabel.textContent = `${sharePct}%`;
+    lpTokensLabel.textContent = tokensLocked.toLocaleString('en-US');
+    lpPriceLabel.textContent = `${fmtTon(initialPrice, 9)} TON`;
+    lpMcapLabel.textContent = `${fmtCompact(initialMcap)} TON`;
+    // Mirror to legacy hidden inputs so signPublishLpInit picks them up.
+    document.getElementById('publish-lp-ton').value = String(ton);
+    document.getElementById('publish-lp-share').value = String(sharePct);
+    publishState.initialLiquidityTon = ton;
+    publishState.initialLiquidityTokenShare = share;
+  };
+  lpTon.oninput = updateLp;
+  lpShare.oninput = updateLp;
+  updateLp();
+
+  // ── Deploy substeps card (visual progress) ─────────────────────────
+  // Always visible on Step 5 so the user understands what pressing
+  // Continue will do. The 3 sub-rows are styled "active" by JS as the
+  // flow progresses. Manual "Connect" button kept for the case when the
+  // user wants to verify the wallet before signing.
+  const deployBlock = document.getElementById('pubflow-step5-deploy');
+  deployBlock.style.display = '';
+
+  const wallet = document.getElementById('pubflow-step5-wallet');
+  const connectBtn = document.getElementById('pubflow-step5-connect');
+  const signDeployBtn = document.getElementById('pubflow-step5-sign-deploy');
+  const signLpBtn = document.getElementById('pubflow-step5-sign-lp');
+  const lpSummary = document.getElementById('pubflow-step5-lp-summary');
+  const statusEl = document.getElementById('pubflow-step5-deploy-status');
+
+  const refreshDeployUi = () => {
+    initTonConnect();
+    const connected = !!(tonConnectUI && tonConnectUI.connected);
+    const addr = tonConnectUI?.account?.address || '';
+    wallet.textContent = connected ? `Connected: ${addr.slice(0, 6)}…${addr.slice(-4)}` : 'Not connected';
+    connectBtn.textContent = connected ? 'Reconnect' : 'Connect TonConnect';
+    // The two manual sign buttons mirror the Continue orchestration.
+    // Keep them visible only after a deploy has already happened (so the
+    // user can manually retry the LP step if the auto-flow was interrupted).
+    const tokenDeployed = !!(token && token.jettonMasterAddress);
+    signDeployBtn.style.display = tokenDeployed ? 'none' : '';
+    signLpBtn.style.display = tokenDeployed ? '' : 'none';
+    signDeployBtn.disabled = !connected;
+    signLpBtn.disabled = !connected || token?.status === 'live';
+    const tonAmt = publishState.initialLiquidityTon ?? 5;
+    const tokenPct = Math.round((publishState.initialLiquidityTokenShare ?? 0.5) * 100);
+    lpSummary.innerHTML = `Lock <b>${tonAmt} TON</b> + <b>${tokenPct}%</b> of supply.`;
+  };
+  refreshDeployUi();
+
+  connectBtn.onclick = async () => {
+    try {
+      initTonConnect();
+      if (tonConnectUI) await tonConnectUI.openModal();
+      setTimeout(refreshDeployUi, 800);
+    } catch (e) {
+      statusEl.textContent = e.message;
+    }
+  };
+  signDeployBtn.onclick = () => runStep5Deploy();
+  signLpBtn.onclick = () => runStep5LpInit();
+
+  // ── Continue button — full orchestration ────────────────────────────
+  // 1) Save token info (PATCH /listings/:id).
+  // 2) Connect TonConnect if needed.
+  // 3) Sign deploy tx (skipped if jettonMasterAddress already exists).
+  // 4) Sign LP-init tx.
+  // 5) Wait for `published` then return to the panel.
+  const tokenAlreadyLive = token?.status === 'live';
+  const continueBtn = document.getElementById('pubflow-step5-continue');
+  continueBtn.textContent = tokenAlreadyLive ? 'Back to overview' : 'Save & deploy with my wallet';
+  continueBtn.onclick = async () => {
+    if (tokenAlreadyLive) { onPubflowBack(); return; }
+
+    // Step 1 — validate locally so we don't surprise the user mid-flow.
+    if (!nameEl.value.trim()) { showToast('Token name required', 'error'); return; }
+    if (!tickerEl.value.trim()) { showToast('Ticker required', 'error'); return; }
+    if (!token?.logoFilename) { showToast('Token logo required', 'error'); return; }
+    const lpTonAmt = Number(lpTon.value) || 0;
+    if (lpTonAmt < 1) { showToast('Initial liquidity must be ≥ 1 TON', 'error'); return; }
+
+    continueBtn.disabled = true;
+    statusEl.textContent = 'Saving token info…';
+    statusEl.classList.remove('is-error', 'is-success');
+    try {
+      const saveR = await fetch(`${API_BASE}/store/listings/${listingId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+        body: JSON.stringify({
+          tokenName: nameEl.value.trim(),
+          tokenSymbol: tickerEl.value.trim(),
+          tokenDescription: descEl.value.trim(),
+        }),
+      });
+      const saveD = await saveR.json();
+      if (saveD.error) throw new Error(saveD.error);
+      publishState.listing = saveD.listing;
+
+      // Step 2 — wallet connect.
+      initTonConnect();
+      if (!tonConnectUI?.connected) {
+        statusEl.textContent = 'Opening wallet…';
+        await tonConnectUI.openModal();
+      }
+      // openModal resolves immediately on most wallets; poll briefly to
+      // confirm an account is actually available.
+      for (let i = 0; i < 15 && !tonConnectUI.connected; i++) {
+        await new Promise((r) => setTimeout(r, 600));
+      }
+      if (!tonConnectUI?.connected) throw new Error('Wallet not connected');
+
+      // Step 3 — deploy (skip only if a *real* on-chain master address is
+      // already persisted — i.e. a TON address starting with EQ/UQ/0:/-1:).
+      // Stale SIM_ placeholders from earlier dev builds must be re-deployed
+      // so the LP-init step gets a derivable jetton wallet.
+      const refreshedListing = await (await fetch(`${API_BASE}/store/listings/${listingId}`, { headers: apiHeaders() })).json();
+      const refreshedToken = refreshedListing.listing?.token;
+      const masterAddr = refreshedToken?.jettonMasterAddress || '';
+      const isRealMasterAddr = /^([EU]Q|0:|-1:)/.test(masterAddr);
+      if (!isRealMasterAddr) {
+        await runStep5Deploy();
+      }
+
+      // Step 4 — LP init.
+      await runStep5LpInit();
+
+      statusEl.classList.add('is-success');
+      statusEl.textContent = 'Token deployed and liquidity provided!';
+      await refreshPubflowPanel();
+      setTimeout(() => onPubflowBack(), 1200);
+    } catch (e) {
+      statusEl.classList.add('is-error');
+      statusEl.textContent = 'Deploy failed: ' + (e.message || e);
+    } finally {
+      continueBtn.disabled = false;
+    }
+  };
+}
+
+/**
+ * Send the deploy TonConnect tx for the active publish flow. Mirrors the
+ * legacy `signPublishDeploy` but writes UI updates into the new pubflow
+ * status elements so the user sees progress inline on Step 5.
+ */
+async function runStep5Deploy() {
+  const statusEl = document.getElementById('pubflow-step5-deploy-status');
+  statusEl.textContent = 'Preparing deploy transaction…';
+  initTonConnect();
+  const userWallet = tonConnectUI?.account?.address;
+  if (!userWallet) throw new Error('Wallet not connected');
+
+  const r = await fetch(`${API_BASE}/store/listings/${publishState.listing.id}/prepare-deploy`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+    body: JSON.stringify({ userWalletAddress: userWallet }),
+  });
+  const data = await r.json();
+  if (data.error) throw new Error(data.error);
+  publishState.jettonMasterAddress = data.jettonMasterAddress;
+
+  if (data.simulated) {
+    statusEl.textContent = 'Dev mode: simulating deploy (no jetton infra on server).';
+  } else if (data.messages && data.messages.length) {
+    statusEl.textContent = 'Awaiting wallet signature for deploy…';
+    await tonConnectUI.sendTransaction({
+      validUntil: data.validUntil,
+      messages: data.messages,
+    });
+    statusEl.textContent = 'Deploy signed. Waiting for on-chain confirmation…';
+    // Best-effort wait — we already set status=deployed_pending_lp on the
+    // server when prepare-deploy was called, so this just gives the network
+    // a beat to settle the deploy tx before we ask wallets to send Jettons.
+    await new Promise((r) => setTimeout(r, 4000));
+  }
+  statusEl.textContent = 'Token contract deployed!';
+}
+
+/**
+ * Send the LP-init TonConnect tx. Reuses the existing /prepare-lp-init
+ * endpoint and waits for status=published.
+ */
+async function runStep5LpInit() {
+  const statusEl = document.getElementById('pubflow-step5-deploy-status');
+  statusEl.textContent = 'Preparing liquidity transaction…';
+  initTonConnect();
+  const userWallet = tonConnectUI?.account?.address;
+  if (!userWallet) throw new Error('Wallet not connected');
+
+  const r = await fetch(`${API_BASE}/store/listings/${publishState.listing.id}/prepare-lp-init`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+    body: JSON.stringify({
+      userWalletAddress: userWallet,
+      tonAmount: publishState.initialLiquidityTon,
+      tokenShare: publishState.initialLiquidityTokenShare,
+    }),
+  });
+  const data = await r.json();
+  if (data.error) throw new Error(data.error);
+
+  if (data.simulated) {
+    statusEl.textContent = 'Dev mode: simulating LP init (no jetton wallet code on server).';
+  }
+  statusEl.textContent = 'Awaiting wallet signature for liquidity…';
+  await tonConnectUI.sendTransaction({
+    validUntil: data.validUntil,
+    messages: data.messages,
+  });
+  statusEl.textContent = 'Liquidity signed. Waiting for on-chain confirmation…';
+  // The TON monitor will set status=published + token.status=live once the
+  // LP transfer is detected. Poll for a minute.
+  try {
+    await waitForListingStatus('published', 12); // ~12 × 8s = 96 s
+  } catch {
+    // Even if polling times out, the on-chain tx is in flight; the status
+    // will update eventually. Don't block the UX.
+  }
+}
+
+// ── STEP 6 · Review & submit ────────────────────────────────────────────
+async function bindPubflowStep6() {
+  const summaryEl = document.getElementById('pubflow-step6-summary');
+  const statusEl = document.getElementById('pubflow-step6-status');
+  const submitBtn = document.getElementById('pubflow-step6-submit');
+  const feeAmountEl = document.getElementById('pubflow-step6-fee-amount');
+  const cfg = publishState.publishConfig || {};
+  feeAmountEl.textContent = `${cfg.publishFeeTon ?? 0.5} TON`;
+
+  const listing = publishState.listing || {};
+  const token = listing.token || {};
+  const project = currentProject || {};
+  summaryEl.innerHTML = [
+    ['App name', project.name || '—'],
+    ['Bot', project.botUsername ? `@${project.botUsername}` : '—'],
+    ['Category', listing.category || '—'],
+    ['Tags', (listing.tags || []).join(', ') || '—'],
+    ['Screenshots', String((listing.screenshots || []).length)],
+    ['Token', token?.name ? `${token.name} (${token.symbol})` : '—'],
+    ['Initial liquidity', `${publishState.initialLiquidityTon ?? 5} TON / ${Math.round((publishState.initialLiquidityTokenShare ?? 0.5) * 100)}%`],
+  ].map(([k, v]) =>
+    `<div class="pubflow-review-row"><span>${escHtml(k)}</span><span>${escHtml(v)}</span></div>`
+  ).join('');
+
+  // Status-aware submit button label:
+  //   • published                 — flow is complete, just go back.
+  //   • deployed_pending_lp       — token deployed, waiting for LP-init tx
+  //                                 to be detected on-chain (≤ ~1 min).
+  //   • pending / approved        — already in moderation queue.
+  //   • anything else (draft etc) — let the user submit.
+  let submitLabel = 'Submit for review';
+  let submitDisabled = false;
+  if (listing.status === 'published') { submitLabel = '🎉 Live in App Store'; submitDisabled = true; }
+  else if (listing.status === 'deployed_pending_lp') { submitLabel = 'Waiting for liquidity tx…'; submitDisabled = true; }
+  else if (['pending', 'approved'].includes(listing.status)) { submitLabel = 'Submitted — awaiting review'; submitDisabled = true; }
+  submitBtn.textContent = submitLabel;
+  submitBtn.disabled = submitDisabled;
+  submitBtn.onclick = async () => {
+    statusEl.textContent = '';
+    statusEl.classList.remove('is-error', 'is-success');
+    submitBtn.disabled = true;
+    try {
+      // Mirror the inputs into the legacy hidden form (submitPublish reads them).
+      document.getElementById('publish-short').value = currentProject?.appDescription || '';
+      document.getElementById('publish-long').value = currentProject?.appLongDescription || '';
+      document.getElementById('publish-token-name').value = token?.name || currentProject?.name || '';
+      document.getElementById('publish-token-symbol').value = token?.symbol || '';
+      document.getElementById('publish-token-description').value = token?.metadataDescription || '';
+      await submitPublish();
+      statusEl.classList.add('is-success');
+      statusEl.textContent = 'Submitted! Awaiting on-chain confirmation + admin review.';
+      await refreshPubflowPanel();
+    } catch (e) {
+      statusEl.classList.add('is-error');
+      statusEl.textContent = 'Submit failed: ' + (e.message || e);
+      submitBtn.disabled = false;
+    }
+  };
+}
+
+// ── STEP 7 · Published (success) ────────────────────────────────────────
+async function bindPubflowStep7() {
+  const card = document.getElementById('pubflow-step7-card');
+  const openBtn = document.getElementById('pubflow-step7-open');
+  const listing = publishState.listing || {};
+  const token = listing.token || {};
+  const project = currentProject || {};
+  card.innerHTML = `
+    <div><b>${escHtml(project.name || 'Your app')}</b> is live in the App Store.</div>
+    ${token?.symbol ? `<div>Token: <b>${escHtml(token.name)}</b> (${escHtml(token.symbol)})</div>` : ''}
+    <div style="opacity:0.85">Share the link with your community to drive trades and downloads.</div>
+  `;
+  openBtn.onclick = () => {
+    if (listing.id) openStoreApp(listing.id);
+    else onPubflowBack();
+  };
+}
+
+// Helper: bind a maxlength counter to an input. Counts down (matches Blum).
+function bindCounter(input, counterId, max) {
+  if (!input) return;
+  const el = document.getElementById(counterId);
+  if (!el) return;
+  const update = () => { el.textContent = String(Math.max(0, max - (input.value || '').length)); };
+  input.oninput = update;
+  update();
+}
+
+async function fillPublishForm(listing) {
+  document.getElementById('publish-short').value = listing.shortDescription || '';
+  document.getElementById('publish-long').value = listing.longDescription || '';
+  const s = listing.socials || {};
+  document.getElementById('publish-social-tg').value = s.telegram || '';
+  document.getElementById('publish-social-twitter').value = s.twitter || '';
+  document.getElementById('publish-social-website').value = s.website || '';
+  // Pre-fill the Jetton fields. Token name defaults to the project's app
+  // name (matches minter.ton.org's "Name: App Name" preset). Description is
+  // intentionally empty by default — wallets render it as such.
+  const tokenNameEl = document.getElementById('publish-token-name');
+  const tokenSymbolEl = document.getElementById('publish-token-symbol');
+  const tokenDescEl = document.getElementById('publish-token-description');
+  if (listing.token) {
+    if (tokenNameEl) tokenNameEl.value = listing.token.name || (listing.project?.name || '').slice(0, 32);
+    if (tokenSymbolEl) tokenSymbolEl.value = listing.token.symbol || '';
+    if (tokenDescEl) tokenDescEl.value = listing.token.metadataDescription || '';
+    if (listing.token.logoFilename) {
+      const img = document.getElementById('publish-token-logo-preview');
+      img.src = `/bucket/${listing.projectId}/${listing.token.logoFilename}`;
+      img.style.display = '';
+    }
+  } else {
+    if (tokenNameEl && !tokenNameEl.value) tokenNameEl.value = (listing.project?.name || '').slice(0, 32);
+  }
+  renderPublishScreens(listing.screenshots || [], listing.projectId);
+
+  // Fetch publish config (LP defaults + vault address + token preset).
+  try {
+    const r = await fetch('/api/store/publish-config');
+    const cfg = await r.json();
+    publishState.publishConfig = cfg;
+    publishState.initialLiquidityTon = cfg.initialLiquidityTon;
+    publishState.initialLiquidityTokenShare = cfg.initialLiquidityTokenShare;
+
+    // Hydrate the read-only "minter.ton.org-style" preset card so publishers
+    // see exactly the values their wallet will display when signing.
+    const presetDecimals = document.getElementById('publish-preset-decimals');
+    const presetSupply = document.getElementById('publish-preset-supply');
+    if (presetDecimals) presetDecimals.textContent = String(cfg?.tokenPreset?.decimals ?? 9);
+    if (presetSupply) {
+      const supply = Number(cfg?.tokenPreset?.defaultSupply ?? cfg?.tokenTotalSupply ?? 1_000_000);
+      presetSupply.textContent = supply.toLocaleString('en-US');
+    }
+
+    const tonInput = document.getElementById('publish-lp-ton');
+    const shareInput = document.getElementById('publish-lp-share');
+    if (tonInput) {
+      tonInput.value = String(cfg.initialLiquidityTon);
+      tonInput.min = String(cfg.minInitialLiquidityTon || 1);
+      tonInput.oninput = updatePublishLpPreview;
+    }
+    if (shareInput) {
+      shareInput.value = String(Math.round(cfg.initialLiquidityTokenShare * 100));
+      shareInput.min = String(Math.round((cfg.minInitialLiquidityTokenShare || 0.1) * 100));
+      shareInput.oninput = updatePublishLpPreview;
+    }
+    updatePublishLpPreview();
+  } catch (e) { /* keep defaults */ }
+
+  // Toggle: form vs. deploy-flow card depending on listing status.
+  applyPublishFlowStatus(listing.status);
+
+  // Token logo handler
+  document.getElementById('publish-token-logo-input').onchange = async (ev) => {
+    const f = ev.target.files[0]; if (!f) return;
+    const fd = new FormData(); fd.append('file', f);
+    try {
+      const r = await fetch(`${API_BASE}/store/listings/${listing.id}/token-logo`, {
+        method: 'POST', headers: apiHeaders(), body: fd,
+      });
+      const data = await r.json();
+      if (data.error) throw new Error(data.error);
+      const img = document.getElementById('publish-token-logo-preview');
+      img.src = `/bucket/${listing.projectId}/${data.filename}`;
+      img.style.display = '';
+      // Backend persisted logoFilename on the token row — refresh local state.
+      const refresh = await fetch(`${API_BASE}/store/listings/${listing.id}`, { headers: apiHeaders() });
+      const refreshed = await refresh.json();
+      if (refreshed.listing) publishState.listing = refreshed.listing;
+    } catch (e) {
+      alert('Logo upload failed: ' + e.message);
+    }
+  };
+
+  // Screenshot upload handler
+  document.getElementById('publish-screenshot-input').onchange = async (ev) => {
+    const f = ev.target.files[0]; if (!f) return;
+    const fd = new FormData(); fd.append('file', f);
+    try {
+      const r = await fetch(`${API_BASE}/store/listings/${listing.id}/screenshots`, {
+        method: 'POST', headers: apiHeaders(), body: fd,
+      });
+      const data = await r.json();
+      if (data.error) throw new Error(data.error);
+      // Refresh
+      const refresh = await fetch(`${API_BASE}/store/listings/${listing.id}`, { headers: apiHeaders() });
+      const refreshed = await refresh.json();
+      publishState.listing = refreshed.listing;
+      renderPublishScreens(refreshed.listing.screenshots || [], refreshed.listing.projectId);
+    } catch (e) { alert('Upload failed: ' + e.message); }
+    ev.target.value = '';
+  };
+
+  document.getElementById('publish-save').onclick = () => savePublishDraft();
+  document.getElementById('publish-submit').onclick = () => submitPublish();
+}
+
+function renderPublishScreens(list, projectId) {
+  const wrap = document.getElementById('publish-screenshots');
+  wrap.innerHTML = (list || []).map((f) =>
+    `<div class="publish-screen-thumb">
+       <img src="/bucket/${projectId}/${f}">
+       <button class="publish-screen-remove" data-f="${f}" title="Remove">×</button>
+     </div>`
+  ).join('');
+  wrap.querySelectorAll('.publish-screen-remove').forEach((b) => {
+    b.onclick = async (ev) => {
+      ev.stopPropagation();
+      const f = b.dataset.f;
+      try {
+        await fetch(`${API_BASE}/store/listings/${publishState.listing.id}/screenshots/${encodeURIComponent(f)}`, {
+          method: 'DELETE', headers: apiHeaders(),
+        });
+        const refresh = await fetch(`${API_BASE}/store/listings/${publishState.listing.id}`, { headers: apiHeaders() });
+        const refreshed = await refresh.json();
+        publishState.listing = refreshed.listing;
+        renderPublishScreens(refreshed.listing.screenshots || [], refreshed.listing.projectId);
+      } catch (e) { alert(e.message); }
+    };
+  });
+}
+
+async function savePublishDraft() {
+  const body = {
+    shortDescription: document.getElementById('publish-short').value,
+    longDescription: document.getElementById('publish-long').value,
+    socials: {
+      telegram: document.getElementById('publish-social-tg').value,
+      twitter: document.getElementById('publish-social-twitter').value,
+      website: document.getElementById('publish-social-website').value,
+    },
+    tokenName: document.getElementById('publish-token-name').value,
+    tokenSymbol: document.getElementById('publish-token-symbol').value,
+    // Empty string here clears the field and produces a metadata.json with
+    // no description (matches minter.ton.org's default behaviour).
+    tokenDescription: document.getElementById('publish-token-description')?.value || '',
+  };
+  try {
+    const r = await fetch(`${API_BASE}/store/listings/${publishState.listing.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    publishState.listing = data.listing;
+    // Also save the LP intent locally — the actual on-chain LP-init values
+    // are sent by `signPublishLpInit` when the publisher signs that tx.
+    const tonEl = document.getElementById('publish-lp-ton');
+    const shareEl = document.getElementById('publish-lp-share');
+    if (tonEl) publishState.initialLiquidityTon = Number(tonEl.value) || publishState.initialLiquidityTon;
+    if (shareEl) publishState.initialLiquidityTokenShare = (Number(shareEl.value) || 50) / 100;
+    document.getElementById('publish-status').textContent = 'Saved.';
+  } catch (e) {
+    document.getElementById('publish-status').textContent = 'Save failed: ' + e.message;
+  }
+}
+
+async function submitPublish() {
+  await savePublishDraft();
+  try {
+    const r = await fetch(`${API_BASE}/store/listings/${publishState.listing.id}/submit`, {
+      method: 'POST', headers: apiHeaders(),
+    });
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+
+    document.getElementById('publish-status').textContent = `Pay ${data.publishFeeTon} TON publish fee to enter review…`;
+
+    initTonConnect();
+    if (tonConnectUI) {
+      if (!tonConnectUI.connected) await tonConnectUI.openModal();
+      const payload = await encodeTextComment(data.comment);
+      const amountNano = String(Math.round(data.publishFeeTon * 1e9));
+      await tonConnectUI.sendTransaction({
+        validUntil: Math.floor(Date.now() / 1000) + 600,
+        messages: [{ address: data.walletAddress, amount: amountNano, payload }],
+      });
+    }
+    document.getElementById('publish-status').textContent = 'Submitted! Awaiting on-chain confirmation + admin review.';
+    startPublishStatusPolling();
+  } catch (e) {
+    document.getElementById('publish-status').textContent = 'Submit failed: ' + e.message;
+  }
+}
+
+// ── Live preview of LP inputs on publish form ───────────────────────────────
+function updatePublishLpPreview() {
+  const tonEl = document.getElementById('publish-lp-ton');
+  const shareEl = document.getElementById('publish-lp-share');
+  if (!tonEl || !shareEl) return;
+  const ton = Number(tonEl.value) || 0;
+  const sharePct = Number(shareEl.value) || 0;
+  const share = sharePct / 100;
+  const totalSupply = (publishState.publishConfig?.tokenTotalSupply) || 1_000_000_000;
+  const tokensLocked = totalSupply * share;
+  // Initial price = ton / tokensLocked. Initial market cap = price * totalSupply
+  // = ton / share (handy mental model).
+  const initialPrice = tokensLocked > 0 ? ton / tokensLocked : 0;
+  const initialMcap = share > 0 ? ton / share : 0;
+
+  const pctEl = document.getElementById('publish-lp-share-pct');
+  const tokensEl = document.getElementById('publish-lp-share-tokens');
+  if (pctEl) pctEl.textContent = `${sharePct}%`;
+  if (tokensEl) tokensEl.textContent = fmtCompact(tokensLocked);
+
+  const priceEl = document.getElementById('publish-lp-price');
+  const mcapEl = document.getElementById('publish-lp-mcap');
+  if (priceEl) priceEl.textContent = `${fmtTon(initialPrice, 9)} TON`;
+  if (mcapEl) mcapEl.textContent = `${fmtCompact(initialMcap)} TON`;
+
+  // Total amount the publisher will sign (rough estimate).
+  const cfg = publishState.publishConfig || {};
+  const total = (cfg.publishFeeTon || 0.5) + ton + 0.7; // gas margin
+  const feeAmount = document.getElementById('publish-fee-amount');
+  const feeBreakdown = document.getElementById('publish-fee-breakdown');
+  if (feeAmount) feeAmount.textContent = `~${fmtTon(total, 2)} TON`;
+  if (feeBreakdown) feeBreakdown.textContent = `~0.7 TON gas · ${ton} TON liquidity · ${cfg.publishFeeTon || 0.5} TON publish fee`;
+}
+
+// ── Status-driven UI: form / deploy-flow / done ─────────────────────────────
+function applyPublishFlowStatus(status) {
+  const formEl = document.getElementById('publish-form');
+  const flowEl = document.getElementById('publish-deploy-flow');
+  if (!formEl || !flowEl) return;
+
+  if (status === 'approved' || status === 'deployed_pending_lp') {
+    // Hide draft form, show deploy flow.
+    formEl.style.display = 'none';
+    flowEl.style.display = '';
+    publishState.deployStep = (status === 'deployed_pending_lp') ? 'lp' : 'connect';
+    renderDeployFlow();
+  } else {
+    formEl.style.display = '';
+    flowEl.style.display = 'none';
+  }
+}
+
+function renderDeployFlow() {
+  const steps = ['connect', 'deploy', 'lp'];
+  const cur = publishState.deployStep;
+  steps.forEach((s) => {
+    const el = document.querySelector(`.publish-deploy-step[data-step="${s}"]`);
+    if (!el) return;
+    el.classList.remove('done', 'active');
+    if (steps.indexOf(s) < steps.indexOf(cur)) el.classList.add('done');
+    else if (s === cur) el.classList.add('active');
+  });
+
+  const walletLbl = document.getElementById('publish-deploy-wallet');
+  const connectBtn = document.getElementById('publish-deploy-connect');
+  const deployBtn = document.getElementById('publish-deploy-sign');
+  const lpBtn = document.getElementById('publish-deploy-lp-sign');
+  const lpSummary = document.getElementById('publish-deploy-lp-summary');
+
+  initTonConnect();
+  const connected = !!(tonConnectUI && tonConnectUI.connected);
+  const walletAddr = tonConnectUI?.account?.address || '';
+  if (walletLbl) {
+    walletLbl.textContent = connected
+      ? `Connected: ${walletAddr.slice(0, 6)}…${walletAddr.slice(-4)}`
+      : 'Not connected';
+  }
+  if (connectBtn) {
+    connectBtn.textContent = connected ? 'Reconnect' : 'Connect TonConnect';
+    connectBtn.onclick = async () => {
+      try {
+        if (tonConnectUI) await tonConnectUI.openModal();
+        // After modal closes the SDK fires connectionRestored — re-render then.
+        setTimeout(renderDeployFlow, 800);
+        if (cur === 'connect' && connected) publishState.deployStep = 'deploy';
+      } catch (e) { setPublishStatus('deploy', 'Connect failed: ' + e.message); }
+    };
+  }
+
+  if (deployBtn) {
+    deployBtn.disabled = !connected || cur !== 'deploy';
+    deployBtn.onclick = () => signPublishDeploy();
+  }
+
+  if (lpBtn) {
+    lpBtn.disabled = cur !== 'lp';
+    lpBtn.onclick = () => signPublishLpInit();
+  }
+
+  if (lpSummary) {
+    const ton = publishState.initialLiquidityTon || 5;
+    const share = (publishState.initialLiquidityTokenShare || 0.5) * 100;
+    lpSummary.innerHTML = `Lock <b>${ton} TON</b> + <b>${share}%</b> of supply into the pool. You stay the LP owner and can withdraw any time.`;
+  }
+
+  // Auto-advance from connect → deploy if wallet just connected.
+  if (cur === 'connect' && connected) {
+    publishState.deployStep = 'deploy';
+    setTimeout(renderDeployFlow, 50);
+  }
+}
+
+function setPublishStatus(scope, text) {
+  const id = scope === 'deploy' ? 'publish-deploy-status' : 'publish-status';
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+
+async function signPublishDeploy() {
+  setPublishStatus('deploy', 'Preparing deploy transaction…');
+  try {
+    initTonConnect();
+    const userWallet = tonConnectUI?.account?.address;
+    if (!userWallet) throw new Error('Wallet not connected');
+
+    const r = await fetch(`${API_BASE}/store/listings/${publishState.listing.id}/prepare-deploy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+      body: JSON.stringify({ userWalletAddress: userWallet }),
+    });
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    publishState.jettonMasterAddress = data.jettonMasterAddress;
+
+    if (data.simulated) {
+      setPublishStatus('deploy', 'Dev mode: jetton infra missing on the server. Continuing with simulated deploy.');
+    } else if (data.messages && data.messages.length) {
+      await tonConnectUI.sendTransaction({
+        validUntil: data.validUntil,
+        messages: data.messages,
+      });
+      setPublishStatus('deploy', 'Deploy signed. Confirming on-chain…');
+      await waitForListingStatus('deployed_pending_lp', 60);
+    }
+
+    publishState.deployStep = 'lp';
+    renderDeployFlow();
+    setPublishStatus('deploy', 'Token deployed! Now seed the liquidity pool.');
+  } catch (e) {
+    setPublishStatus('deploy', 'Deploy failed: ' + (e.message || e));
+  }
+}
+
+async function signPublishLpInit() {
+  setPublishStatus('deploy', 'Preparing liquidity transaction…');
+  try {
+    initTonConnect();
+    const userWallet = tonConnectUI?.account?.address;
+    if (!userWallet) throw new Error('Wallet not connected');
+
+    const r = await fetch(`${API_BASE}/store/listings/${publishState.listing.id}/prepare-lp-init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+      body: JSON.stringify({
+        userWalletAddress: userWallet,
+        tonAmount: publishState.initialLiquidityTon,
+        tokenShare: publishState.initialLiquidityTokenShare,
+      }),
+    });
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+
+    if (data.simulated) {
+      setPublishStatus('deploy', 'Dev mode: no jetton wallet code on server, sending TON leg only.');
+    }
+    await tonConnectUI.sendTransaction({
+      validUntil: data.validUntil,
+      messages: data.messages,
+    });
+    setPublishStatus('deploy', 'Liquidity tx signed. Confirming on-chain…');
+
+    await waitForListingStatus('published', 60);
+    publishState.deployStep = 'done';
+    renderDeployFlow();
+    setPublishStatus('deploy', '🎉 Your app is live on the App Store with its own liquidity pool!');
+  } catch (e) {
+    setPublishStatus('deploy', 'LP init failed: ' + (e.message || e));
+  }
+}
+
+async function waitForListingStatus(target, maxAttempts) {
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise(r => setTimeout(r, 8000));
+    try {
+      const r = await fetch(`${API_BASE}/store/listings/${publishState.listing.id}/status`, { headers: apiHeaders() });
+      const d = await r.json();
+      if (d.status === target || d.status === 'published') return d.status;
+    } catch {}
+  }
+  throw new Error(`Timeout waiting for status=${target}`);
+}
+
+function startPublishStatusPolling() {
+  let attempts = 0;
+  async function poll() {
+    attempts++;
+    try {
+      const r = await fetch(`${API_BASE}/store/listings/${publishState.listing.id}/status`, { headers: apiHeaders() });
+      const data = await r.json();
+      const st = data.status;
+      const labelMap = {
+        submitting: 'Awaiting fee payment…',
+        pending: 'In review queue.',
+        approved: '✓ Approved — sign the on-chain deploy below.',
+        deployed_pending_lp: '✓ Token deployed — sign the liquidity tx to go live.',
+        published: '🎉 Live on the App Store!',
+        rejected: 'Rejected.',
+      };
+      document.getElementById('publish-status').textContent = labelMap[st] || st;
+
+      // When status flips to approved or deployed_pending_lp, the form
+      // should yield to the deploy-flow card.
+      if (st === 'approved' || st === 'deployed_pending_lp' || st === 'published' || st === 'rejected') {
+        applyPublishFlowStatus(st);
+      }
+      if (st === 'published' || st === 'rejected') return;
+      if (attempts > 80) return;
+      setTimeout(poll, 15_000);
+    } catch (e) { if (attempts < 80) setTimeout(poll, 15_000); }
+  }
+  setTimeout(poll, 8_000);
+}
+
+// Make publish flow reachable from openDetail (App Settings).
+window._afOpenPublish = openPublish;
 
 init();
 

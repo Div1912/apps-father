@@ -42,6 +42,29 @@
     return window.Telegram && window.Telegram.WebApp || null;
   }
 
+  // ── Mock initData from URL hash (browser/dev testing) ────────────────────────
+  // When the URL hash contains tgWebAppData=... (the format Telegram itself uses),
+  // extract it so AF.api and AF.openWS can send it as auth even outside Telegram.
+  var _mockInitData = '';
+  var _mockUser = null;
+
+  function _parseMockHash() {
+    try {
+      var hash = window.location.hash.slice(1);
+      if (!hash) return;
+      var params = new URLSearchParams(hash);
+      var raw = params.get('tgWebAppData');
+      if (!raw) return;
+      // URLSearchParams.get() already percent-decodes once — don't double-decode.
+      // _mockInitData is now a proper initData query string (user=%7B...%7D format).
+      _mockInitData = raw;
+      var idp = new URLSearchParams(_mockInitData);
+      var userStr = idp.get('user');
+      if (userStr) _mockUser = JSON.parse(userStr);
+    } catch (_) {}
+  }
+  _parseMockHash();
+
   // ── AF.init ──────────────────────────────────────────────────────────────────
   function init(opts) {
     opts = opts || {};
@@ -83,11 +106,13 @@
     }
     options = options || {};
     var tg = _tg();
-    var headers = Object.assign(
-      { 'Content-Type': 'application/json',
-        'x-telegram-init-data': (tg && tg.initData) || '' },
-      options.headers || {}
-    );
+    // Don't set Content-Type for FormData/Blob — browser sets it automatically
+    // with the correct multipart boundary. Overriding it breaks file uploads.
+    var isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+    var isBlob     = typeof Blob     !== 'undefined' && options.body instanceof Blob;
+    var baseHeaders = { 'x-telegram-init-data': (tg && tg.initData) || _mockInitData || '' };
+    if (!isFormData && !isBlob) baseHeaders['Content-Type'] = 'application/json';
+    var headers = Object.assign(baseHeaders, options.headers || {});
     return fetch(_apiBase + path, Object.assign({}, options, { headers: headers }));
   }
 
@@ -181,9 +206,16 @@
     get isDev()     { return _isDev;     },
     get user() {
       var tg = _tg();
-      return (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) || null;
+      return (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) || _mockUser || null;
     },
-    get tg() { return _tg(); }
+    get tg() {
+      var tg = _tg();
+      if (tg) return tg;
+      // Return a minimal mock so AF.tg.initData works in browser testing
+      if (_mockInitData) return { initData: _mockInitData, initDataUnsafe: { user: _mockUser } };
+      return null;
+    },
+    get initData() { return (_tg() && _tg().initData) || _mockInitData || ''; }
   };
 
 }(window));

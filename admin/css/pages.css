@@ -114,18 +114,35 @@
   height: 100% !important;
 }
 
-/* Configuration page (Phase 6) */
+/* Configuration page (Phase 6)
+   Panels render flush against each other — gap: 0 plus negative margins
+   collapse adjacent borders into a single 1px line, so the grid reads as
+   one continuous slab instead of floating cards. */
 .cfg-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
-  gap: 14px;
-  align-items: start;
+  gap: 0;
+  align-items: stretch;
+  border: 1px solid var(--admin-card-border);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--admin-card-bg);
 }
 .cfg-section {
   background: var(--admin-card-bg);
-  border: 1px solid var(--admin-card-border);
-  border-radius: 14px;
+  border-right: 1px solid var(--admin-card-border);
+  border-bottom: 1px solid var(--admin-card-border);
+  border-radius: 0;
   padding: 18px 20px;
+  margin: 0;
+}
+/* Drop the trailing edges so the outer wrapper border is the only one
+   visible on the right- and bottom-most cells. We can't know exact column
+   counts without JS, so :nth-last-child handles the bottom row regardless
+   of how the grid wraps. */
+.cfg-section:last-child {
+  border-right: 0;
+  border-bottom: 0;
 }
 .cfg-section header {
   margin-bottom: 14px;

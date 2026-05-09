@@ -65,6 +65,16 @@ export interface AgentResult {
   outputTokens: number;
   cacheWriteTokens: number;
   cacheReadTokens: number;
+  /**
+   * Authoritative USD cost for the whole agent run, summed from each
+   * iteration's OpenRouter `usage.cost`. Preferred over token×catalog
+   * estimates when present. Zero when the upstream model didn't return cost.
+   */
+  costUsd?: number;
+  /** Input portion of costUsd (sum of upstream_inference_prompt_cost). */
+  costUsdInput?: number;
+  /** Output portion of costUsd (sum of upstream_inference_completions_cost). */
+  costUsdOutput?: number;
   logPath?: string;
   commitNum?: number;
   commitDir?: string;
@@ -203,7 +213,10 @@ export class Agent {
     ctx: AskContext;
     telegramId?: string;
     sessionId?: string;
-  }): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
+  }): Promise<{
+    text: string; inputTokens: number; outputTokens: number;
+    costUsd: number; costUsdInput: number; costUsdOutput: number;
+  }> {
     return new AskRunner().run({
       modelCfg: this._buildModelCfg(),
       systemPrompt: this._systemPrompt,
@@ -222,7 +235,10 @@ export class Agent {
   async executeAsRouter(
     ctx: RouterContext,
     opts?: { telegramId?: string; sessionId?: string; onToolCall?: (toolName: string) => void },
-  ): Promise<{ proposed: boolean; text: string; inputTokens: number; outputTokens: number }> {
+  ): Promise<{
+    proposed: boolean; text: string; inputTokens: number; outputTokens: number;
+    costUsd: number; costUsdInput: number; costUsdOutput: number;
+  }> {
     return new RouterRunner().run({
       modelCfg: this._buildModelCfg(),
       systemPrompt: this._systemPrompt,

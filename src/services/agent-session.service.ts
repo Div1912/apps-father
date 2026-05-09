@@ -16,7 +16,7 @@ import OpenAI from "openai";
 
 import { prisma } from "../db";
 import { projectService } from "./project.service";
-import { runtimeConfig } from "./runtime-config.service";
+import { runtimeConfig, type AgentComplexity } from "./runtime-config.service";
 import { commitService } from "./commit.service";
 import { runWithProject } from "./console-tagger.service";
 import { decryptToken } from "./crypto.service";
@@ -65,11 +65,39 @@ interface SessionLogOpts {
   input: string;
   output?: string;
   creditsCharged?: number;
+  /** Authoritative aggregate cost (sum of OR `usage.cost` per iteration). */
   costUsd?: number;
+  /** Input slice of costUsd (sum of upstream_inference_prompt_cost). */
+  costUsdInput?: number;
+  /** Output slice of costUsd (sum of upstream_inference_completions_cost). */
+  costUsdOutput?: number;
   inputTokens?: number;
   outputTokens?: number;
   durationMs?: number;
   success?: boolean;
+  complexity?: string | null;
+  isMaxMode?: boolean;
+}
+
+/**
+ * Optional extras that propagate from the proposal card into the session.
+ * Threaded as a single object so we don't grow the positional arg list every
+ * time we add a new piece of metadata to log.
+ */
+export interface SessionExtras {
+  creditsCharged?: number;
+  maxMode?: boolean;
+  complexity?: AgentComplexity | string | null;
+}
+
+/**
+ * Bridge for callers that still pass the legacy `creditsCharged: number`
+ * positional arg. New callers pass the SessionExtras object directly.
+ */
+function normalizeExtras(extras?: SessionExtras | number): SessionExtras {
+  if (extras == null) return {};
+  if (typeof extras === "number") return { creditsCharged: extras };
+  return extras;
 }
 
 // ── AgentSessionService ───────────────────────────────────────────────────────
@@ -116,11 +144,28 @@ class AgentSessionService {
           new ProposeActionTool(),
         ];
 
+    const routerStartMs = Date.now();
     const result = await new Agent("router")
       .setSystemPrompt(systemPrompt)
       .setMessages(messages)
       .setTools(tools as any)
       .executeAsRouter(ctx, { telegramId, sessionId: crypto.randomUUID(), onToolCall });
+
+    void this._logWithCost({
+      type: "router",
+      projectId,
+      userId: project?.userId ?? null,
+      model: routerCfg.model,
+      input: userMessage,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      durationMs: Date.now() - routerStartMs,
+      success: true,
+      // Authoritative OR cost — overrides _logWithCost's catalog estimate.
+      costUsd: result.costUsd,
+      costUsdInput: result.costUsdInput,
+      costUsdOutput: result.costUsdOutput,
+    });
 
     return {
       proposed: result.proposed,
@@ -153,8 +198,10 @@ class AgentSessionService {
       : null;
     const telegramId = owner?.telegramId ? String(owner.telegramId) : undefined;
     const projectDir = kb.resolveAskProjectDir(projectId);
+    const answerCfg = runtimeConfig.getSessionConfig("answer");
 
-    return new Agent("answer")
+    const answerStartMs = Date.now();
+    const result = await new Agent("answer")
       .setSystemPrompt(systemPrompt)
       .setMessages(messages)
       .setTools([
@@ -165,6 +212,30 @@ class AgentSessionService {
         new PlatformHelpAskTool(),
       ] as any)
       .executeAsAsker({ onChunk, ctx: { projectId, projectDir }, telegramId, sessionId: crypto.randomUUID() });
+
+    void this._logWithCost({
+      type: "answer",
+      projectId,
+      userId: project?.userId ?? null,
+      model: answerCfg.model,
+      input: question,
+      output: result.text?.substring(0, 500),
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      durationMs: Date.now() - answerStartMs,
+      success: true,
+      costUsd: result.costUsd,
+      costUsdInput: result.costUsdInput,
+      costUsdOutput: result.costUsdOutput,
+    });
+
+    // Trim runner-only fields before returning to callers that still expect
+    // the legacy { text, inputTokens, outputTokens } contract.
+    return {
+      text: result.text,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+    };
   }
 
   // ── Suggestions ──────────────────────────────────────────────────────────────
@@ -182,17 +253,34 @@ class AgentSessionService {
     const telegramId = owner?.telegramId ? String(owner.telegramId) : undefined;
 
     const client = getOpenRouterClient();
+    const suggStartMs = Date.now();
     const response = await client.chat.completions.create({
       model: suggCfg.model,
       max_tokens: suggCfg.max_tokens,
       messages: [{ role: "user", content: userPrompt }],
       ...(telegramId ? { user: telegramId } : {}),
-      extra_body: { session_id: crypto.randomUUID() },
+      extra_body: { session_id: crypto.randomUUID(), usage: { include: true } },
       ...(getProviderRouting(suggCfg.model, suggCfg.provider)
         ? { provider: getProviderRouting(suggCfg.model, suggCfg.provider) }
         : {}),
       ...(suggCfg.reasoning ? { reasoning: { max_tokens: 8000 } } : {}),
     } as any);
+
+    const suggUsage = (response.usage as any) || {};
+    void this._logWithCost({
+      type: "suggestions",
+      projectId,
+      userId: project?.userId ?? null,
+      model: suggCfg.model,
+      input: projectId,
+      inputTokens: suggUsage.prompt_tokens ?? 0,
+      outputTokens: suggUsage.completion_tokens ?? 0,
+      durationMs: Date.now() - suggStartMs,
+      success: true,
+      costUsd: Number(suggUsage.cost) || 0,
+      costUsdInput: Number(suggUsage.cost_details?.upstream_inference_prompt_cost) || 0,
+      costUsdOutput: Number(suggUsage.cost_details?.upstream_inference_completions_cost) || 0,
+    });
 
     const text = response.choices[0]?.message?.content || "";
     try {
@@ -206,16 +294,31 @@ class AgentSessionService {
 
   async session_build(
     projectId: string,
-    description: string,
-    plan: string,
+    buildArgs: { name?: string; description?: string; brief?: string; userPrompt?: string } | string,
     onProgress?: (p: AgentProgress) => Promise<void>,
     onAskUser?: (question: string, options: string[]) => Promise<string>,
     lang?: string,
     userBalance?: number,
+    attachments?: { localPath: string; projectPath: string; originalName: string; caption?: string }[],
+    extras?: SessionExtras | number,
   ): Promise<AgentResult> {
     return runWithProject(projectId, async () => {
-      const { userPrompt } = await kb.session_build(projectId, { description, plan, lang });
-      return this._runCoreAgent(projectId, userPrompt, onProgress, onAskUser, userBalance, undefined, "new");
+      // Support legacy string call (description + plan) from the first-time build path
+      const args = typeof buildArgs === "string"
+        ? { description: buildArgs, brief: buildArgs }
+        : buildArgs;
+      const { userPrompt } = await kb.session_build(projectId, {
+        name: args.name,
+        description: args.description,
+        brief: args.brief,
+        userPrompt: args.userPrompt,
+        lang,
+        hasAttachments: !!(attachments && attachments.length > 0),
+      });
+      return this._runCoreAgent(
+        projectId, userPrompt, onProgress, onAskUser, userBalance, attachments, "new",
+        normalizeExtras(extras),
+      );
     });
   }
 
@@ -229,12 +332,16 @@ class AgentSessionService {
     onAskUser?: (question: string, options: string[]) => Promise<string>,
     lang?: string,
     userBalance?: number,
+    extras?: SessionExtras | number,
   ): Promise<AgentResult> {
     return runWithProject(projectId, async () => {
       const { userPrompt } = await kb.session_update(projectId, {
         updateDescription, lang, attachments,
       });
-      return this._runCoreAgent(projectId, userPrompt, onProgress, onAskUser, userBalance, attachments, "update");
+      return this._runCoreAgent(
+        projectId, userPrompt, onProgress, onAskUser, userBalance, attachments, "update",
+        normalizeExtras(extras),
+      );
     });
   }
 
@@ -311,8 +418,37 @@ class AgentSessionService {
 
   // ── Session logging ───────────────────────────────────────────────────────────
 
+  /**
+   * Wrapper around `logSession` that fills in `costUsd` from the static
+   * model-pricing catalog when callers don't pass an authoritative one.
+   * If the caller already has the OpenRouter-reported cost (preferred)
+   * pass it via `opts.costUsd` and we skip the catalog lookup entirely.
+   */
+  private async _logWithCost(opts: SessionLogOpts): Promise<void> {
+    try {
+      let costUsd = opts.costUsd;
+      if (typeof costUsd !== "number" || !(costUsd > 0)) {
+        const pricing = await getModelPricing(opts.model);
+        costUsd = pricing
+          ? (opts.inputTokens ?? 0) * pricing.promptPerToken + (opts.outputTokens ?? 0) * pricing.completionPerToken
+          : 0;
+      }
+      await this.logSession({ ...opts, costUsd });
+    } catch (err) {
+      console.warn("[AgentSession] _logWithCost failed:", err);
+    }
+  }
+
   async logSession(opts: SessionLogOpts): Promise<void> {
     try {
+      const Decimal = require("@prisma/client/runtime/library").Decimal;
+      // Only persist the input/output split when we actually have a number
+      // for it — avoids silently writing 0 on rows logged before the OR
+      // usage-accounting wiring landed.
+      const inUsd = typeof opts.costUsdInput === "number" && opts.costUsdInput >= 0
+        ? new Decimal(opts.costUsdInput.toFixed(6)) : null;
+      const outUsd = typeof opts.costUsdOutput === "number" && opts.costUsdOutput >= 0
+        ? new Decimal(opts.costUsdOutput.toFixed(6)) : null;
       await prisma.agentSession.create({
         data: {
           type: opts.type,
@@ -322,11 +458,15 @@ class AgentSessionService {
           input: (opts.input || "").substring(0, 2000),
           output: opts.output ? opts.output.substring(0, 2000) : null,
           creditsCharged: opts.creditsCharged ?? 0,
-          costUsd: new (require("@prisma/client/runtime/library").Decimal)((opts.costUsd ?? 0).toFixed(6)),
+          costUsd: new Decimal((opts.costUsd ?? 0).toFixed(6)),
+          costUsdInput: inUsd,
+          costUsdOutput: outUsd,
           inputTokens: opts.inputTokens ?? 0,
           outputTokens: opts.outputTokens ?? 0,
           durationMs: opts.durationMs ?? null,
           success: opts.success ?? true,
+          complexity: opts.complexity ?? null,
+          isMaxMode: !!opts.isMaxMode,
         },
       });
     } catch (err) {
@@ -344,6 +484,7 @@ class AgentSessionService {
     userBalance?: number,
     attachments?: { localPath: string; projectPath: string; originalName: string; caption?: string }[],
     mode: AgentMode = "update",
+    extras: SessionExtras = {},
   ): Promise<AgentResult> {
     const systemPrompt = await buildSystemPrompt(mode);
     const taskId = crypto.randomUUID();
@@ -355,9 +496,12 @@ class AgentSessionService {
     const agentTelegramId = agentOwner?.telegramId ? String(agentOwner.telegramId) : undefined;
 
     const sessionType = mode === "new" ? "build" : "update";
-    const sessionCfg = runtimeConfig.getSessionConfig(sessionType);
+    const isMaxMode = !!extras.maxMode;
+    const sessionCfg = runtimeConfig.getEffectiveSessionConfig(sessionType, isMaxMode);
+    const creditsCharged = extras.creditsCharged;
+    const complexity = (typeof extras.complexity === "string" && extras.complexity) || null;
 
-    console.log(`[Agent] task_id=${taskId} user=${agentTelegramId ?? "?"} (mode=${mode}, ${systemPrompt.length} chars)`);
+    console.log(`[Agent] task_id=${taskId} user=${agentTelegramId ?? "?"} (mode=${mode}${isMaxMode ? " · MAX" : ""}, ${systemPrompt.length} chars)`);
     projectService.updateProjectLastTaskId(projectId, taskId).catch(() => {});
 
     const projectRootDir = path.join(PROJECTS_DIR, projectId);
@@ -443,7 +587,11 @@ class AgentSessionService {
     (ctx as any)._agentPricing = agentPricing;
     (ctx as any)._telegramId = agentTelegramId;
 
-    const runnerResult = await new Agent(sessionType)
+    // When MAX MODE is on, route the agent through the dedicated "max-mode"
+    // config slot so it picks up its own model, tokens, thinking budget, and
+    // iteration cap (set independently of the standard build/update slots).
+    const agentSessionType = isMaxMode ? "max-mode" : sessionType;
+    const runnerResult = await new Agent(agentSessionType)
       .setSystemPrompt(systemPrompt)
       .setTools(AGENT_TOOL_INSTANCES as any)
       .setRawTools(SERVER_TOOLS)
@@ -451,7 +599,36 @@ class AgentSessionService {
       .setContext(ctx)
       .executeAsAgent();
 
-    if (runnerResult) return runnerResult;
+    if (runnerResult) {
+      // Prefer the OR-reported cost summed across iterations
+      // (runnerResult.costUsd / costUsdInput / costUsdOutput) — that's the
+      // dollar figure upstream actually charged, including cache discounts.
+      // Token×catalog estimate stays as a fallback for legacy/edge models
+      // that don't honour the usage.include flag.
+      const orCostUsd = runnerResult.costUsd ?? 0;
+      const costUsd = orCostUsd > 0
+        ? orCostUsd
+        : (runnerResult.inputTokens * agentPricing.input + runnerResult.outputTokens * agentPricing.output);
+      void this.logSession({
+        type: mode === "new" ? "build" : "update",
+        projectId,
+        userId: (agentProject as any)?.userId ?? null,
+        model: tierConfig.modelId,
+        input: userPrompt,
+        output: runnerResult.summary?.substring(0, 500),
+        costUsd,
+        costUsdInput: runnerResult.costUsdInput,
+        costUsdOutput: runnerResult.costUsdOutput,
+        creditsCharged,
+        inputTokens: runnerResult.inputTokens,
+        outputTokens: runnerResult.outputTokens,
+        durationMs: runnerResult.durationMs,
+        success: true,
+        complexity,
+        isMaxMode,
+      });
+      return runnerResult;
+    }
 
     // Iteration limit reached — agent never called finish()
     const finalRouteError = validateBackendRoutes(commitDir, projectId, ctx.technicalPlan);
@@ -474,7 +651,7 @@ class AgentSessionService {
     const logFilePath = ctx.logger.getLogPath();
     ctx.logger.close();
 
-    return {
+    const iterLimitResult = {
       summary: ctx.summary || "Agent failed: reached iteration limit before a valid finish().",
       shortSummary: ctx.shortSummary || ctx.summary?.split("\n")[0]?.substring(0, 200) || "Build failed: iteration limit",
       contextDiff: ctx.contextDiff,
@@ -489,6 +666,32 @@ class AgentSessionService {
       stepCount: ctx.stepCounter,
       durationMs: Date.now() - ctx.runStartMs,
     };
+
+    // Same priority as the success path: OR-reported cost wins, fall back
+    // to token×catalog when missing.
+    const iterCostUsd = ctx.totalCostUsd > 0
+      ? ctx.totalCostUsd
+      : (ctx.totalInputTokens * agentPricing.input + ctx.totalOutputTokens * agentPricing.output);
+    void this.logSession({
+      type: mode === "new" ? "build" : "update",
+      projectId,
+      userId: (agentProject as any)?.userId ?? null,
+      model: tierConfig.modelId,
+      input: userPrompt,
+      output: iterLimitResult.summary?.substring(0, 500),
+      costUsd: iterCostUsd,
+      costUsdInput: ctx.totalCostUsdInput || undefined,
+      costUsdOutput: ctx.totalCostUsdOutput || undefined,
+      creditsCharged,
+      inputTokens: ctx.totalInputTokens,
+      outputTokens: ctx.totalOutputTokens,
+      durationMs: iterLimitResult.durationMs,
+      success: false,
+      complexity,
+      isMaxMode,
+    });
+
+    return iterLimitResult;
   }
 
   // ── Passport generation ───────────────────────────────────────────────────────
@@ -512,6 +715,10 @@ class AgentSessionService {
       ...(getProviderRouting(passportCfg.model, passportCfg.provider)
         ? { provider: getProviderRouting(passportCfg.model, passportCfg.provider) }
         : {}),
+      // Same OR usage opt-in as the rest of the runners. The passport call
+      // doesn't surface in admin Sessions today, but tracking real cost
+      // here keeps internal cost dashboards honest.
+      extra_body: { usage: { include: true } },
       messages: [{ role: "user", content: inputText }],
     } as any);
 
@@ -521,8 +728,13 @@ class AgentSessionService {
     const usage = response.usage as any;
     const inTok = usage?.prompt_tokens || 0;
     const outTok = usage?.completion_tokens || 0;
-    const livePricing = await getModelPricing(passportCfg.model);
-    const costUsd = inTok * (livePricing?.promptPerToken ?? 0) + outTok * (livePricing?.completionPerToken ?? 0);
+    // Prefer the OR-reported cost; fall back to catalog only when missing.
+    const orCost = Number(usage?.cost) || 0;
+    let costUsd = orCost;
+    if (!(costUsd > 0)) {
+      const livePricing = await getModelPricing(passportCfg.model);
+      costUsd = inTok * (livePricing?.promptPerToken ?? 0) + outTok * (livePricing?.completionPerToken ?? 0);
+    }
 
     fs.writeFileSync(path.join(commitDir, "passport.md"), passportText, "utf-8");
 
@@ -543,6 +755,28 @@ class AgentSessionService {
 
     const label = doneSummary ? "Generated" : "Regenerated";
     console.log(`[Context] ✅ ${label} passport for ${projectId.substring(0, 8)} commit #${commitNum} | in=${inTok} out=${outTok} | $${costUsd.toFixed(4)}`);
+
+    // Log as an agent session so the admin Sessions page tracks context cost.
+    try {
+      const project: any = await projectService.getProject(projectId);
+      void this.logSession({
+        type: "context",
+        projectId,
+        userId: project?.userId ?? null,
+        model: passportCfg.model,
+        input: `commit #${commitNum}${doneSummary ? ": " + doneSummary.split("\n")[0].substring(0, 120) : ""}`,
+        output: passportText.substring(0, 500),
+        costUsd,
+        costUsdInput: Number(usage?.cost_details?.upstream_inference_prompt_cost) || undefined,
+        costUsdOutput: Number(usage?.cost_details?.upstream_inference_completions_cost) || undefined,
+        inputTokens: inTok,
+        outputTokens: outTok,
+        success: true,
+      });
+    } catch (logErr) {
+      console.warn("[Context] Failed to log session:", logErr);
+    }
+
     return combined;
   }
 

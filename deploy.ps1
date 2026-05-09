@@ -181,24 +181,30 @@ function Upload-Zipped {
   $sizeMB = [Math]::Round((Get-Item $TEMP_ZIP).Length / 1MB, 1)
 
   $extractPy = Join-Path $PSScriptRoot ".extract_tmp.py"
-  Set-Content -Path $extractPy -Value @"
+  Set-Content -Path $extractPy -Encoding utf8 -Value @"
 import sys, zipfile, os
 zip_path, dest = sys.argv[1], sys.argv[2]
 with zipfile.ZipFile(zip_path) as z:
-    z.extractall(dest)
+    for member in z.infolist():
+        member.filename = member.filename.replace('\\', '/')
+        if member.filename.endswith('/'):
+            os.makedirs(os.path.join(dest, member.filename), exist_ok=True)
+        else:
+            z.extract(member, dest)
 os.remove(zip_path)
+print('OK: extracted', len(z.infolist()), 'entries')
 "@
 
-  scp -q $TEMP_ZIP    ($SERVER + ":/tmp/deploy_upload.zip")
+  scp -q $TEMP_ZIP  ($SERVER + ":/tmp/deploy_upload.zip")
   if ($LASTEXITCODE -ne 0) { Step-Err ("scp failed for " + $label) }
-  scp -q $extractPy   ($SERVER + ":/tmp/extract_deploy.py")
+  scp -q $extractPy ($SERVER + ":/tmp/extract_deploy.py")
+  if ($LASTEXITCODE -ne 0) { Step-Err ("scp script failed for " + $label) }
 
-  ssh $SERVER ("mkdir -p " + $remoteDest + " && python3 /tmp/extract_deploy.py /tmp/deploy_upload.zip " + $remoteDest + " && rm /tmp/extract_deploy.py")
+  ssh $SERVER ("mkdir -p " + $remoteDest + " && python3 /tmp/extract_deploy.py /tmp/deploy_upload.zip " + $remoteDest + " && rm -f /tmp/extract_deploy.py")
   if ($LASTEXITCODE -ne 0) { Step-Err ("extract failed for " + $label) }
 
   Remove-Item $extractPy -Force -ErrorAction SilentlyContinue
-
-  Remove-Item $TEMP_ZIP -Force
+  Remove-Item $TEMP_ZIP  -Force
   Step-OK ($label + " uploaded - " + $sizeMB + " MB zipped")
 }
 
@@ -213,12 +219,8 @@ if ($checked["build"]) {
 }
 
 # ---- dist ----
-# ---- dist ----
 if ($checked["dist"]) {
   Upload-Zipped "dist" ($APP_DIR + "/dist") "dist"
-  # Guarantee critical compiled files are fresh (zip path-sep can be unreliable)
-  scp -q dist/web/server.js ($SERVER + ":" + $APP_DIR + "/dist/web/server.js")
-  scp -q dist/web/routes/bucket.routes.js ($SERVER + ":" + $APP_DIR + "/dist/web/routes/bucket.routes.js")
 }
 
 # ---- mini_app ----
@@ -311,6 +313,10 @@ if ($checked["migrations"]) {
   $sqlLines.Add("CREATE INDEX IF NOT EXISTS agent_sessions_project_created ON agent_sessions(project_id, created_at DESC);")
   $sqlLines.Add("CREATE INDEX IF NOT EXISTS agent_sessions_user_created ON agent_sessions(user_id, created_at DESC);")
   $sqlLines.Add("CREATE INDEX IF NOT EXISTS agent_sessions_type_created ON agent_sessions(type, created_at DESC);")
+  $sqlLines.Add("ALTER TABLE agent_sessions ADD COLUMN IF NOT EXISTS complexity TEXT;")
+  $sqlLines.Add("ALTER TABLE agent_sessions ADD COLUMN IF NOT EXISTS is_max_mode BOOLEAN NOT NULL DEFAULT FALSE;")
+  $sqlLines.Add("ALTER TABLE agent_sessions ADD COLUMN IF NOT EXISTS cost_usd_input DECIMAL(12,6);")
+  $sqlLines.Add("ALTER TABLE agent_sessions ADD COLUMN IF NOT EXISTS cost_usd_output DECIMAL(12,6);")
   $sqlLines.Add("CREATE TABLE IF NOT EXISTS admin_user_notes (id SERIAL PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, body TEXT NOT NULL, author_tag TEXT NOT NULL DEFAULT 'admin', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());")
   $sqlLines.Add("CREATE INDEX IF NOT EXISTS admin_user_notes_user_id_idx ON admin_user_notes(user_id);")
   $sqlLines.Add("CREATE TABLE IF NOT EXISTS app_logs (id BIGSERIAL PRIMARY KEY, ts TIMESTAMP(3) NOT NULL DEFAULT NOW(), project_id TEXT NULL REFERENCES projects(id) ON DELETE SET NULL, category TEXT NOT NULL, level TEXT NOT NULL, source TEXT NOT NULL, message TEXT NOT NULL);")
@@ -321,6 +327,40 @@ if ($checked["migrations"]) {
   $sqlLines.Add("CREATE TABLE IF NOT EXISTS bundles (id TEXT PRIMARY KEY, name TEXT NOT NULL, credits INTEGER NOT NULL, bonus_credits INTEGER NOT NULL DEFAULT 0, price_usd DECIMAL(12,4) NOT NULL, discount INTEGER NOT NULL DEFAULT 0, is_limited BOOLEAN NOT NULL DEFAULT false, limit_total INTEGER, purchase_count INTEGER NOT NULL DEFAULT 0, is_active BOOLEAN NOT NULL DEFAULT true, sort_order INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());")
   $sqlLines.Add("ALTER TABLE users ALTER COLUMN app_slots SET DEFAULT 5;")
   $sqlLines.Add("UPDATE users SET admin_notified_at = created_at WHERE admin_notified_at IS NULL;")
+
+  # ── App Store ──────────────────────────────────────────────────────────
+  $sqlLines.Add("CREATE TABLE IF NOT EXISTS app_listings (id TEXT PRIMARY KEY, project_id TEXT NOT NULL UNIQUE REFERENCES projects(id) ON DELETE CASCADE, status TEXT NOT NULL DEFAULT 'draft', short_description VARCHAR(120), long_description TEXT, socials JSONB, category TEXT, screenshots JSONB, publish_fee_tx_hash TEXT, submitted_at TIMESTAMPTZ, approved_at TIMESTAMPTZ, approved_by INT, rejected_reason TEXT, published_at TIMESTAMPTZ, hidden BOOLEAN NOT NULL DEFAULT false, volume_24h_nano_ton BIGINT NOT NULL DEFAULT 0, market_cap_nano_ton BIGINT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());")
+  $sqlLines.Add("CREATE INDEX IF NOT EXISTS app_listings_status_hidden_idx ON app_listings(status, hidden);")
+  # New columns for the redesigned 7-step publish flow (idempotent).
+  $sqlLines.Add("ALTER TABLE app_listings ADD COLUMN IF NOT EXISTS tags JSONB;")
+  $sqlLines.Add("ALTER TABLE app_listings ADD COLUMN IF NOT EXISTS banner_filename TEXT;")
+  $sqlLines.Add("CREATE TABLE IF NOT EXISTS app_tokens (id TEXT PRIMARY KEY, project_id TEXT NOT NULL UNIQUE, listing_id TEXT NOT NULL UNIQUE REFERENCES app_listings(id) ON DELETE CASCADE, name TEXT NOT NULL, symbol TEXT NOT NULL, logo_filename TEXT NOT NULL, jetton_master_address TEXT UNIQUE, deploy_tx_hash TEXT, total_supply BIGINT NOT NULL, curve_supply_cap BIGINT NOT NULL, virtual_ton_reserve BIGINT NOT NULL, virtual_token_reserve BIGINT NOT NULL, real_ton_reserve BIGINT NOT NULL DEFAULT 0, sold_supply BIGINT NOT NULL DEFAULT 0, fee_balance_nano_ton BIGINT NOT NULL DEFAULT 0, creator_fee_balance_nano_ton BIGINT NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending_deploy', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());")
+  $sqlLines.Add("CREATE TABLE IF NOT EXISTS token_trades (id TEXT PRIMARY KEY, token_id TEXT NOT NULL REFERENCES app_tokens(id), user_id INT NOT NULL, type TEXT NOT NULL, ton_amount BIGINT NOT NULL, token_amount BIGINT NOT NULL, price_nano_ton BIGINT NOT NULL, fee_ton_amount BIGINT NOT NULL, tx_hash_in TEXT, tx_hash_out TEXT, status TEXT NOT NULL DEFAULT 'pending_payment', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), settled_at TIMESTAMPTZ);")
+  $sqlLines.Add("CREATE INDEX IF NOT EXISTS token_trades_token_created_idx ON token_trades(token_id, created_at);")
+  $sqlLines.Add("CREATE INDEX IF NOT EXISTS token_trades_user_idx ON token_trades(user_id);")
+  $sqlLines.Add("CREATE INDEX IF NOT EXISTS token_trades_status_idx ON token_trades(status);")
+  $sqlLines.Add("CREATE TABLE IF NOT EXISTS token_holdings (token_id TEXT NOT NULL REFERENCES app_tokens(id), user_id INT NOT NULL, balance BIGINT NOT NULL DEFAULT 0, avg_buy_nano_ton BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (token_id, user_id));")
+  $sqlLines.Add("CREATE INDEX IF NOT EXISTS token_holdings_user_idx ON token_holdings(user_id);")
+
+  # ── App Store V2: on-chain user-deployed jetton + LP pool ──
+  # Add new columns to app_tokens (idempotent — IF NOT EXISTS).
+  $sqlLines.Add("ALTER TABLE app_tokens ADD COLUMN IF NOT EXISTS owner_wallet_address TEXT;")
+  $sqlLines.Add("ALTER TABLE app_tokens ADD COLUMN IF NOT EXISTS real_token_reserve BIGINT NOT NULL DEFAULT 0;")
+  $sqlLines.Add("ALTER TABLE app_tokens ADD COLUMN IF NOT EXISTS lp_total_shares BIGINT NOT NULL DEFAULT 0;")
+  # Optional Jetton metadata description (TIP-64). Empty by default to mirror minter.ton.org.
+  $sqlLines.Add("ALTER TABLE app_tokens ADD COLUMN IF NOT EXISTS metadata_description TEXT;")
+  $sqlLines.Add("ALTER TABLE app_tokens ALTER COLUMN curve_supply_cap SET DEFAULT 0;")
+  $sqlLines.Add("ALTER TABLE app_tokens ALTER COLUMN virtual_ton_reserve SET DEFAULT 0;")
+  $sqlLines.Add("ALTER TABLE app_tokens ALTER COLUMN virtual_token_reserve SET DEFAULT 0;")
+
+  $sqlLines.Add("CREATE TABLE IF NOT EXISTS liquidity_positions (id TEXT PRIMARY KEY, token_id TEXT NOT NULL REFERENCES app_tokens(id) ON DELETE CASCADE, user_id INT, owner_wallet_address TEXT NOT NULL, shares BIGINT NOT NULL DEFAULT 0, cum_ton_deposited_nano BIGINT NOT NULL DEFAULT 0, cum_token_deposited BIGINT NOT NULL DEFAULT 0, cum_ton_withdrawn_nano BIGINT NOT NULL DEFAULT 0, cum_token_withdrawn BIGINT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());")
+  $sqlLines.Add("CREATE UNIQUE INDEX IF NOT EXISTS liquidity_positions_token_owner_idx ON liquidity_positions(token_id, owner_wallet_address);")
+  $sqlLines.Add("CREATE INDEX IF NOT EXISTS liquidity_positions_user_idx ON liquidity_positions(user_id);")
+  $sqlLines.Add("CREATE INDEX IF NOT EXISTS liquidity_positions_token_idx ON liquidity_positions(token_id);")
+
+  $sqlLines.Add("CREATE TABLE IF NOT EXISTS liquidity_events (id TEXT PRIMARY KEY, token_id TEXT NOT NULL REFERENCES app_tokens(id) ON DELETE CASCADE, position_id TEXT, owner_wallet_address TEXT NOT NULL, type TEXT NOT NULL, ton_nano BIGINT NOT NULL, token_amount BIGINT NOT NULL, shares BIGINT NOT NULL, tx_hash TEXT, status TEXT NOT NULL DEFAULT 'settled', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());")
+  $sqlLines.Add("CREATE INDEX IF NOT EXISTS liquidity_events_token_created_idx ON liquidity_events(token_id, created_at);")
+  $sqlLines.Add("CREATE INDEX IF NOT EXISTS liquidity_events_owner_idx ON liquidity_events(owner_wallet_address);")
 
   # Append external SQL files
   $sqlFiles = @(
@@ -348,9 +388,19 @@ if ($checked["migrations"]) {
 }
 
 # ---- agent_knowledge ----
+# NOTE: must use scp -r, NOT Upload-Zipped. PowerShell's Compress-Archive produces
+# Windows backslash paths inside the zip; Python extractall on Linux treats them as
+# literal filenames and never creates subdirectories — existing files are not overwritten.
 if ($checked["agent_knowledge"]) {
+  Step-Header "Uploading agent_knowledge via scp"
   ssh $SERVER ("mkdir -p " + $APP_DIR + "/agent_knowledge/instructions " + $APP_DIR + "/agent_knowledge/skills " + $APP_DIR + "/agent_knowledge/ask/topics")
-  Upload-Zipped "agent_knowledge" ($APP_DIR + "/agent_knowledge") "agent_knowledge"
+  scp -r agent_knowledge/instructions/* ($SERVER + ":" + $APP_DIR + "/agent_knowledge/instructions/")
+  if ($LASTEXITCODE -ne 0) { Step-Err "agent_knowledge/instructions upload failed" }
+  scp -r agent_knowledge/skills/* ($SERVER + ":" + $APP_DIR + "/agent_knowledge/skills/")
+  if ($LASTEXITCODE -ne 0) { Step-Err "agent_knowledge/skills upload failed" }
+  scp -r agent_knowledge/ask/* ($SERVER + ":" + $APP_DIR + "/agent_knowledge/ask/")
+  if ($LASTEXITCODE -ne 0) { Step-Err "agent_knowledge/ask upload failed" }
+  Step-OK "agent_knowledge uploaded"
 }
 
 # ---- Restart PM2 ----

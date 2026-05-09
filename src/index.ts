@@ -4,6 +4,13 @@ import { installConsoleTagger } from "./services/console-tagger.service";
 // tagging is in place before any user-app code runs.
 installConsoleTagger();
 
+// Make BigInt JSON-serialisable across the whole app. Without this, returning
+// any Prisma row with a BigInt column (App Store token reserves, telegram IDs,
+// etc.) from Express crashes JSON.stringify with "Do not know how to serialize
+// a BigInt". Existing call sites that manually convert with .toString() keep
+// working; this just makes implicit serialisation safe everywhere.
+(BigInt.prototype as any).toJSON = function () { return this.toString(); };
+
 import { config } from "./config";
 import { connectDatabase, prisma } from "./db";
 import { createBot } from "./bot";
@@ -14,6 +21,7 @@ import { processingProjects } from "./bot/processing";
 import { commitService } from "./services/commit.service";
 import { chatService } from "./services/chat.service";
 import { startRetentionScheduler } from "./services/retention.service";
+import { tonMonitorService } from "./services/ton-monitor.service";
 import {
   startAppLogFlusher,
   stopAppLogFlusher,
@@ -86,6 +94,7 @@ async function main() {
   }
 
   startRetentionScheduler();
+  tonMonitorService.start();
 
   console.log("\n✅ Apps Father is running!");
   console.log(`   Domain: ${config.domain}`);

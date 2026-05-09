@@ -6,12 +6,38 @@
   var PID = '__AFPID__';
 
   /* ── 1. Log ring buffers ─────────────────────────────────────────────────── */
-  var EL = [], RL = [], MAXL = 30;
-  function _push(arr, m) { arr.push({ t: Date.now(), m: String(m).slice(0, 300) }); if (arr.length > MAXL) arr.shift(); }
+  // MAXLEN is per-entry — needs to fit a full stack trace (typically 1-3 KB).
+  // MAXL × MAXLEN bounds total memory (~150 KB worst-case) so a runaway error
+  // loop can't blow up the page.
+  var EL = [], RL = [], MAXL = 30, MAXLEN = 5000;
+  function _push(arr, m) { arr.push({ t: Date.now(), m: String(m).slice(0, MAXLEN) }); if (arr.length > MAXL) arr.shift(); }
+  function _fmt(a) {
+    if (a == null) return String(a);
+    if (a instanceof Error) return (a.stack || (a.name + ': ' + a.message));
+    if (typeof a === 'object') { try { return JSON.stringify(a); } catch (e) { return String(a); } }
+    return String(a);
+  }
   var _ce = console.error.bind(console);
-  console.error = function () { _push(EL, Array.prototype.slice.call(arguments).map(String).join(' ')); _ce.apply(console, arguments); };
-  window.addEventListener('error', function (e) { _push(EL, (e.message || 'JS error') + (e.filename ? ' @ ' + e.filename + ':' + e.lineno : '')); });
-  window.addEventListener('unhandledrejection', function (e) { var r = e.reason; _push(EL, 'Unhandled: ' + (r && r.message ? r.message : String(r))); });
+  console.error = function () {
+    _push(EL, Array.prototype.slice.call(arguments).map(_fmt).join(' '));
+    _ce.apply(console, arguments);
+  };
+  var _cw = console.warn.bind(console);
+  console.warn = function () {
+    _push(EL, '[warn] ' + Array.prototype.slice.call(arguments).map(_fmt).join(' '));
+    _cw.apply(console, arguments);
+  };
+  window.addEventListener('error', function (e) {
+    var loc = e.filename ? ' @ ' + e.filename + ':' + e.lineno + (e.colno ? ':' + e.colno : '') : '';
+    var stack = e.error && e.error.stack ? '\n' + e.error.stack : '';
+    _push(EL, (e.message || 'JS error') + loc + stack);
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e.reason;
+    var msg = r && r.message ? r.message : String(r);
+    var stack = r && r.stack ? '\n' + r.stack : '';
+    _push(EL, 'Unhandled: ' + msg + stack);
+  });
 
   /* ── 2. Fetch interceptor ────────────────────────────────────────────────── */
   if (window.fetch) {
@@ -763,8 +789,11 @@
   /* ── 22. Bug modal ───────────────────────────────────────────────────────── */
   function openBug() {
     MODE = 'bug';
-    var log = EL.slice(-12).map(function (e) { return '[error] ' + e.m; })
-      .concat(RL.slice(-6).map(function (e) { return '[http]  ' + e.m; })).join('\n') || t('noLogs');
+    // Use the full ring buffers — entries already carry stack traces. The
+    // server clamps total payload size; here we want the agent to see
+    // everything we captured, not a 12-row preview.
+    var log = EL.map(function (e) { return '[error] ' + e.m; })
+      .concat(RL.map(function (e) { return '[http]  ' + e.m; })).join('\n\n') || t('noLogs');
     bm.innerHTML = '<div class="_af_bh"><button class="_af_bk" id="_af_bk">&#x2190; Back</button><span class="_af_btt">' + t('bugTitle') + '</span></div>'
       + '<textarea class="_af_bta" id="_af_bta" placeholder="' + eA(t('bugHint')) + '"></textarea>'
       + '<div class="_af_blog">' + eH(log) + '</div>'

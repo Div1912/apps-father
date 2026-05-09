@@ -118,7 +118,14 @@ export function getOpenRouterClient(): OpenRouterClient {
           if (body.stream) {
             return parseOpenRouterStream(resp);
           }
-          const data = await resp.json();
+          let data: any;
+          try {
+            const text = await resp.text();
+            data = JSON.parse(text);
+          } catch (parseErr: any) {
+            // Truncated or empty body — treat as a retryable network error
+            throw new Error(`OpenRouter response parse error (truncated body): ${parseErr.message}`);
+          }
           return normalizeOpenRouterJson(data);
         },
       },

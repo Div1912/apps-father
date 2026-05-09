@@ -124,20 +124,20 @@ if (AF.isDev) {
 ## CSS Safe Areas (ALWAYS use for mobile)
 
 ```css
-/* Top safe area — combine both Telegram variables */
+/* Top safe area — combine both Telegram variables with a minimum */
 .app-header {
-  padding-top: calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px));
+  padding-top: max(0px, calc(var(--tg-content-safe-area-inset-top, 0px) + var(--tg-safe-area-inset-top, 0px)));
 }
 
-/* Bottom safe area */
+/* Bottom safe area — use env() form, NOT var(--tg-safe-area-inset-bottom) alone */
 .bottom-nav, .bottom-bar {
-  padding-bottom: calc(var(--tg-safe-area-inset-bottom, 0px) + var(--tg-content-safe-area-inset-bottom, 0px));
+  padding-bottom: max(0px, env(safe-area-inset-bottom, 0px));
 }
 
 /* Full app container */
 .app {
-  padding-top: calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px));
-  padding-bottom: calc(var(--tg-safe-area-inset-bottom, 0px) + var(--tg-content-safe-area-inset-bottom, 0px));
+  padding-top: max(0px, calc(var(--tg-content-safe-area-inset-top, 0px) + var(--tg-safe-area-inset-top, 0px)));
+  padding-bottom: max(0px, env(safe-area-inset-bottom, 0px));
   min-height: 100vh;
   box-sizing: border-box;
 }

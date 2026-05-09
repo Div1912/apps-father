@@ -1,9 +1,5 @@
-DATABASE KEY DESIGN (CRITICAL):
-- Store each user as a separate key: db.set('user:' + telegramId, userData)
-- Read one user: db.get('user:' + telegramId) — instant O(1) lookup
-- NEVER store all users in one array key like db.get('users') — this breaks at scale
-- For leaderboards: maintain a pre-sorted 'leaderboard' key (top 50), update it when score changes
-- For counters/stats: maintain a 'stats' key updated at write time, never count at read time
-- For collections (items, games): use 'item:{id}' per record + 'item_index' array of IDs
-- Use db.keys().filter(k => k.startsWith('user:')) only for admin/rare operations
-- Always handle null: db.get('user:' + id) || null
+DATABASE KEY DESIGN — quick reminder (full patterns in `load_skill('backend')`):
+- Per-record keys: `db.set('user:' + telegramId, data)` — never a single array key for all users
+- Pre-computed aggregates: maintain `leaderboard` and `stats` keys at write time, read directly
+- Collections: `item:{id}` per record + `item_index` array of IDs
+- Always handle null: `db.get('user:' + id) || null`

@@ -31,3 +31,17 @@ Example (bad — too verbose / not architectural):
 - "Refactored color scheme and made the buttons feel more responsive after several rounds of polishing." → put this in `summary` instead.
 
 If you don't pass `context_diff`, the platform falls back to the first line of `summary`. That works but is less precise — prefer to author it yourself.
+
+## App Store (manual next step)
+
+Once the app is live and stable, the user can publish it to the in-platform
+**App Store** for distribution + a tokenised stock on TON. Publishing is a
+**manual user action** (it requires a 5 TON publishing fee, custom token name
+and ticker, screenshots, and admin moderation) and the agent should NOT try
+to automate it. If the user explicitly asks to publish, point them at:
+
+> Open *App Settings* → *Publish to App Store* → fill the form → pay 5 TON.
+
+Things `configure_app` already handles that feed into the listing automatically:
+the project name, app description, app long description, and bot avatar — so
+making those high quality during build/update directly improves the listing.

@@ -1,12 +1,14 @@
 import { Router, Request, Response } from "express";
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
 import dotenv from "dotenv";
 import Database from "better-sqlite3";
 import { verifyInitData } from "../middleware/initdata";
 import { projectService } from "../../services/project.service";
 import { decryptToken } from "../../services/crypto.service";
 import { runWithProject } from "../../services/console-tagger.service";
+import { config } from "../../config";
 
 const router = Router();
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
@@ -114,6 +116,13 @@ async function loadProjectEntry(
   const envPath = path.join(backendDir, ".env");
   const envVars = fs.existsSync(envPath) ? dotenv.parse(fs.readFileSync(envPath)) : {};
 
+  // Inject platform vars so routes.js can use the AF Bucket API
+  envVars.AF_INTERNAL_SECRET = process.env.AF_INTERNAL_SECRET || "";
+  envVars.BASE_URL = config.baseUrl;
+  envVars.PROJECT_ID = projectId;
+  // INTERNAL_BASE_URL bypasses nginx/Cloudflare — use this for server-side bucket calls
+  envVars.INTERNAL_BASE_URL = `http://localhost:${config.port}`;
+
   const entry: ProjectEntry = { mtime, routeFactory, db, envVars };
   projectCache.set(projectId, entry);
   return entry;
@@ -147,6 +156,12 @@ router.all("/:projectId/{*routePath}", async (req: Request, res: Response) => {
 
       const projectRouter = Router();
 
+      // Re-sign visual-test initData so routes.js auth checks pass
+      const vtHeader = (req.headers["x-telegram-init-data"] as string) || "";
+      if (vtHeader.includes("hash=visualtest_fake_hash_dev_only") && entry.db.botToken) {
+        req.headers["x-telegram-init-data"] = resignVisualTestInitData(vtHeader, entry.db.botToken);
+      }
+
       if (typeof entry.routeFactory === "function") {
         try {
           entry.routeFactory(projectRouter, entry.db, projectId, entry.envVars);
@@ -172,6 +187,21 @@ router.all("/:projectId/{*routePath}", async (req: Request, res: Response) => {
     }
   });
 });
+
+// ── Visual-test initData re-signer ────────────────────────────────────────────
+// When the visual test sends hash=visualtest_fake_hash_dev_only we re-sign the
+// initData with the project's real bot token so routes.js auth checks pass.
+function resignVisualTestInitData(initData: string, botToken: string): string {
+  const params = new URLSearchParams(initData);
+  params.delete("hash");
+  const entries = Array.from(params.entries());
+  entries.sort(([a], [b]) => a.localeCompare(b));
+  const dataCheckString = entries.map(([k, v]) => `${k}=${v}`).join("\n");
+  const secretKey = crypto.createHmac("sha256", "WebAppData").update(botToken).digest();
+  const hash = crypto.createHmac("sha256", secretKey).update(dataCheckString).digest("hex");
+  params.set("hash", hash);
+  return params.toString();
+}
 
 // ── Cache eviction endpoint (called by deploy_to_dev / ws-manager) ────────────
 // Exported so other parts of the server can force-evict a project's module

@@ -120,7 +120,9 @@ const auth = getUser(req);
 
 ```js
 router.post('/click', (req, res) => {
-  const telegramId = getUserId(req);
+  const auth = getUser(req);
+  if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+  const telegramId = auth.telegramId;
   const user = db.get('user:' + telegramId);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
@@ -242,7 +244,9 @@ router.post('/action', (req, res) => {
 ```js
 router.post('/create-invoice', async (req, res) => {
   try {
-    const userId = getUserId(req);
+    const auth = getUser(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+    const userId = auth.telegramId;
     const { stars, item } = req.body;
     const invoiceId = 'inv_' + Math.random().toString(36).substr(2, 16);
 

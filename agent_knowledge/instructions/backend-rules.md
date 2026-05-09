@@ -34,3 +34,7 @@ RULES FOR BACKEND (routes.js):
     CORRECT: router.get("/words", ...)
     CORRECT: router.post("/bot-webhook", ...)
     Reason: the platform forwards /api/{projectId}/words to the project router as /words.
+18. FILE UPLOADS — ALWAYS use the AF Bucket API. NEVER implement custom file storage with tmp directories or local disk writes in routes.js.
+    Load the `bucket` skill before writing any file upload code.
+    Platform vars available in routes.js via `env`: AF_INTERNAL_SECRET, BASE_URL, PROJECT_ID
+    Pattern: multer memoryStorage → POST req.file.buffer to /bucket/{PROJECT_ID}/upload with Content-Type header

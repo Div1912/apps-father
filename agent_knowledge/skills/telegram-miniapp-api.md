@@ -40,13 +40,16 @@ tg.setBottomBarColor('#000000');
 
 ## ThemeParams (CSS variables available as `var(--tg-theme-*)`)
 
+> ⚠️ **FORBIDDEN in app styles**: Do NOT use `var(--tg-theme-*)` variables for your app's colors.
+> They inherit the user's Telegram theme (could be any color) and break the app's intentional design.
+> **CORRECT**: define all colors yourself in `:root { --bg: #0d0d12; --accent: #6c63ff; --text: #f0f0f0; }`
+> The reference below is provided so you know what these variables ARE — not so you use them.
+
 ```
 bg_color, text_color, hint_color, link_color, button_color, button_text_color,
 secondary_bg_color, header_bg_color, bottom_bar_bg_color, accent_text_color,
 section_bg_color, section_header_text_color, subtitle_text_color, destructive_text_color
 ```
-
-Use in CSS: `color: var(--tg-theme-text-color)`, `background: var(--tg-theme-bg-color)`
 
 ---
 
@@ -185,7 +188,7 @@ padding-top: max(12px, calc(
   var(--tg-content-safe-area-inset-top, 0px) +
   var(--tg-safe-area-inset-top, 0px)
 ));
-padding-bottom: max(12px, var(--tg-safe-area-inset-bottom, 0px));
+padding-bottom: max(10px, env(safe-area-inset-bottom, 0px));
 ```
 
 ```js

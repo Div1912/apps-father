@@ -50,6 +50,11 @@
 
 <body class="emoji_image">
 
+  <!-- ═══ SPLASH / LOADING SCREEN ═══ -->
+  <div id="app-splash">
+    <video src="processing.mp4" autoplay muted playsinline loop></video>
+  </div>
+
   <div id="aj_progress" class="progress-bar"
     style="width:100%;transition:width .3s linear,box-shadow .2s;position:fixed;z-index:1000;top:0;height:3px;box-shadow:inset 0 0 0 var(--accent-color,#39ade7);">
   </div>
@@ -188,6 +193,18 @@
 
         <section class="tm-section" style="padding-top:0;">
           <div class="tm-table-wrap">
+            <a class="tm-row tm-row-link" id="btn-store-page">
+              <span class="tm-icon" style="background:linear-gradient(135deg,#3a8df0,#1aa6fe);color:#fff;display:inline-flex;align-items:center;justify-content:center;border-radius:8px">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l1-6h16l1 6"/><path d="M5 9v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9"/><path d="M9 13h6"/></svg>
+              </span>
+              <span data-i18n="store">App Store</span>
+            </a>
+            <a class="tm-row tm-row-link" id="btn-portfolio-page">
+              <span class="tm-icon" style="background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;display:inline-flex;align-items:center;justify-content:center;border-radius:8px">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>
+              </span>
+              <span data-i18n="portfolio">My Portfolio</span>
+            </a>
             <a class="tm-row tm-row-link" id="btn-referral-page">
               <span class="tm-icon af-icon-referral"></span>
               <span data-i18n="referral_program">Referral Program</span>
@@ -889,75 +906,181 @@
     </div>
   </div>
 
-  <!-- ═══ DETAIL VIEW ═══ -->
+  <!-- ═══ DETAIL VIEW (App Settings v3) ═══ -->
   <div id="view-detail" class="view-container hidden">
-    <div>
-      <main class="tm-main">
-        <section class="tm-main-intro">
-          <div class="tr-bot-anchor">
-            <div id="detail-avatar" class="tm-main-intro-picture-placeholder"></div>
-            <h1 class="tm-main-intro-header" id="detail-name"></h1>
-          </div>
-          <p class="tm-main-intro-text tm-username-link" style="max-width:312px;" id="detail-username"></p>
-        </section>
+    <main class="as3-main">
 
-        <section class="tm-section tm-menu-items" id="section-token" style="display:none">
-          <div class="tm-api-token-wrap">
-            <div class="tm-api-token tm-webapp-url" id="webapp-url-row" style="display:none">
-              <div class="js-spoiler spoiler-active" id="webapp-url-spoiler">
-                <span id="webapp-url-text"></span>
-              </div>
+      <!-- ── Identity hero ──────────────────────────────────────────── -->
+      <div class="as3-hero">
+        <div id="detail-avatar" class="as3-hero-avatar"></div>
+        <div class="as3-hero-body">
+          <div id="detail-name" class="as3-hero-name"></div>
+          <div id="detail-username" class="as3-hero-sub"></div>
+        </div>
+      </div>
+
+      <!-- ── Bot connection block (FIRST on the page) ──────────────── -->
+      <div class="as3-section-label">Connection</div>
+      <div class="as3-bot-block" id="section-token">
+        <div id="token-wrap" class="as3-bot-wrap" style="display:none">
+          <div class="as3-bot-row" id="webapp-url-row" style="display:none">
+            <span class="as3-bot-label">Web App URL</span>
+            <div class="js-spoiler spoiler-active" id="webapp-url-spoiler"><span id="webapp-url-text"></span></div>
+          </div>
+          <div class="as3-bot-row">
+            <span class="as3-bot-label">Bot Token</span>
+            <div class="js-spoiler spoiler-active" id="token-spoiler"><span id="token-text"></span></div>
+          </div>
+        </div>
+        <div id="detail-bot-actions" class="as3-bot-actions"></div>
+        <p class="as3-bot-hint" id="token-help-text" style="display:none">Keep this token secure — it grants full bot control.</p>
+      </div>
+
+      <!-- ── Publishing in App Store (fancy status panel) ──────────── -->
+      <div class="as3-publish" id="as3-publish-card">
+        <div class="as3-publish-glow"></div>
+        <div class="as3-publish-head">
+          <div class="as3-publish-title">
+            <span>Publishing in App Store</span>
+            <div class="as3-publish-status-pill" id="as3-publish-status-pill">Draft</div>
+          </div>
+          <div class="as3-publish-progress">
+            <div class="as3-publish-progress-track">
+              <div class="as3-publish-progress-fill" id="as3-publish-progress-fill" style="width:0%"></div>
             </div>
-            <div class="tm-api-token">
-              <div class="js-spoiler spoiler-active" id="token-spoiler">
-                <span id="token-text"></span>
-              </div>
+            <span class="as3-publish-progress-text" id="as3-publish-progress-text">0 / 4</span>
+          </div>
+        </div>
+
+        <!-- Checklist -->
+        <div class="as3-checklist" id="as3-checklist">
+          <div class="as3-check" data-check="created">
+            <div class="as3-check-mark"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <div class="as3-check-body">
+              <div class="as3-check-title">App Created</div>
+              <div class="as3-check-sub" id="as3-check-created-sub">Project exists</div>
             </div>
           </div>
-          <p class="help-text">Use this token to access the HTTP API. Keep it secure. <a
-              href="https://core.telegram.org/bots/api" target="_blank">Read more</a></p>
-        </section>
-
-        <section class="tm-section tm-menu-items" id="section-app">
-          <div class="tm-section-header">
-            <h2 class="tm-section-header-text" data-i18n="detail_app">App</h2>
+          <div class="as3-check" data-check="bot">
+            <div class="as3-check-mark"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <div class="as3-check-body">
+              <div class="as3-check-title">Bot Connected</div>
+              <div class="as3-check-sub" id="as3-check-bot-sub">—</div>
+            </div>
           </div>
-          <div class="tm-table-wrap" id="detail-app-rows"></div>
-        </section>
-
-        <section class="tm-section tm-menu-items" id="section-dev">
-          <div class="tm-section-header">
-            <h2 class="tm-section-header-text" data-i18n="detail_dev">Development</h2>
+          <div class="as3-check" data-check="info">
+            <div class="as3-check-mark"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <div class="as3-check-body">
+              <div class="as3-check-title">App Information</div>
+              <div class="as3-check-sub" id="as3-check-info-sub">—</div>
+            </div>
           </div>
-          <div class="tm-table-wrap" id="detail-dev-rows"></div>
-        </section>
-
-        <section class="tm-section tm-menu-items" id="section-monetization" style="display:none">
-          <div class="tm-section-header">
-            <h2 class="tm-section-header-text" data-i18n="detail_monetization">Monetization</h2>
+          <div class="as3-check" data-check="token">
+            <div class="as3-check-mark"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <div class="as3-check-body">
+              <div class="as3-check-title">App Token</div>
+              <div class="as3-check-sub" id="as3-check-token-sub">—</div>
+            </div>
           </div>
-          <div class="tm-table-wrap" id="detail-money-rows"></div>
-        </section>
+        </div>
 
-        <section class="tm-section tm-menu-items" id="section-settings">
-          <div class="tm-section-header">
-            <h2 class="tm-section-header-text" data-i18n="detail_settings">Settings</h2>
+        <!-- Rejection notice (visible only when status='rejected') -->
+        <div class="as3-rejection" id="as3-rejection" style="display:none">
+          <div class="as3-rejection-head">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            Submission rejected
           </div>
-          <div class="tm-table-wrap" id="detail-settings-rows"></div>
-        </section>
+          <div class="as3-rejection-reason" id="as3-rejection-reason"></div>
+        </div>
 
-        <section class="tm-section tm-menu-items">
-          <div class="tm-section-header">
-            <h2 class="tm-section-header-text" data-i18n="detail_actions">Actions</h2>
-          </div>
-          <div class="tm-table-wrap" id="detail-actions-rows"></div>
-        </section>
+        <!-- Submit / Resubmit / View button -->
+        <button class="as3-publish-btn" id="as3-publish-btn">Send for Review</button>
+      </div>
 
-        <section class="tm-section">
-          <p class="help-text" style="text-align:center;" id="detail-info"></p>
-        </section>
-      </main>
-    </div>
+      <!-- ── Main menu (clean button list) ─────────────────────────── -->
+      <div class="as3-section-label">Settings</div>
+      <div class="as3-menu" id="as3-menu-main">
+        <button class="as3-row" id="as3-row-info">
+          <span class="as3-row-icon as3-row-icon--blue">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          </span>
+          <span class="as3-row-label">App Information</span>
+          <span class="as3-row-chev"></span>
+        </button>
+        <button class="as3-row" id="as3-row-token">
+          <span class="as3-row-icon as3-row-icon--gold">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9 9h4.5a2.5 2.5 0 0 1 0 5H9"/><path d="M9 14h5.5a2.5 2.5 0 0 1 0 5H9"/><path d="M9 5v14"/></svg>
+          </span>
+          <span class="as3-row-label">App Token</span>
+          <span class="as3-row-meta" id="as3-row-token-meta"></span>
+          <span class="as3-row-chev"></span>
+        </button>
+        <button class="as3-row" id="as3-row-versions">
+          <span class="as3-row-icon as3-row-icon--purple">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          </span>
+          <span class="as3-row-label">Versions</span>
+          <span class="as3-row-chev"></span>
+        </button>
+        <button class="as3-row" id="as3-row-paid">
+          <span class="as3-row-icon as3-row-icon--green">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          </span>
+          <span class="as3-row-label">Paid Functions</span>
+          <span class="as3-row-chev"></span>
+        </button>
+        <button class="as3-row" id="as3-row-env">
+          <span class="as3-row-icon as3-row-icon--teal">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+          </span>
+          <span class="as3-row-label">Environment Variables</span>
+          <span class="as3-row-chev"></span>
+        </button>
+        <button class="as3-row" id="as3-row-bucket">
+          <span class="as3-row-icon as3-row-icon--orange">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          </span>
+          <span class="as3-row-label">File Bucket</span>
+          <span class="as3-row-chev"></span>
+        </button>
+      </div>
+
+      <!-- ── Danger zone ────────────────────────────────────────────── -->
+      <div class="as3-section-label">Danger zone</div>
+      <div class="as3-menu as3-menu--danger">
+        <button class="as3-row" id="as3-row-transfer">
+          <span class="as3-row-icon as3-row-icon--warn">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+          </span>
+          <span class="as3-row-label">Transfer Ownership</span>
+          <span class="as3-row-chev"></span>
+        </button>
+        <button class="as3-row as3-row--destructive" id="as3-row-delete">
+          <span class="as3-row-icon as3-row-icon--danger">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+          </span>
+          <span class="as3-row-label">Delete App</span>
+          <span class="as3-row-chev"></span>
+        </button>
+      </div>
+
+      <!-- ── Meta info ──────────────────────────────────────────────── -->
+      <div class="as3-meta" id="detail-info"></div>
+
+      <!-- Hidden legacy IDs kept for JS compatibility -->
+      <div style="display:none" aria-hidden="true">
+        <div id="section-app"><div id="detail-app-rows"></div></div>
+        <div id="section-dev"></div><div id="section-monetization"></div><div id="section-settings"></div>
+        <div id="appsettings-publish-card">
+          <div id="appsettings-publish-badge"></div>
+          <div id="appsettings-publish-fill"></div>
+          <span id="appsettings-publish-steps"></span>
+          <button id="appsettings-publish-btn"></button>
+        </div>
+        <div id="detail-dev-rows"></div><div id="detail-money-rows"></div>
+        <div id="detail-settings-rows"></div><div id="detail-actions-rows"></div>
+      </div>
+    </main>
   </div>
 
   <!-- ═══ VERSIONS LIST VIEW ═══ -->
@@ -1410,6 +1533,695 @@
       </main>
     </div>
   </div>
+
+  <!-- ═══ APP STORE — BROWSE ═══ -->
+  <div id="view-store" class="view-container hidden">
+    <main class="tm-main store-main">
+      <section class="store-hero-v2">
+        <div class="store-hero-eyebrow">App Store</div>
+        <h1 class="store-hero-title-v2">Discover apps</h1>
+        <p class="store-hero-sub-v2">Built by creators, owned by you. Open and trade their tokens.</p>
+      </section>
+
+      <section class="store-tabs-row">
+        <button class="store-tab active" data-tab="trending">
+          <span class="store-tab-icon">🔥</span>
+          <span>Trending</span>
+        </button>
+        <button class="store-tab" data-tab="new">
+          <span class="store-tab-icon">✨</span>
+          <span>New</span>
+        </button>
+        <button class="store-tab" data-tab="top">
+          <span class="store-tab-icon">📈</span>
+          <span>Top</span>
+        </button>
+      </section>
+
+      <section class="store-search-row">
+        <span class="store-search-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        </span>
+        <input type="search" id="store-search" class="store-search-input" placeholder="Search apps, tickers..." autocomplete="off" spellcheck="false">
+      </section>
+
+      <section class="store-list-section">
+        <div id="store-featured" class="store-featured" style="display:none"></div>
+        <div class="store-list-header" id="store-list-header" style="display:none">
+          <span class="store-list-header-title">All apps</span>
+          <span class="store-list-header-count" id="store-list-count"></span>
+        </div>
+        <div id="store-list" class="store-list">
+          <div class="store-loading">Loading…</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ═══ APP STORE — DETAIL (App Store-style) ═══ -->
+  <div id="view-store-app" class="view-container hidden">
+
+    <!-- Banner image (blurred logo or explicit banner) -->
+    <div class="store-d-banner" id="store-detail-banner">
+      <div class="store-d-banner-fade"></div>
+    </div>
+
+    <main class="tm-main store-detail-main">
+
+      <!-- Hero: logo, name, ticker, Open button -->
+      <section class="store-d-hero">
+        <img id="store-detail-logo" class="store-d-logo" src="" alt="">
+        <div class="store-d-hero-meta">
+          <h1 id="store-detail-name" class="store-d-name">—</h1>
+          <div id="store-detail-tagline" class="store-d-tagline">—</div>
+          <div class="store-d-hero-row">
+            <button id="store-d-open-app" class="store-d-open-btn">
+              <span>Open App</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </button>
+            <div id="store-detail-ticker-pill" class="store-d-ticker-pill">$—</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Quick stats bar -->
+      <section class="store-d-quickbar">
+        <div class="store-d-quickbar-item">
+          <div class="store-d-quickbar-label">Price</div>
+          <div class="store-d-quickbar-val" id="store-d-stat-price">—</div>
+          <div class="store-d-quickbar-sub" id="store-d-stat-price-sub"></div>
+        </div>
+        <div class="store-d-quickbar-divider"></div>
+        <div class="store-d-quickbar-item">
+          <div class="store-d-quickbar-label">Market Cap</div>
+          <div class="store-d-quickbar-val" id="store-d-stat-mcap">—</div>
+        </div>
+        <div class="store-d-quickbar-divider"></div>
+        <div class="store-d-quickbar-item">
+          <div class="store-d-quickbar-label">Holders</div>
+          <div class="store-d-quickbar-val" id="store-d-stat-holders">—</div>
+        </div>
+      </section>
+
+      <!-- About / description — now above screenshots -->
+      <section class="store-d-section">
+        <div class="store-d-section-title">About this app</div>
+        <div id="store-detail-desc" class="store-d-desc"></div>
+        <button id="store-d-desc-toggle" class="store-d-desc-toggle" style="display:none">Read more</button>
+      </section>
+
+      <!-- Screenshots — full-width swipeable carousel -->
+      <section class="store-d-section store-d-section-screens" id="store-detail-screens-section">
+        <div class="store-d-section-title">Preview</div>
+        <div class="store-d-screens-wrap">
+          <div id="store-detail-screens" class="store-d-screens"></div>
+          <div id="store-detail-screens-dots" class="store-d-screens-dots"></div>
+        </div>
+      </section>
+
+      <!-- Token chart with chart-mode tabs -->
+      <section class="store-d-section">
+        <div class="store-d-chart-header">
+          <div class="store-d-section-title" style="margin:0">Token chart</div>
+          <div class="store-d-chart-modes">
+            <button class="store-d-chart-mode active" data-chart="price">Price</button>
+            <button class="store-d-chart-mode" data-chart="mcap">Mcap</button>
+          </div>
+        </div>
+        <div class="store-d-chart-card">
+          <div class="store-d-chart-summary">
+            <div class="store-d-chart-summary-val" id="store-d-chart-current">—</div>
+            <div class="store-d-chart-summary-change" id="store-d-chart-change"></div>
+          </div>
+          <div class="store-d-chart-canvas-wrap">
+            <canvas id="store-detail-chart"></canvas>
+            <div id="store-d-chart-empty" class="store-d-chart-empty" style="display:none">No trades yet — be the first!</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Token info card -->
+      <section class="store-d-section">
+        <div class="store-d-section-title">Token info</div>
+        <div class="store-d-token-card">
+          <div class="store-d-token-row"><span>Symbol</span><b id="store-d-token-symbol">—</b></div>
+          <div class="store-d-token-row"><span>Total supply</span><b id="store-d-token-supply">—</b></div>
+          <div class="store-d-token-row"><span>In circulation</span><b id="store-d-token-sold">—</b></div>
+          <div class="store-d-token-row"><span>24h volume</span><b id="store-d-token-vol">—</b></div>
+          <div class="store-d-token-row" id="store-d-token-owner-row" style="display:none"><span>Token owner</span><a id="store-d-token-owner" target="_blank" class="store-d-token-link">—</a></div>
+          <div class="store-d-token-row" id="store-d-token-addr-row" style="display:none"><span>Contract</span><a id="store-d-token-addr" target="_blank" class="store-d-token-link">—</a></div>
+        </div>
+      </section>
+
+      <!-- Liquidity Pool card -->
+      <section class="store-d-section" id="store-d-liquidity-section" style="display:none">
+        <div class="store-d-section-title">Liquidity pool</div>
+        <div class="store-d-liquidity-card">
+          <div class="store-d-liq-stats">
+            <div class="store-d-liq-stat">
+              <div class="store-d-liq-stat-label">TON in pool</div>
+              <div class="store-d-liq-stat-val" id="store-d-liq-ton">—</div>
+            </div>
+            <div class="store-d-liq-stat">
+              <div class="store-d-liq-stat-label">Tokens in pool</div>
+              <div class="store-d-liq-stat-val" id="store-d-liq-tokens">—</div>
+            </div>
+            <div class="store-d-liq-stat">
+              <div class="store-d-liq-stat-label">LP owners</div>
+              <div class="store-d-liq-stat-val" id="store-d-liq-providers">—</div>
+            </div>
+          </div>
+          <div class="store-d-liq-mine" id="store-d-liq-mine" style="display:none">
+            <div class="store-d-liq-mine-header">Your position</div>
+            <div class="store-d-liq-mine-body">
+              <div><span>Share</span><b id="store-d-liq-mine-pct">—</b></div>
+              <div><span>Worth</span><b id="store-d-liq-mine-worth">—</b></div>
+            </div>
+            <div class="store-d-liq-mine-actions">
+              <button id="store-d-liq-add" class="store-d-liq-btn add">＋ Add liquidity</button>
+              <button id="store-d-liq-remove" class="store-d-liq-btn remove">－ Remove</button>
+            </div>
+          </div>
+          <div class="store-d-liq-cta" id="store-d-liq-connect-cta">
+            Connect your wallet to see your liquidity position.
+          </div>
+        </div>
+      </section>
+
+      <!-- Trade panel — sticky bottom-aligned card -->
+      <section class="store-d-section">
+        <div class="store-d-section-title">Trade &nbsp;<span class="store-d-section-title-sub">on bonding curve</span></div>
+        <div class="store-trade-card-v2">
+          <div class="store-trade-mode-v2">
+            <button class="store-trade-mode-btn-v2 active" data-mode="buy">Buy</button>
+            <button class="store-trade-mode-btn-v2" data-mode="sell">Sell</button>
+          </div>
+          <div class="store-trade-input-wrap-v2">
+            <input type="text" id="store-trade-amount" class="store-trade-input-v2" placeholder="0.00" inputmode="decimal">
+            <span id="store-trade-unit" class="store-trade-unit-v2">TON</span>
+          </div>
+          <div class="store-trade-presets" id="store-trade-presets"></div>
+          <div id="store-trade-quote" class="store-trade-quote-v2"></div>
+          <button id="store-trade-submit" class="store-trade-submit-v2">Buy with TON</button>
+          <div id="store-trade-status" class="store-trade-status-v2"></div>
+        </div>
+      </section>
+
+      <section class="store-d-section" id="store-detail-socials-section" style="display:none">
+        <div class="store-d-section-title">Links</div>
+        <div id="store-detail-socials" class="store-d-socials"></div>
+      </section>
+
+      <div class="store-d-footer-spacer"></div>
+    </main>
+  </div>
+
+  <!-- ═══ APP INFORMATION (translatable form, no token block) ═══ -->
+  <div id="view-app-info" class="view-container hidden">
+    <main class="pf2-main">
+
+      <div class="pf2-topbar">
+        <button class="pf2-back-btn" id="pf2-info-back-btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div class="pf2-topbar-title">App Information</div>
+        <button class="pf2-save-btn" id="pf2-info-save-btn">Save</button>
+      </div>
+
+      <div class="pf2-section">
+        <div class="pf2-section-head">
+          <div class="pf2-section-title">Main Information</div>
+          <div class="pf2-lang-tabs">
+            <button class="pf2-lang-tab pf2-lang-tab--active" data-lang="en">EN</button>
+            <button class="pf2-lang-tab" data-lang="ru">RU</button>
+            <button class="pf2-lang-tab" data-lang="ua">UA</button>
+          </div>
+        </div>
+
+        <div class="pf2-avatar-row">
+          <label class="pf2-avatar-wrap" id="pf2-avatar-label">
+            <img id="pf2-avatar-img" alt="">
+            <div class="pf2-avatar-overlay">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+            </div>
+            <input type="file" id="pf2-avatar-input" accept="image/*" style="display:none">
+          </label>
+          <div class="pf2-avatar-info">
+            <div class="pf2-field-label">App Avatar</div>
+            <div class="pf2-field-hint">Tap to upload or replace.</div>
+          </div>
+        </div>
+
+        <div class="pf2-field">
+          <div class="pf2-field-label-row">
+            <span class="pf2-field-label">Name</span>
+            <span class="pf2-field-counter" id="pf2-name-counter">32</span>
+          </div>
+          <input type="text" id="pf2-name" class="pf2-input" placeholder="App name" maxlength="32" autocomplete="off">
+        </div>
+
+        <div class="pf2-field">
+          <div class="pf2-field-label-row">
+            <span class="pf2-field-label">Short Description</span>
+            <span class="pf2-field-counter" id="pf2-short-counter">120</span>
+          </div>
+          <input type="text" id="pf2-short" class="pf2-input" placeholder="One-line summary of your app" maxlength="120" autocomplete="off">
+        </div>
+
+        <div class="pf2-field">
+          <div class="pf2-field-label-row">
+            <span class="pf2-field-label">Long Description</span>
+            <span class="pf2-field-counter" id="pf2-long-counter">2000</span>
+          </div>
+          <textarea id="pf2-long" class="pf2-input pf2-textarea" placeholder="What does your app do?" maxlength="2000" rows="5"></textarea>
+        </div>
+
+        <div class="pf2-field">
+          <div class="pf2-field-label-row">
+            <span class="pf2-field-label">Banner</span>
+            <span class="pf2-field-hint-inline">1600×900 px recommended</span>
+          </div>
+          <label class="pf2-banner-wrap" id="pf2-banner-label">
+            <img id="pf2-banner-img" alt="">
+            <div class="pf2-banner-empty" id="pf2-banner-empty">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 16l5-5 4 4 3-3 6 6"/></svg>
+              <span>Upload banner</span>
+            </div>
+            <input type="file" id="pf2-banner-input" accept="image/*" style="display:none">
+          </label>
+          <button class="pf2-remove-btn" id="pf2-banner-remove" style="display:none">Remove banner</button>
+        </div>
+
+        <div class="pf2-field">
+          <div class="pf2-field-label-row">
+            <span class="pf2-field-label">Screenshots</span>
+            <span class="pf2-field-counter" id="pf2-shots-counter">0 / 6</span>
+          </div>
+          <div class="pf2-shots-grid" id="pf2-shots-grid"></div>
+          <label class="pf2-add-media-btn">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add screenshot
+            <input type="file" id="pf2-shots-input" accept="image/*" multiple style="display:none">
+          </label>
+        </div>
+      </div>
+
+      <div class="pf2-section">
+        <div class="pf2-section-title">Additional Information</div>
+
+        <div class="pf2-field">
+          <div class="pf2-field-label">Category</div>
+          <div class="pf2-chips" id="pf2-categories"></div>
+        </div>
+
+        <div class="pf2-field">
+          <div class="pf2-field-label-row">
+            <span class="pf2-field-label">Tags</span>
+            <span class="pf2-field-counter" id="pf2-tags-counter">0 / 10</span>
+          </div>
+          <div class="pf2-tag-row">
+            <input type="text" id="pf2-tag-input" class="pf2-input" placeholder="Add a tag" maxlength="24" autocomplete="off">
+            <button class="pf2-tag-add-btn" id="pf2-tag-add">Add</button>
+          </div>
+          <div class="pf2-tag-list" id="pf2-tag-list"></div>
+          <div class="pf2-field-hint">At least 3 tags help users find your app</div>
+        </div>
+      </div>
+
+      <div class="pf2-submit-area">
+        <div class="pf2-submit-msg" id="pf2-info-msg" style="display:none"></div>
+        <button class="pf2-submit-btn" id="pf2-info-submit-btn">Save Changes</button>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- ═══ APP TOKEN PAGE ═══ -->
+  <div id="view-app-token" class="view-container hidden">
+    <main class="pf2-main">
+
+      <div class="pf2-topbar">
+        <button class="pf2-back-btn" id="pf2-token-back-btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div class="pf2-topbar-title">App Token</div>
+        <div class="pf2-status-badge" id="pf2-token-status-badge">New</div>
+      </div>
+
+      <!-- Token created (read-only) view -->
+      <div class="tk-created" id="tk-created" style="display:none">
+        <div class="tk-created-card">
+          <div class="tk-created-icon" id="tk-created-icon">
+            <img id="tk-created-icon-img" alt="" style="display:none">
+            <span id="tk-created-icon-letters"></span>
+          </div>
+          <div class="tk-created-name" id="tk-created-name">—</div>
+          <div class="tk-created-ticker" id="tk-created-ticker">$—</div>
+          <div class="tk-created-pill">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            Token created &amp; locked
+          </div>
+        </div>
+        <div class="tk-stat-grid">
+          <div class="tk-stat-cell">
+            <div class="tk-stat-label">Emission</div>
+            <div class="tk-stat-val">1,000,000</div>
+          </div>
+          <div class="tk-stat-cell">
+            <div class="tk-stat-label">Locked</div>
+            <div class="tk-stat-val">100,000</div>
+          </div>
+          <div class="tk-stat-cell">
+            <div class="tk-stat-label">Initial Liquidity</div>
+            <div class="tk-stat-val" id="tk-stat-liquidity">— TON</div>
+          </div>
+          <div class="tk-stat-cell">
+            <div class="tk-stat-label">Status</div>
+            <div class="tk-stat-val tk-stat-val--green">Live</div>
+          </div>
+        </div>
+        <div class="tk-info-box">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          <span>Token settings are locked. You can buy your own token to add liquidity from the App Store page.</span>
+        </div>
+      </div>
+
+      <!-- Token creation (form) view -->
+      <div class="tk-create" id="tk-create">
+
+        <div class="pf2-section">
+          <div class="pf2-section-title">Token Details</div>
+
+          <div class="pf2-token-hero">
+            <div class="pf2-token-icon" id="tk-icon">
+              <img id="tk-icon-img" alt="" style="display:none">
+              <span id="tk-icon-letters"></span>
+            </div>
+            <div class="pf2-token-hero-body">
+              <div class="pf2-field-label" id="tk-name-display">—</div>
+              <div class="pf2-field-hint">Icon copied from App Avatar automatically</div>
+            </div>
+          </div>
+
+          <div class="pf2-field">
+            <div class="pf2-field-label-row">
+              <span class="pf2-field-label">Ticker</span>
+              <span class="pf2-field-counter" id="tk-ticker-counter">10</span>
+            </div>
+            <div class="pf2-ticker-wrap">
+              <span class="pf2-ticker-dollar">$</span>
+              <input type="text" id="tk-ticker" class="pf2-input pf2-input--ticker" placeholder="MYAPP" maxlength="10" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="pf2-field-hint">3–10 letters. Cannot be changed after creation.</div>
+          </div>
+
+          <div class="pf2-locked-row">
+            <div class="pf2-locked-cell">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              <div class="pf2-locked-body">
+                <div class="pf2-locked-label">Emission</div>
+                <div class="pf2-locked-val">1,000,000</div>
+              </div>
+            </div>
+            <div class="pf2-locked-cell">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              <div class="pf2-locked-body">
+                <div class="pf2-locked-label">Tokens to lock</div>
+                <div class="pf2-locked-val">10% <span class="pf2-locked-sub">= 100k</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="pf2-field">
+            <div class="pf2-field-label-row">
+              <span class="pf2-field-label">Initial Liquidity</span>
+              <span class="pf2-field-hint-inline">min 5 TON</span>
+            </div>
+            <div class="pf2-liq-wrap">
+              <input type="number" id="tk-liquidity" class="pf2-input" min="5" step="0.5" value="5">
+              <span class="pf2-liq-unit">TON</span>
+            </div>
+          </div>
+
+          <div class="tk-balance-card">
+            <div class="tk-balance-label">Your TON Balance</div>
+            <div class="tk-balance-value" id="tk-balance">— TON</div>
+            <button class="tk-balance-topup" id="tk-balance-topup">Top up</button>
+          </div>
+        </div>
+
+        <div class="pf2-submit-area">
+          <div class="pf2-submit-msg" id="tk-msg" style="display:none"></div>
+          <button class="pf2-submit-btn" id="tk-create-btn">Create Token (5 TON)</button>
+          <div class="pf2-submit-hint">The liquidity amount will be deducted from your TON balance and locked in the pool. This cannot be undone.</div>
+        </div>
+
+      </div>
+
+    </main>
+  </div>
+
+  <!-- ═══ Legacy view-publish kept hidden + holding compatibility stubs ═══ -->
+  <div id="view-publish" class="view-container hidden" aria-hidden="true">
+    <main class="pf2-main" style="display:none">
+      <button id="pf2-back-btn"></button>
+      <span id="pf2-status-badge"></span>
+      <!-- Legacy hidden wiring kept for JS compatibility -->
+      <div aria-hidden="true" style="display:none">
+        <div id="pubflow-panel"><div id="pubflow-panel-list"></div><div id="pubflow-panel-progress-fill"></div><b id="pubflow-panel-progress-count"></b><p id="pubflow-panel-subtitle"></p></div>
+
+        <input type="text" id="publish-short"><textarea id="publish-long"></textarea>
+        <input type="text" id="publish-social-tg"><input type="text" id="publish-social-twitter">
+        <input type="text" id="publish-social-website"><input type="text" id="publish-token-name">
+        <input type="text" id="publish-token-symbol"><input type="text" id="publish-token-description">
+        <input type="number" id="publish-lp-ton" value="5"><input type="range" id="publish-lp-share" value="10">
+        <span id="publish-lp-share-pct"></span><span id="publish-lp-share-tokens"></span>
+        <span id="publish-lp-price"></span><span id="publish-lp-mcap"></span>
+        <span id="publish-preset-decimals"></span><span id="publish-preset-supply"></span>
+        <span id="publish-fee-amount"></span><span id="publish-fee-breakdown"></span>
+        <input type="file" id="publish-token-logo-input"><img id="publish-token-logo-preview">
+        <input type="file" id="publish-screenshot-input"><div id="publish-screenshots"></div>
+        <button id="publish-save"></button><button id="publish-submit"></button>
+        <div id="publish-status"></div><div id="publish-form"></div>
+        <div id="publish-deploy-flow">
+          <div id="publish-deploy-wallet"></div><button id="publish-deploy-connect"></button>
+          <button id="publish-deploy-sign" disabled></button><button id="publish-deploy-lp-sign" disabled></button>
+          <div id="publish-deploy-lp-summary"></div><div id="publish-deploy-status"></div>
+        </div>
+        <div id="pubflow-step1-summary"></div>
+        <div id="pubflow-step2-bot-name"></div><div id="pubflow-step2-bot-username"></div>
+        <button id="pubflow-step2-connect"></button><button id="pubflow-step2-continue"></button>
+        <button id="pubflow-step3-continue"></button>
+        <div id="pubflow-step4-categories"></div><div id="pubflow-step4-tag-list"></div>
+        <input id="pubflow-step4-tag-input"><button id="pubflow-step4-tag-add"></button>
+        <span id="pubflow-step4-tags-counter"></span><span id="pubflow-step4-shots-counter"></span>
+        <div id="pubflow-step4-shots"></div><input type="file" id="pubflow-step4-shots-input">
+        <img id="pubflow-step4-banner-img"><input type="file" id="pubflow-step4-banner-input">
+        <button id="pubflow-step4-continue"></button>
+        <img id="pubflow-step5-icon-img"><input type="file" id="pubflow-step5-icon-input">
+        <button id="pubflow-step5-icon-edit"></button>
+        <input id="pubflow-step5-name"><span id="pubflow-step5-name-counter"></span>
+        <input id="pubflow-step5-ticker"><span id="pubflow-step5-ticker-counter"></span>
+        <textarea id="pubflow-step5-desc"></textarea><span id="pubflow-step5-desc-counter"></span>
+        <span id="pubflow-step5-supply"></span>
+        <input type="number" id="pubflow-step5-lp-ton" value="5">
+        <input type="range" id="pubflow-step5-lp-share" value="10">
+        <b id="pubflow-step5-lp-pct"></b><span id="pubflow-step5-lp-tokens"></span>
+        <b id="pubflow-step5-lp-price"></b><b id="pubflow-step5-lp-mcap"></b>
+        <div id="pubflow-step5-deploy"><div id="pubflow-step5-deploy-status"></div>
+          <div id="pubflow-step5-wallet"></div>
+          <button id="pubflow-step5-connect"></button>
+          <button id="pubflow-step5-sign-deploy" disabled></button>
+          <button id="pubflow-step5-sign-lp" disabled></button>
+          <div id="pubflow-step5-lp-summary"></div>
+        </div>
+        <button id="pubflow-step5-continue"></button>
+        <div id="pubflow-step6-summary"></div><div id="pubflow-step6-fee"></div>
+        <span id="pubflow-step6-fee-amount"></span><div id="pubflow-step6-status"></div>
+        <button id="pubflow-step6-submit"></button>
+        <div id="pubflow-step7-card"></div><button id="pubflow-step7-open"></button>
+        <img id="pubflow-step3-avatar-img"><input type="file" id="pubflow-step3-avatar-input">
+        <button id="pubflow-step3-avatar-edit"></button>
+        <input id="pubflow-step3-name"><span id="pubflow-step3-name-counter"></span>
+        <input id="pubflow-step3-short"><span id="pubflow-step3-short-counter"></span>
+        <textarea id="pubflow-step3-long"></textarea><span id="pubflow-step3-long-counter"></span>
+      </div>
+    </main>
+  </div>
+
+  <!-- ═══ PORTFOLIO ═══ -->
+  <div id="view-portfolio" class="view-container hidden">
+    <main class="tm-main portfolio-main">
+      <section class="tm-main-intro">
+        <h1 class="tm-main-intro-header">My Portfolio</h1>
+        <p class="tm-main-intro-text" id="portfolio-summary">—</p>
+      </section>
+      <section class="store-list-section">
+        <div id="portfolio-list" class="portfolio-list">
+          <div class="store-loading">Loading…</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ═══ WALLET VIEW ═══ -->
+  <div id="view-wallet" class="view-container hidden">
+    <main class="tm-main">
+      <section class="tm-main-intro">
+        <h1 class="tm-main-intro-header">Wallet</h1>
+      </section>
+      <section class="wallet-section">
+        <!-- TonConnect button area -->
+        <div class="wallet-connect-card" id="wallet-connect-card">
+          <div class="wallet-connect-icon">
+            <svg width="40" height="40" viewBox="0 0 56 56" fill="none">
+              <rect width="56" height="56" rx="16" fill="#0098EA"/>
+              <path d="M37.5603 15.6277H18.4386C14.9228 15.6277 12.6944 19.4202 14.4632 22.4861L26.2644 43.2496C27.0773 44.6874 29.1654 44.6874 29.9783 43.2496L41.7796 22.4861C43.5484 19.4202 41.32 15.6277 37.8042 15.6277H37.5603Z" fill="white"/>
+            </svg>
+          </div>
+          <div class="wallet-connect-title" id="wallet-connect-title">Connect TON Wallet</div>
+          <div class="wallet-connect-sub" id="wallet-connect-sub">Connect your TonKeeper, MyTonWallet or any TonConnect-compatible wallet to manage tokens and interact with the TON blockchain.</div>
+          <button class="wallet-connect-btn" id="wallet-view-connect-btn">Connect Wallet</button>
+        </div>
+        <!-- Balance after connection -->
+        <div class="wallet-balance-card hidden" id="wallet-balance-card">
+          <div class="wallet-balance-label">Wallet</div>
+          <div class="wallet-address-pill" id="wallet-address-pill">—</div>
+          <div class="wallet-balance-amount" id="wallet-balance-amount">—</div>
+          <div class="wallet-balance-sub">TON Balance</div>
+          <button class="wallet-disconnect-btn" id="wallet-view-disconnect-btn">Disconnect</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ═══ OTHER VIEW ═══ -->
+  <div id="view-other" class="view-container hidden">
+    <main class="other-main">
+
+      <!-- Profile header -->
+      <div class="other-profile">
+        <div class="other-profile-avatar" id="other-profile-avatar"></div>
+        <div class="other-profile-info">
+          <div class="other-profile-name" id="other-profile-name">—</div>
+          <div class="other-profile-sub" id="other-profile-sub">Apps Father</div>
+        </div>
+      </div>
+
+      <!-- Grid of buttons -->
+      <div class="other-grid">
+
+        <button class="other-tile other-tile--blue" id="other-referral-btn">
+          <div class="other-tile-icon">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+          </div>
+          <span class="other-tile-label">Referral</span>
+          <span class="other-tile-sub">Invite friends</span>
+        </button>
+
+        <button class="other-tile other-tile--purple" id="other-language-btn">
+          <div class="other-tile-icon">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+            </svg>
+          </div>
+          <span class="other-tile-label">Language</span>
+          <span class="other-tile-sub">App language</span>
+        </button>
+
+        <button class="other-tile other-tile--teal" id="other-help-btn">
+          <div class="other-tile-icon">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>
+            </svg>
+          </div>
+          <span class="other-tile-label">Help</span>
+          <span class="other-tile-sub">Support center</span>
+        </button>
+
+        <button class="other-tile other-tile--orange" id="other-releasenotes-btn">
+          <div class="other-tile-icon">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14,2 14,8 20,8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+            </svg>
+          </div>
+          <span class="other-tile-label">What's New</span>
+          <span class="other-tile-sub">Release notes</span>
+        </button>
+
+      </div>
+
+      <!-- App info footer -->
+      <div class="other-footer">
+        <div class="other-footer-logo">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
+        </div>
+        <div class="other-footer-name">Apps Father</div>
+        <div class="other-footer-version" id="other-footer-version">v1.0</div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- ═══ BOTTOM NAV ═══ -->
+  <div class="bnav-wrapper" id="bottom-nav">
+    <nav class="bnav">
+      <ul class="bnav-list" data-count="4" style="--active-index:0">
+        <!-- Apps -->
+        <li>
+          <button class="bnav-item bnav-active" data-tab="list" aria-label="Apps">
+            <span class="bnav-icon-slot">
+              <span class="bnav-icon-wrap">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
+              </span>
+            </span>
+            <span class="bnav-label">Apps</span>
+          </button>
+        </li>
+        <!-- Store -->
+        <li>
+          <button class="bnav-item" data-tab="store" aria-label="Store">
+            <span class="bnav-icon-slot">
+              <span class="bnav-icon-wrap">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 13a5 5 0 0 1-5-5h2a3 3 0 0 0 3 3a3 3 0 0 0 3-3h2a5 5 0 0 1-5 5m0-10a3 3 0 0 1 3 3H9a3 3 0 0 1 3-3m7 3h-2a5 5 0 0 0-5-5a5 5 0 0 0-5 5H5c-1.11 0-2 .89-2 2v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2"/></svg>
+              </span>
+            </span>
+            <span class="bnav-label">Store</span>
+          </button>
+        </li>
+        <!-- Wallet -->
+        <li>
+          <button class="bnav-item" data-tab="wallet" aria-label="Wallet">
+            <span class="bnav-icon-slot">
+              <span class="bnav-icon-wrap">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M21.1 8.004q-.085-.005-.181-.004h-2.525c-2.068 0-3.837 1.628-3.837 3.75s1.77 3.75 3.837 3.75h2.525q.096.001.182-.004a1.755 1.755 0 0 0 1.645-1.628c.004-.06.004-.125.004-.185V9.817c0-.06 0-.125-.004-.185a1.755 1.755 0 0 0-1.645-1.628m-2.928 4.746c.532 0 .963-.448.963-1s-.431-1-.963-1c-.533 0-.964.448-.964 1s.431 1 .964 1"/><path fill-rule="evenodd" clip-rule="evenodd" d="M20.918 17a.22.22 0 0 1 .221.278c-.2.712-.519 1.32-1.03 1.83c-.749.75-1.698 1.081-2.87 1.239c-1.14.153-2.595.153-4.433.153h-2.112c-1.838 0-3.294 0-4.433-.153c-1.172-.158-2.121-.49-2.87-1.238c-.748-.749-1.08-1.698-1.238-2.87C2 15.099 2 13.644 2 11.806v-.112C2 9.856 2 8.4 2.153 7.26c.158-1.172.49-2.121 1.238-2.87c.749-.748 1.698-1.08 2.87-1.238C7.401 3 8.856 3 10.694 3h2.112c1.838 0 3.294 0 4.433.153c1.172.158 2.121.49 2.87 1.238c.511.512.83 1.119 1.03 1.831a.22.22 0 0 1-.221.278h-2.524c-2.837 0-5.337 2.24-5.337 5.25s2.5 5.25 5.337 5.25zM5.75 7a.75.75 0 0 0 0 1.5h4a.75.75 0 0 0 0-1.5z"/></svg>
+              </span>
+            </span>
+            <span class="bnav-label">Wallet</span>
+          </button>
+        </li>
+        <!-- Other -->
+        <li>
+          <button class="bnav-item" data-tab="other" aria-label="Other">
+            <span class="bnav-icon-slot">
+              <span class="bnav-icon-wrap">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 48 48"><defs><mask id="bnav-other-mask"><g fill="none"><path fill="#fff" stroke="#fff" stroke-linejoin="round" stroke-width="4" d="M24 44c11.046 0 20-8.954 20-20S35.046 4 24 4S4 12.954 4 24s8.954 20 20 20Z"/><circle cx="14" cy="24" r="3" fill="#000"/><circle cx="24" cy="24" r="3" fill="#000"/><circle cx="34" cy="24" r="3" fill="#000"/></g></mask></defs><path fill="currentColor" d="M0 0h48v48H0z" mask="url(#bnav-other-mask)"/></svg>
+              </span>
+            </span>
+            <span class="bnav-label">Other</span>
+          </button>
+        </li>
+      </ul>
+    </nav>
+  </div>
+
 </body>
 
 </html>

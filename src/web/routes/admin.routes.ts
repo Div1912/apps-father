@@ -1072,10 +1072,12 @@ router.get("/api/agent-sessions", async (req: Request, res: Response) => {
 
     const creditsPerDollar = runtimeConfig.getCreditsPerDollar() || 50;
     const sessions = rows.map((s: any) => {
-      const costUsd    = Number(s.costUsd   || 0);
-      const credits    = Number(s.creditsCharged || 0);
-      const revenueUsd = credits / creditsPerDollar;
-      const marginUsd  = revenueUsd - costUsd;
+      const costUsd       = Number(s.costUsd   || 0);
+      const costUsdInput  = s.costUsdInput  != null ? Number(s.costUsdInput)  : null;
+      const costUsdOutput = s.costUsdOutput != null ? Number(s.costUsdOutput) : null;
+      const credits       = Number(s.creditsCharged || 0);
+      const revenueUsd    = credits / creditsPerDollar;
+      const marginUsd     = revenueUsd - costUsd;
       return {
         id:             s.id,
         type:           s.type,
@@ -1086,6 +1088,11 @@ router.get("/api/agent-sessions", async (req: Request, res: Response) => {
         input:          (s.input  || "").substring(0, 120),
         creditsCharged: credits,
         costUsd:        parseFloat(costUsd.toFixed(6)),
+        // Input/output split — null when the row is older than the OR
+        // usage-accounting wiring. Frontend hides the breakdown row in that
+        // case rather than showing $0.000000 for both.
+        costUsdInput:   costUsdInput  != null ? parseFloat(costUsdInput.toFixed(6))  : null,
+        costUsdOutput:  costUsdOutput != null ? parseFloat(costUsdOutput.toFixed(6)) : null,
         revenueUsd:     parseFloat(revenueUsd.toFixed(4)),
         marginUsd:      parseFloat(marginUsd.toFixed(4)),
         inputTokens:    s.inputTokens,
@@ -1093,6 +1100,8 @@ router.get("/api/agent-sessions", async (req: Request, res: Response) => {
         durationMs:     s.durationMs,
         success:        s.success,
         createdAt:      s.createdAt,
+        complexity:     s.complexity ?? null,
+        isMaxMode:      !!s.isMaxMode,
       };
     });
 
@@ -1114,6 +1123,86 @@ router.delete("/api/agent-sessions/:id", async (req: Request, res: Response) => 
   }
 });
 
+// ── App Store moderation ─────────────────────────────────────────────────────
+// Browser admin (bearer auth via /admin/api) endpoints. All listing/token
+// access goes through appStoreService so DB integrity stays in one place.
+router.get("/api/listings", async (req: Request, res: Response) => {
+  try {
+    const status = (req.query.status as string) || undefined;
+    const { appStoreService } = await import("../../services/app-store.service");
+    const items = await appStoreService.listForReview(status);
+    res.json({
+      items: items.map((row: any) => ({
+        id: row.id,
+        projectId: row.projectId,
+        projectName: row.project?.name,
+        botUsername: row.project?.botUsername,
+        ownerTg: row.project?.user?.telegramId?.toString(),
+        ownerUsername: row.project?.user?.username,
+        ownerFirstName: row.project?.user?.firstName,
+        status: row.status,
+        shortDescription: row.shortDescription,
+        longDescription: row.longDescription,
+        category: row.category,
+        socials: row.socials,
+        screenshots: row.screenshots,
+        publishFeeTxHash: row.publishFeeTxHash,
+        submittedAt: row.submittedAt,
+        approvedAt: row.approvedAt,
+        publishedAt: row.publishedAt,
+        rejectedReason: row.rejectedReason,
+        hidden: row.hidden,
+        token: row.token ? {
+          id: row.token.id,
+          name: row.token.name,
+          symbol: row.token.symbol,
+          logoFilename: row.token.logoFilename,
+          status: row.token.status,
+          jettonMasterAddress: row.token.jettonMasterAddress,
+          deployTxHash: row.token.deployTxHash,
+        } : null,
+      })),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/api/listings/:id/approve", async (req: Request, res: Response) => {
+  try {
+    const { appStoreService } = await import("../../services/app-store.service");
+    // Admin user id 0 → not a real user, but appStoreService.approve only
+    // stores it in approvedBy. The browser admin doesn't have a paired User
+    // row by default, so 0 is a sentinel "browser admin".
+    const result = await appStoreService.approve(req.params.id as string, 0);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post("/api/listings/:id/reject", async (req: Request, res: Response) => {
+  try {
+    const reason = String(req.body?.reason || "rejected");
+    const { appStoreService } = await import("../../services/app-store.service");
+    const result = await appStoreService.reject(req.params.id as string, reason);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post("/api/listings/:id/hide", async (req: Request, res: Response) => {
+  try {
+    const hidden = req.body?.hidden !== false;
+    const { appStoreService } = await import("../../services/app-store.service");
+    const result = await appStoreService.setHidden(req.params.id as string, hidden);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // DELETE all usage_log rows for a given agent session (task_id).
 // Used by Admin → Sessions to purge a single run from the table.
 router.delete("/api/sessions/:taskId", async (req: Request, res: Response) => {
@@ -1130,11 +1219,15 @@ router.delete("/api/sessions/:taskId", async (req: Request, res: Response) => {
   }
 });
 
-// GET agent session configurations and pricing
+// GET agent session configurations and pricing.
+// `pricing` returns the complexity matrix:
+//   { build: { trivial, small, medium, large, huge },
+//     update: {...}, "update-plan": {...},
+//     "update-plan-per-item": {...}, "bug-fix": {...} }
 router.get("/api/config/sessions", async (_req: Request, res: Response) => {
   res.json({
     sessions: runtimeConfig.getAllSessionConfigs(),
-    pricing: runtimeConfig.get().agentPricing,
+    pricing: runtimeConfig.getAgentPricing(),
   });
 });
 

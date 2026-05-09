@@ -266,14 +266,64 @@ export function validateBackendRoutes(
     errors.push("Bot /start parsing splits only on tabs. Use text.split(/\\s+/) so deep-link parameters work from normal Telegram messages.");
   }
 
-  const frontendUsesWs = /new\s+WebSocket\s*\(/.test(frontendText);
+  // AF.openWS() is the correct SDK wrapper — treat it the same as new WebSocket()
+  const frontendUsesWs = /new\s+WebSocket\s*\(|AF\.openWS\s*\(/.test(frontendText);
   const backendHasWs = /module\.exports\.ws\s*=/.test(content);
+
+  // Diagnostic logging — always emitted so we can trace validator decisions in server logs
+  {
+    const appJsOnDisk = fs.existsSync(frontendApp);
+    const appJsBytes = appJsOnDisk ? fs.statSync(frontendApp).size : 0;
+    const appJsLines = appJsOnDisk ? fs.readFileSync(frontendApp, "utf-8").split("\n").length : 0;
+    const openWsInText = frontendText.includes("AF.openWS");
+    const openWsInFile = appJsOnDisk ? fs.readFileSync(frontendApp, "utf-8").includes("AF.openWS") : false;
+    console.log(
+      `[validateBackendRoutes] projectDir=${projectDir} ` +
+      `backendHasWs=${backendHasWs} frontendUsesWs=${frontendUsesWs} ` +
+      `app.js exists=${appJsOnDisk} bytes=${appJsBytes} lines=${appJsLines} ` +
+      `frontendText.includes("AF.openWS")=${openWsInText} ` +
+      `app.js direct read includes("AF.openWS")=${openWsInFile} ` +
+      `frontendText.length=${frontendText.length}`
+    );
+  }
   if (frontendUsesWs && !backendHasWs) {
     errors.push("Frontend opens a WebSocket, but backend/routes.js does not export module.exports.ws.");
   }
   if (backendHasWs) {
-    if (!frontendUsesWs) errors.push("Backend exports module.exports.ws, but frontend does not create a WebSocket client.");
-    if (frontendUsesWs && !/onclose\s*=|addEventListener\(\s*["']close/.test(frontendText)) {
+    if (!frontendUsesWs) {
+      const appJsExists = fs.existsSync(frontendApp);
+      const appJsSize = appJsExists ? fs.statSync(frontendApp).size : 0;
+      let wsDiag = "";
+      if (!appJsExists) {
+        wsDiag = "app.js DOES NOT EXIST";
+      } else {
+        const appJsRaw = fs.readFileSync(frontendApp, "utf-8");
+        const lines = appJsRaw.split("\n");
+        // Search for any mention of openWS or WebSocket in the file
+        const wsLineIdx = lines.findIndex(l => /AF\.openWS|new\s+WebSocket/i.test(l));
+        if (wsLineIdx >= 0) {
+          // Pattern IS in file but regex didn't match — show surrounding context
+          const ctx = lines.slice(Math.max(0, wsLineIdx - 1), wsLineIdx + 4).join(" | ");
+          wsDiag = `app.js has ${appJsSize} bytes / ${lines.length} lines. ` +
+            `"openWS" found at line ${wsLineIdx + 1} but regex still failed — context: "${ctx.substring(0, 300)}". ` +
+            `This is likely a formatting issue. Rewrite the WS init with exactly: ws = AF.openWS({`;
+        } else {
+          // Pattern NOT in file at all — show tail to detect truncation
+          const tail = lines.slice(-8).join(" | ").replace(/\s+/g, " ").substring(0, 300);
+          wsDiag = `app.js has ${appJsSize} bytes / ${lines.length} lines — "AF.openWS" not found anywhere. ` +
+            `Last 8 lines: "${tail}". ` +
+            `The file may have been overwritten without the WS code. ` +
+            `Use grep_files tool with pattern "AF.openWS" to confirm, then rewrite frontend/app.js.`;
+        }
+      }
+      errors.push(
+        `Backend exports module.exports.ws, but frontend does not create a WebSocket client. ` +
+        `${wsDiag} ` +
+        `FIX: ensure frontend/app.js contains: ws = AF.openWS({ onOpen: () => { ws.send(JSON.stringify({type:'auth',initData:AF.tg.initData||''})); }, onMessage: (data) => { handleWSMessage(data); }, onClose: () => { setTimeout(reconnect, 3000); }, onError: () => {} });`,
+      );
+    }
+    // AF.openWS accepts onClose: handler — recognise both raw and SDK forms
+    if (frontendUsesWs && !/onclose\s*=|addEventListener\(\s*["']close|onClose\s*:/.test(frontendText)) {
       errors.push("WebSocket frontend must implement reconnect/onclose handling.");
     }
     if (frontendUsesWs && /type\s*:\s*["']auth["']/.test(content) && !/type\s*:\s*["']auth["']/.test(frontendText)) {

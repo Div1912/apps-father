@@ -6,11 +6,23 @@ Use it when the app needs to store or serve files: images, audio tracks, voice m
 ## Endpoints
 
 ### Upload a file (server-side, from routes.js)
+
+**Binary upload (recommended for all files, required for large files >1MB)**
 ```
 POST /bucket/:projectId/upload
-Header: x-af-internal: <AF_INTERNAL_SECRET env var>
-Body: { "data": "data:<mime>;base64,<base64data>", "name": "optional-filename.mp3" }
-Returns: { "file_id": "uuid", "direct_link": "/bucket/projectId/uuid.mp3", "filename": "uuid.mp3", "size": 102400, "mime": "audio/mpeg" }
+Content-Type: <mime-type>   (e.g. video/mp4, image/jpeg, audio/mpeg)
+x-af-internal: <env.AF_INTERNAL_SECRET>
+Body: raw binary bytes
+Returns: { "file_id": "uuid", "direct_link": "/bucket/projectId/uuid.mp4", "filename": "uuid.mp4", "size": 102400, "mime": "video/mp4" }
+```
+
+**JSON / base64 upload (only for tiny files <500KB)**
+```
+POST /bucket/:projectId/upload
+Content-Type: application/json
+x-af-internal: <env.AF_INTERNAL_SECRET>
+Body: { "data": "data:<mime>;base64,<base64data>" }
+Returns: same as above
 ```
 
 ### Serve a file (public — no auth, anyone with the link)
@@ -28,85 +40,100 @@ Returns: the file with correct Content-Type and Cache-Control: immutable
 | Video  | mp4, webm, ogv, mov                             |
 | Docs   | pdf, txt, csv, json                             |
 
+## Environment variables available in routes.js
+
+| Variable                   | Description                                                              |
+|----------------------------|--------------------------------------------------------------------------|
+| `env.PROJECT_ID`           | The current project's ID                                                 |
+| `env.BASE_URL`             | Public base URL (for external links, Telegram messages, etc.)            |
+| `env.INTERNAL_BASE_URL`    | `http://localhost:{port}` — use THIS for server-side bucket API calls    |
+| `env.AF_INTERNAL_SECRET`   | Platform secret for internal bucket calls                                |
+
+> **Always use `env.INTERNAL_BASE_URL` for server-side bucket calls**, not `env.BASE_URL`.
+> Using `env.BASE_URL` routes through nginx/Cloudflare which has a 500MB body limit and adds latency.
+> `env.AF_INTERNAL_SECRET` must never be exposed to frontend code.
+
 ## How to use in routes.js
 
-### Example: upload a user-sent image and return its public URL
+### Receiving and storing any file (images, audio, video) — STANDARD PATTERN
+
+Use `multer` with `memoryStorage` to receive the file, then POST the raw buffer to the bucket endpoint.
+This works for files of any size — no base64 conversion needed.
 
 ```js
-const fs   = require('fs');
-const path = require('path');
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
 
-router.post('/upload-image', async (req, res) => {
-  const { imageBase64, mimeType } = req.body;
-  if (!imageBase64 || !mimeType) return res.status(400).json({ error: 'Missing fields' });
+// POST /upload  (multipart/form-data, field name: "file")
+router.post('/upload', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file provided' });
 
-  // Build the data URL
-  const dataUrl = `data:${mimeType};base64,${imageBase64}`;
-
-  // Call the AF Bucket upload endpoint internally
-  const response = await fetch(`http://localhost:${process.env.PORT || 3000}/bucket/${env.PROJECT_ID}/upload`, {
+  const bucketUrl = `${env.INTERNAL_BASE_URL}/bucket/${env.PROJECT_ID}/upload`;
+  const response = await fetch(bucketUrl, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
+      'Content-Type': req.file.mimetype,
       'x-af-internal': env.AF_INTERNAL_SECRET,
     },
-    body: JSON.stringify({ data: dataUrl }),
+    body: req.file.buffer,
   });
 
   if (!response.ok) return res.status(500).json({ error: 'Upload failed' });
 
   const { file_id, direct_link } = await response.json();
-  // direct_link = "/bucket/projectId/uuid.jpg"
-  // Full URL = `${env.BASE_URL}${direct_link}`
+  // Full public URL: `${env.BASE_URL}${direct_link}`
   res.json({ fileId: file_id, url: `${env.BASE_URL}${direct_link}` });
 });
 ```
 
-### Example: music app — list all tracks from bucket
+### Frontend — sending a file via FormData
 
 ```js
-router.get('/tracks', async (req, res) => {
-  // The bucket directory is at: /opt/apps-father-dev/bucket/<projectId>/
-  // Use the direct_link to build public URLs
-  const tracks = [
-    { title: 'Track 1', url: `${env.BASE_URL}/bucket/${env.PROJECT_ID}/uuid1.mp3` },
-    { title: 'Track 2', url: `${env.BASE_URL}/bucket/${env.PROJECT_ID}/uuid2.mp3` },
-  ];
-  res.json({ tracks });
-});
+// In your frontend JS (index.js or similar)
+async function uploadFile(file) {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await AF.api('/upload', { method: 'POST', body: form });
+  return res.url; // public URL
+}
 ```
+
+> **Note**: When sending `FormData`, do NOT set `Content-Type` manually — the browser sets it automatically with the correct boundary.
 
 ### Example: voice message in a chat app
 
 ```js
-router.post('/send-voice', async (req, res) => {
-  const { userId, voiceBase64 } = req.body;
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage() });
 
-  const dataUrl = `data:audio/ogg;base64,${voiceBase64}`;
-  const uploadRes = await fetch(`http://localhost:${process.env.PORT || 3000}/bucket/${env.PROJECT_ID}/upload`, {
+router.post('/send-voice', upload.single('audio'), async (req, res) => {
+  const { userId } = req.body;
+  if (!req.file) return res.status(400).json({ error: 'No audio file' });
+
+  const uploadRes = await fetch(`${env.BASE_URL}/bucket/${env.PROJECT_ID}/upload`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-af-internal': env.AF_INTERNAL_SECRET },
-    body: JSON.stringify({ data: dataUrl }),
+    headers: { 'Content-Type': req.file.mimetype, 'x-af-internal': env.AF_INTERNAL_SECRET },
+    body: req.file.buffer,
   });
   const { direct_link } = await uploadRes.json();
+  const voiceUrl = `${env.BASE_URL}${direct_link}`;
 
-  // Save the message to your DB with the URL
-  await db.run(
-    'INSERT INTO messages (user_id, type, content) VALUES (?, ?, ?)',
-    [userId, 'voice', `${env.BASE_URL}${direct_link}`]
-  );
-
-  res.json({ ok: true, url: `${env.BASE_URL}${direct_link}` });
+  db.set(`msg:${Date.now()}`, { userId, type: 'voice', url: voiceUrl });
+  res.json({ ok: true, url: voiceUrl });
 });
 ```
 
-## Environment variables available in routes.js
+### Example: listing bucket files by prefix / type
 
-| Variable            | Description                                  |
-|---------------------|----------------------------------------------|
-| `env.PROJECT_ID`    | The current project's ID                     |
-| `env.BASE_URL`      | The public base URL of the app               |
-| `env.AF_INTERNAL_SECRET` | Secret header value for internal bucket calls |
+```js
+// You manage the index yourself — store URLs in db after each upload.
+// The bucket does not provide listing from routes.js (only from App Settings).
+
+router.get('/tracks', (req, res) => {
+  const tracks = db.get('tracks') || [];
+  res.json({ tracks });
+});
+```
 
 ## Owner file management (mini app)
 
@@ -123,6 +150,6 @@ From there they can:
 
 - Files are **public** once uploaded — anyone with the direct link can access them
 - Files are stored on the server's filesystem and **survive deployments**
-- There are no per-project size limits currently
-- Use `env.BASE_URL` + `direct_link` for the full absolute URL (needed for Telegram messages, etc.)
+- Use binary upload (raw buffer) for all files — avoid base64 for anything over ~500KB
 - The `x-af-internal` header must never be exposed to frontend code — only use it in `routes.js` (server-side)
+- Use `env.BASE_URL` + `direct_link` for full absolute URLs (needed for Telegram messages, etc.)

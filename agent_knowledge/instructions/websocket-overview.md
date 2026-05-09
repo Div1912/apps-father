@@ -6,7 +6,7 @@ WEBSOCKET (for real-time apps):
 - wss.broadcast(data) — send to all clients
 - wss.broadcastExcept(sender, data) — send to all except one
 - socket.send(data) / socket.on('message', fn) / socket.on('close', fn)
-- Frontend connects: new WebSocket('{wsBaseUrl}/ws/' + projectId)
+- Frontend connects: AF.openWS({ onMessage, onOpen, onClose, onError }) — NEVER use new WebSocket() directly
 - Always use JSON messages with a "type" field
 - Always implement reconnection on frontend (setTimeout on close)
 - Use load_skill('websocket') for full implementation patterns and examples

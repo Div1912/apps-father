@@ -142,6 +142,17 @@ export class ProjectService {
     });
   }
 
+  async unlinkBot(projectId: string) {
+    return prisma.project.update({
+      where: { id: projectId },
+      data: {
+        botTokenEncrypted: null,
+        botUsername: null,
+        botUserId: null,
+      },
+    });
+  }
+
   async updateProjectStatus(projectId: string, status: ProjectStatus) {
     return prisma.project.update({
       where: { id: projectId },

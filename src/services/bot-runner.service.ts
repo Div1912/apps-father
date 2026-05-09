@@ -351,6 +351,31 @@ export class BotRunnerService {
 
       try {
         const token = decryptToken(project.botTokenEncrypted);
+
+        // Validate the token before spending resources on a full start.
+        // An invalid / deleted token returns HTTP 401 from Telegram.
+        try {
+          const probe = new Bot(token);
+          await probe.api.getMe();
+        } catch (probeErr: any) {
+          const msg = String(probeErr?.message ?? probeErr).toLowerCase();
+          if (
+            msg.includes("401") ||
+            msg.includes("unauthorized") ||
+            msg.includes("not found") ||
+            msg.includes("token")
+          ) {
+            console.warn(
+              `[BotRunner] Token invalid for project ${project.id} (@${project.botUsername}) — unlinking bot from app.`
+            );
+            try { await projectService.unlinkBot(project.id); } catch {}
+            continue;
+          }
+          // Network hiccup or other transient error — don't unlink, just skip.
+          console.error(`[BotRunner] Could not validate token for project ${project.id}:`, probeErr);
+          continue;
+        }
+
         await this.startBot(project.id, token, project.botUsername);
       } catch (err) {
         console.error(`[BotRunner] Failed to start bot for project ${project.id}:`, err);

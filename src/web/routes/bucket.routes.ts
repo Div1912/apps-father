@@ -18,7 +18,7 @@
  *
  * Files are stored in {cwd}/bucket/{projectId}/ and survive deployments.
  */
-import { Router, Request, Response } from "express";
+import express, { Router, Request, Response } from "express";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
@@ -86,47 +86,62 @@ function parseDataUrl(data: string): { mime: string; buf: Buffer } | null {
 }
 
 // ── POST /bucket/:projectId/upload ──────────────────────────────────────────
+// Two upload modes:
+//   1. JSON  — Content-Type: application/json  → { data: "data:<mime>;base64,..." }
+//   2. Binary — Content-Type: <mime>           → raw bytes in body (for large files)
 // Auth: x-af-internal header (from routes.js server-side code)
 //       OR project ownership validated in server.ts before calling this handler.
-// This route itself only checks the x-af-internal header for routes.js calls.
-// Owner uploads go through /telegram-mini-app/api/bucket/:projectId/upload (server.ts).
-router.post("/:projectId/upload", (req: Request, res: Response) => {
-  try {
-    const isInternal = req.headers["x-af-internal"] === process.env.AF_INTERNAL_SECRET;
-    if (!isInternal) {
-      res.status(403).json({ error: "Use /telegram-mini-app/api/bucket/:projectId/upload for owner uploads" });
-      return;
+router.post(
+  "/:projectId/upload",
+  express.raw({ type: (req) => (req.headers["content-type"] || "").split(";")[0].trim() !== "application/json", limit: "500mb" }),
+  (req: Request, res: Response) => {
+    try {
+      const isInternal = req.headers["x-af-internal"] === process.env.AF_INTERNAL_SECRET;
+      if (!isInternal) {
+        res.status(403).json({ error: "Use /telegram-mini-app/api/bucket/:projectId/upload for owner uploads" });
+        return;
+      }
+
+      const projectId = String(req.params.projectId);
+
+      let buf: Buffer;
+      let mime: string;
+
+      if (Buffer.isBuffer(req.body)) {
+        // Binary upload path
+        mime = ((req.headers["content-type"] || "application/octet-stream").split(";")[0]).trim();
+        buf = req.body;
+      } else {
+        // JSON / base64 path
+        const { data } = req.body || {};
+        if (!data || typeof data !== "string") {
+          res.status(400).json({ error: "Body must be raw binary (Content-Type: <mime>) or JSON { data: 'data:<mime>;base64,...' }" });
+          return;
+        }
+        const parsed = parseDataUrl(data);
+        if (!parsed) {
+          res.status(400).json({ error: "Invalid data URL — must be data:<mime>;base64,<data>" });
+          return;
+        }
+        buf = parsed.buf;
+        mime = parsed.mime;
+      }
+
+      const ext = MIME_TO_EXT[mime] || "bin";
+      const fileId = crypto.randomUUID();
+      const filename = fileId + "." + ext;
+      const dir = ensureProjectDir(projectId);
+      fs.writeFileSync(path.join(dir, filename), buf);
+
+      const directLink = `/bucket/${projectId}/${filename}`;
+      console.log(`[Bucket] Saved ${projectId}/${filename} ${Math.round(buf.length / 1024)}KB`);
+      res.json({ file_id: fileId, direct_link: directLink, filename, size: buf.length, mime });
+    } catch (err: any) {
+      console.error("[Bucket] Upload error:", err);
+      res.status(500).json({ error: err.message || "Upload failed" });
     }
-
-    const { projectId } = req.params;
-    const { data, name } = req.body || {};
-
-    if (!data || typeof data !== "string") {
-      res.status(400).json({ error: "Body must contain { data: 'data:<mime>;base64,...' }" });
-      return;
-    }
-
-    const parsed = parseDataUrl(data);
-    if (!parsed) {
-      res.status(400).json({ error: "Invalid data URL — must be data:<mime>;base64,<data>" });
-      return;
-    }
-
-    const ext = MIME_TO_EXT[parsed.mime] || "bin";
-    const fileId = crypto.randomUUID();
-    const filename = fileId + "." + ext;
-    const dir = ensureProjectDir(String(req.params.projectId));
-    const filePath = path.join(dir, filename);
-    fs.writeFileSync(filePath, parsed.buf);
-
-    const directLink = `/bucket/${projectId}/${filename}`;
-    console.log(`[Bucket] Saved ${projectId}/${filename} ${Math.round(parsed.buf.length / 1024)}KB`);
-    res.json({ file_id: fileId, direct_link: directLink, filename, size: parsed.buf.length, mime: parsed.mime });
-  } catch (err: any) {
-    console.error("[Bucket] Upload error:", err);
-    res.status(500).json({ error: err.message || "Upload failed" });
-  }
-});
+  },
+);
 
 // ── GET /bucket/:projectId/:filename — public file serving ──────────────────
 router.get("/:projectId/:filename", (req: Request, res: Response) => {
@@ -199,6 +214,7 @@ export function listProjectFiles(projectId: string): BucketFileInfo[] {
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir)
     .filter(f => !f.startsWith("."))
+    .filter(f => !fs.statSync(path.join(dir, f)).isDirectory())
     .map(filename => {
       const stat = fs.statSync(path.join(dir, filename));
       const ext  = path.extname(filename).slice(1);

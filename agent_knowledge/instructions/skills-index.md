@@ -2,6 +2,7 @@ AVAILABLE SKILLS (load via load_skill tool when relevant):
 - af-sdk — full AF SDK reference: AF.init, AF.api, AF.openWS, AF.haptic, AF.user, AF.storage, AF.back, validator checklist  [REQUIRED when writing or reviewing frontend app.js / index.html]
 - frontend — deep frontend patterns (routing, state, event handling)  [load if you need reference]
 - backend — Express + db patterns (auth, middleware, error handling)  [load if you need reference]
+- bucket — AF Bucket file storage API: upload images/audio/video/files from routes.js, multer + binary upload pattern, env vars  [REQUIRED when the app handles any file uploads — images, audio, video, documents]
 - bot-management — bot webhook patterns, /start params, callback buttons, push notifications  [load if custom bot behavior needed]
 - textbot — Text Bot complete reference: state machine, db persistence, multi-step conversations, deduplication  [REQUIRED for kind=textBot — load before writing any routes.js]
 - websocket — WebSocket handler patterns, reconnection, broadcast  [load if app is real-time]

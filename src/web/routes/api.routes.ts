@@ -7,6 +7,7 @@ import { verifyInitData } from "../middleware/initdata";
 import { projectService } from "../../services/project.service";
 import { decryptToken } from "../../services/crypto.service";
 import { runWithProject } from "../../services/console-tagger.service";
+import { config } from "../../config";
 
 const router = Router();
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
@@ -69,6 +70,15 @@ function evictProject(projectId: string): void {
     try { entry.db.close(); } catch {}
     projectCache.delete(projectId);
   }
+  // Always purge require.cache so the next require() reads the new file from
+  // disk — must run even when projectCache had no entry (e.g. invalidateProjectDbCache
+  // was called before any request ever hit this project).
+  const backendDir = path.join(PROJECTS_DIR, projectId, "release", "backend");
+  for (const key of Object.keys(require.cache)) {
+    if (key.startsWith(backendDir) && !key.includes("node_modules")) {
+      delete require.cache[key];
+    }
+  }
 }
 
 async function loadProjectEntry(
@@ -86,14 +96,9 @@ async function loadProjectEntry(
   }
 
   // File changed (new release deployed) or first load — evict stale entry.
+  // evictProject also purges require.cache for this project's backendDir.
   if (existing) {
     evictProject(projectId);
-    // Clear Node require cache so the new file is actually read from disk.
-    for (const key of Object.keys(require.cache)) {
-      if (key.startsWith(backendDir) && !key.includes("node_modules")) {
-        delete require.cache[key];
-      }
-    }
   }
 
   const routeFactory = require(routesFile);
@@ -109,6 +114,13 @@ async function loadProjectEntry(
 
   const envPath = path.join(backendDir, ".env");
   const envVars = fs.existsSync(envPath) ? dotenv.parse(fs.readFileSync(envPath)) : {};
+
+  // Inject platform vars so routes.js can use the AF Bucket API
+  envVars.AF_INTERNAL_SECRET = process.env.AF_INTERNAL_SECRET || "";
+  envVars.BASE_URL = config.baseUrl;
+  envVars.PROJECT_ID = projectId;
+  // INTERNAL_BASE_URL bypasses nginx/Cloudflare — use this for server-side bucket calls
+  envVars.INTERNAL_BASE_URL = `http://localhost:${config.port}`;
 
   const entry: ProjectEntry = { mtime, routeFactory, db, envVars };
   projectCache.set(projectId, entry);

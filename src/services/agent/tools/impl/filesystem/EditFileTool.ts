@@ -47,20 +47,39 @@ export class EditFileTool implements AgentTool {
       return "Error: old_string not found in file";
     }
 
+    let resultMsg: string;
     if (args.replace_all) {
       const count = content.split(oldStr).length - 1;
       content = content.split(oldStr).join(newStr);
       fs.writeFileSync(filePath, content, "utf-8");
       ctx.wroteFiles = true;
       await ctx.progress({ action: "✏️ Editing", detail: args.path, percent: ctx.currentPercent });
-      return `OK: Replaced ${count} occurrence(s) in ${args.path}`;
+      resultMsg = `OK: Replaced ${count} occurrence(s) in ${args.path}`;
+    } else {
+      content = content.replace(oldStr, newStr);
+      fs.writeFileSync(filePath, content, "utf-8");
+      ctx.wroteFiles = true;
+      await ctx.progress({ action: "✏️ Editing", detail: args.path, percent: ctx.currentPercent });
+      resultMsg = `OK: Replaced 1 occurrence in ${args.path}`;
     }
 
-    content = content.replace(oldStr, newStr);
-    fs.writeFileSync(filePath, content, "utf-8");
-    ctx.wroteFiles = true;
-    await ctx.progress({ action: "✏️ Editing", detail: args.path, percent: ctx.currentPercent });
-    return `OK: Replaced 1 occurrence in ${args.path}`;
+    // Diagnostic — log edits to app.js so we can trace validator failures
+    const normalizedForLog = args.path.replace(/\\/g, "/").replace(/^\/+/, "");
+    if (normalizedForLog === "frontend/app.js") {
+      console.log(`[EditFileTool] edited ${args.path}, result contains AF.openWS=${/AF\.openWS\s*\(/.test(content)}, bytes=${Buffer.byteLength(content, "utf-8")}, lines=${content.split("\n").length}, fullPath=${filePath}`);
+    }
+
+    // Early-warning: if editing frontend/app.js and plan has WS but result lacks AF.openWS
+    const normalizedEditPath = args.path.replace(/\\/g, "/").replace(/^\/+/, "");
+    const planHasWs = Array.isArray(ctx.technicalPlan?.wsMessages) && ctx.technicalPlan.wsMessages.length > 0;
+    if (normalizedEditPath === "frontend/app.js" && planHasWs) {
+      if (!/AF\.openWS\s*\(|new\s+WebSocket\s*\(/.test(content)) {
+        return resultMsg + ` WARNING: After this edit, app.js no longer contains AF.openWS(). ` +
+          `deploy_to_dev WILL FAIL. Re-add the WebSocket connection: ws = AF.openWS({ onOpen: () => { ws.send(JSON.stringify({type:'auth',initData:AF.tg.initData||''})); }, onMessage: (data) => { handleWSMessage(data); }, onClose: () => { setTimeout(connectWS, 3000); } });`;
+      }
+    }
+
+    return resultMsg;
   }
 
   getStepMeta(args: Record<string, any>): Record<string, any> {

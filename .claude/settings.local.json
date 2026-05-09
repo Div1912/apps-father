@@ -1,0 +1,23 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://openrouter.ai/api",
+    "ANTHROPIC_AUTH_TOKEN": "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",
+    "ANTHROPIC_API_KEY": ""
+  },
+  "permissions": {
+    "allow": [
+      "Bash(ssh root@62.238.2.16 \"cat /opt/apps-father-dev/agent_knowledge/instructions/frontend-rules.md\")",
+      "Bash(npx tsc *)",
+      "Bash(npm run *)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); s=d.get\\('agentSessions',{}\\); [print\\(k,s[k].get\\('max_tokens'\\)\\) for k in ['build','update','update-plan','bug-fix'] if k in s]\")",
+      "Bash(scp \"C:\\\\Users\\\\ultra\\\\OneDrive\\\\Документы\\\\app_maker\\\\dist\\\\services\\\\agent\\\\validation.js\" root@62.238.2.16:/opt/apps-father-dev/dist/services/agent/validation.js)",
+      "Bash(scp \"C:\\\\Users\\\\ultra\\\\OneDrive\\\\Документы\\\\app_maker\\\\dist\\\\services\\\\agent\\\\tools\\\\impl\\\\filesystem\\\\WriteFileTool.js\" root@62.238.2.16:/opt/apps-father-dev/dist/services/agent/tools/impl/filesystem/WriteFileTool.js)",
+      "Bash(scp \"C:\\\\Users\\\\ultra\\\\OneDrive\\\\Документы\\\\app_maker\\\\dist\\\\services\\\\agent\\\\tools\\\\impl\\\\filesystem\\\\EditFileTool.js\" root@62.238.2.16:/opt/apps-father-dev/dist/services/agent/tools/impl/filesystem/EditFileTool.js)",
+      "Bash(scp \"C:\\\\Users\\\\ultra\\\\OneDrive\\\\Документы\\\\app_maker\\\\dist\\\\services\\\\agent\\\\tools\\\\impl\\\\build\\\\DeployToDevTool.js\" root@62.238.2.16:/opt/apps-father-dev/dist/services/agent/tools/impl/build/DeployToDevTool.js)",
+      "Bash(powershell.exe -ExecutionPolicy Bypass -File deploy.ps1)",
+      "Bash(node -e ' *)",
+      "Bash(xargs ls *)",
+      "Bash(find C:\\\\\\\\Users\\\\\\\\ultra\\\\\\\\OneDrive\\\\\\\\Документы\\\\\\\\app_maker/src -name \"*.ts\" -type f)"
+    ]
+  }
+}

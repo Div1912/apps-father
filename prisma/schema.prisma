@@ -13,6 +13,8 @@ model User {
   username   String?
   firstName  String?   @map("first_name")
   balance    Decimal   @default(0) @db.Decimal(12, 4)
+  /** TON balance (internal, used for App Store token creation + buying). */
+  tonBalance Decimal   @default(0) @map("ton_balance") @db.Decimal(18, 9)
   credits    Int       @default(50)
   appSlots   Int       @default(5) @map("app_slots")
   referredBy BigInt?   @map("referred_by")
@@ -112,8 +114,224 @@ model Project {
   agentSessions AgentSession[]
   appLogs       AppLog[]
   agentFeedback AgentFeedback[]
+  listing       AppListing?
 
   @@map("projects")
+}
+
+// ── App Store ────────────────────────────────────────────────────────────────
+// Public marketplace listing for a project. Created by the owner from the
+// mini app, reviewed by an admin, then deployed (jetton master created).
+model AppListing {
+  id               String    @id @default(uuid())
+  projectId        String    @unique @map("project_id")
+  // draft → review → published. Or rejected.
+  status           String    @default("draft")
+  // App name displayed on the listing (may differ from project name).
+  appName          String?   @map("app_name") @db.VarChar(64)
+  shortDescription String?   @map("short_description") @db.VarChar(120)
+  longDescription  String?   @map("long_description")
+  // JSON: { telegram?: string, twitter?: string, website?: string, ... }
+  socials          Json?
+  category         String?
+  // JSON: array of strings (max ~10) — free-form tags shown on the App Store
+  // listing card. Stored as JSON for portability across SQL/Mongo backends.
+  tags             Json?
+  // Bucket filename of the App Store-specific app logo (replaces the
+  // bot avatar fetched from Telegram). Editable at any time.
+  appLogoFilename  String?   @map("app_logo_filename")
+  // Bucket filename of a single banner image shown at the top of the App
+  // Store detail page (similar to Apple's "preview hero" image).
+  bannerFilename   String?   @map("banner_filename")
+  // JSON: array of strings — bucket filenames (4-6 screenshots).
+  screenshots      Json?
+  // Initial liquidity in TON (internal, not on-chain).
+  initialLiquidityTon Float? @map("initial_liquidity_ton")
+  // JSON: per-language text overrides { ru: {name, short, long}, ua: {...} }
+  translations     Json?
+  // 5 TON publishing fee tx hash on TON. Set when user submits.
+  publishFeeTxHash String?   @map("publish_fee_tx_hash")
+  submittedAt      DateTime? @map("submitted_at")
+  approvedAt       DateTime? @map("approved_at")
+  approvedBy       Int?      @map("approved_by")
+  rejectedReason   String?   @map("rejected_reason")
+  publishedAt      DateTime? @map("published_at")
+  hidden           Boolean   @default(false)
+  // Cached counters for store sorting (updated on each trade).
+  volume24hNanoTon BigInt    @default(0) @map("volume_24h_nano_ton")
+  marketCapNanoTon BigInt    @default(0) @map("market_cap_nano_ton")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  project          Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  token            AppToken?
+
+  @@index([status, hidden])
+  @@map("app_listings")
+}
+
+// On-chain TON Jetton + on-chain liquidity pool (custodial AMM).
+//
+// V2 model: the user (publisher) signs the Jetton master deployment from
+// their own wallet via TonConnect. The Jetton master `admin_address` is the
+// USER, so they truly own the token on-chain. Initial liquidity (TON +
+// tokens) is then sent by the user to the platform vault, with the user
+// recorded as the sole liquidity provider. LP can be added/removed later.
+//
+// AMM is constant-product against the REAL on-chain reserves
+// (realTonReserve, realTokenReserve). No more virtual reserves.
+//
+// Reserves / supply are stored as BigInt (atomic units / nanoTON).
+model AppToken {
+  id                  String   @id @default(uuid())
+  projectId           String   @unique @map("project_id")
+  listingId           String   @unique @map("listing_id")
+  name                String
+  symbol              String
+  // Optional Jetton metadata description (TIP-64). Empty by default to
+  // match the minter.ton.org preset. Independent from the App Store
+  // listing's shortDescription (which is an app-store-card concept).
+  metadataDescription String?  @map("metadata_description")
+  // bucket filename for token logo (separate from app logo).
+  logoFilename        String   @map("logo_filename")
+  // EQ-form jetton master address. Null until deploy succeeds.
+  jettonMasterAddress String?  @unique @map("jetton_master_address")
+  deployTxHash        String?  @map("deploy_tx_hash")
+  // The publisher's TON wallet address — they signed the deploy and own the
+  // Jetton master (= jetton admin). They are also the initial sole LP.
+  ownerWalletAddress  String?  @map("owner_wallet_address")
+  // 1B * 10^9 atomic units by default.
+  totalSupply         BigInt   @map("total_supply")
+  // Legacy: kept so existing rows still parse. Always 0 for V2 tokens.
+  curveSupplyCap      BigInt   @default(0) @map("curve_supply_cap")
+  virtualTonReserve   BigInt   @default(0) @map("virtual_ton_reserve")
+  virtualTokenReserve BigInt   @default(0) @map("virtual_token_reserve")
+  // Real liquidity reserves — held by the platform vault, AMM math runs
+  // against these. Updated atomically on every trade and LP event.
+  realTonReserve      BigInt   @default(0) @map("real_ton_reserve")
+  realTokenReserve    BigInt   @default(0) @map("real_token_reserve")
+  // Total LP shares minted across all positions. Uniswap V2-style:
+  //   first add → shares = sqrt(ton * tokens)
+  //   later add → shares = min(Δton/ton, Δtokens/tokens) * total
+  lpTotalShares       BigInt   @default(0) @map("lp_total_shares")
+  // Legacy curve counter — total tokens that ever entered circulation
+  // through the platform; kept for charts but not used by the AMM.
+  soldSupply          BigInt   @default(0) @map("sold_supply")
+  // Accumulated trading fees, in nanoTON.
+  feeBalanceNanoTon   BigInt   @default(0) @map("fee_balance_nano_ton")
+  creatorFeeBalanceNanoTon BigInt @default(0) @map("creator_fee_balance_nano_ton")
+  // pending_deploy → deployed_pending_lp → live → halted.
+  status              String   @default("pending_deploy")
+  /** When the user paid the initial liquidity to create the token (PF2 flow). */
+  creationPaidAt              DateTime? @map("creation_paid_at")
+  /** TON amount the user locked at token creation. */
+  creationLockedLiquidityTon  Decimal?  @map("creation_locked_liquidity_ton") @db.Decimal(18, 9)
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  listing             AppListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  trades              TokenTrade[]
+  holdings            TokenHolding[]
+  liquidityPositions  LiquidityPosition[]
+  liquidityEvents     LiquidityEvent[]
+
+  @@map("app_tokens")
+}
+
+// Liquidity-provider position. ONE row per (token, owner_wallet_address).
+// `shares` are added on lp_init / lp_add and decreased on lp_remove. They
+// behave like Uniswap V2 LP tokens.
+model LiquidityPosition {
+  id                String   @id @default(uuid())
+  tokenId           String   @map("token_id")
+  // App-internal user (denorm so we can show "your portfolio" quickly).
+  userId            Int?     @map("user_id")
+  // The TON wallet that signed the LP transfer — sole source of truth.
+  ownerWalletAddress String  @map("owner_wallet_address")
+  shares            BigInt   @default(0)
+  // Cumulative TON / tokens deposited via this position (for P&L).
+  cumTonDepositedNano   BigInt @default(0) @map("cum_ton_deposited_nano")
+  cumTokenDeposited     BigInt @default(0) @map("cum_token_deposited")
+  cumTonWithdrawnNano   BigInt @default(0) @map("cum_ton_withdrawn_nano")
+  cumTokenWithdrawn     BigInt @default(0) @map("cum_token_withdrawn")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt      @map("updated_at")
+
+  token             AppToken @relation(fields: [tokenId], references: [id])
+
+  @@unique([tokenId, ownerWalletAddress])
+  @@index([userId])
+  @@index([tokenId])
+  @@map("liquidity_positions")
+}
+
+// History of every LP event. Append-only.
+model LiquidityEvent {
+  id                String   @id @default(uuid())
+  tokenId           String   @map("token_id")
+  positionId        String?  @map("position_id")
+  ownerWalletAddress String  @map("owner_wallet_address")
+  // "init" | "add" | "remove".
+  type              String
+  // Signed amounts: positive on add, negative on remove.
+  tonNano           BigInt   @map("ton_nano")
+  tokenAmount       BigInt   @map("token_amount")
+  shares            BigInt
+  txHash            String?  @map("tx_hash")
+  // pending → settled (set when both legs detected).
+  status            String   @default("settled")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  token             AppToken @relation(fields: [tokenId], references: [id])
+
+  @@index([tokenId, createdAt])
+  @@index([ownerWalletAddress])
+  @@map("liquidity_events")
+}
+
+model TokenTrade {
+  id           String   @id @default(uuid())
+  tokenId      String   @map("token_id")
+  userId       Int      @map("user_id")
+  type         String   // "buy" | "sell"
+  // Gross TON the user paid (buy) or received (sell), in nanoTON.
+  tonAmount    BigInt   @map("ton_amount")
+  // Token amount in atomic units.
+  tokenAmount  BigInt   @map("token_amount")
+  // Effective price = tonAmount / tokenAmount, denormalised for chart speed.
+  priceNanoTon BigInt   @map("price_nano_ton")
+  feeTonAmount BigInt   @map("fee_ton_amount")
+  // Incoming user → platform tx (TON for buy, Jetton for sell).
+  txHashIn     String?  @map("tx_hash_in")
+  // Outgoing platform → user tx (Jetton for buy, TON for sell).
+  txHashOut    String?  @map("tx_hash_out")
+  // pending_payment → received → settled. Or failed.
+  status       String   @default("pending_payment")
+  createdAt    DateTime @default(now()) @map("created_at")
+  settledAt    DateTime? @map("settled_at")
+
+  token        AppToken @relation(fields: [tokenId], references: [id])
+
+  @@index([tokenId, createdAt])
+  @@index([userId])
+  @@index([status])
+  @@map("token_trades")
+}
+
+model TokenHolding {
+  tokenId       String   @map("token_id")
+  userId        Int      @map("user_id")
+  // Atomic token units currently held via the platform's accounting.
+  balance       BigInt   @default(0)
+  // Weighted-average buy price for P&L calculation, in nanoTON per atomic unit.
+  avgBuyNanoTon BigInt   @default(0) @map("avg_buy_nano_ton")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  token         AppToken @relation(fields: [tokenId], references: [id])
+
+  @@id([tokenId, userId])
+  @@index([userId])
+  @@map("token_holdings")
 }
 
 model Version {
@@ -267,11 +485,26 @@ model AgentSession {
   input          String                         // summarised user prompt / router output
   output         String?                        // final result summary
   creditsCharged Int      @default(0)  @map("credits_charged")
+  // Aggregate USD cost reported by OpenRouter for the whole session.
+  // Sum of every iteration's `usage.cost`. Used as the authoritative
+  // figure in the admin Sessions table.
   costUsd        Decimal  @default(0)  @map("cost_usd") @db.Decimal(12, 6)
+  // Input/output split of `costUsd` from
+  // `usage.cost_details.upstream_inference_prompt_cost` and
+  // `…completions_cost`. Sums across iterations like costUsd. Nullable on
+  // legacy rows that pre-date OR usage accounting.
+  costUsdInput   Decimal? @map("cost_usd_input")  @db.Decimal(12, 6)
+  costUsdOutput  Decimal? @map("cost_usd_output") @db.Decimal(12, 6)
   inputTokens    Int      @default(0)  @map("input_tokens")
   outputTokens   Int      @default(0)  @map("output_tokens")
   durationMs     Int?     @map("duration_ms")
   success        Boolean  @default(true)
+  // Router-classified complexity bucket (trivial|small|medium|large|huge).
+  // Null on free sessions and on legacy rows from before the matrix landed.
+  complexity     String?
+  // True when the user enabled MAX MODE before clicking Build/Start. Drives
+  // model selection in _runCoreAgent and the credit markup in billing.
+  isMaxMode      Boolean  @default(false) @map("is_max_mode")
   createdAt      DateTime @default(now()) @map("created_at")
 
   project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)

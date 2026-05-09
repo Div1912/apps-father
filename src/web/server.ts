@@ -16,6 +16,11 @@ import adminRoutes from "./routes/admin.routes";
 import editorRoutes from "./routes/editor.routes";
 import logsRoutes from "./routes/logs.routes";
 import billingRoutes from "./routes/billing.routes";
+import appStoreRoutes from "./routes/app-store.routes";
+import { appStoreService } from "../services/app-store.service";
+import { tonToNano } from "../services/liquidity-amm.service";
+import { applyLiquidityRemove } from "../services/liquidity-amm.service";
+import { payoutTon } from "../services/jetton.service";
 import { setupWebSocket, forceReloadProjectWs } from "./ws-manager";
 import { setupMiniAppWebSocket } from "./miniapp-ws";
 import { broadcastToProject, registerAnswerResolver, resolveAnswer } from "./miniapp-ws";
@@ -33,7 +38,7 @@ import { publishReport } from "../services/telegraph.service";
 import { claudeService } from "../services/claude.service";
 import { parseStartParam, trackEvent } from "../services/analytics.service";
 import { prisma } from "../db";
-import { runtimeConfig, PREVIEW_UNLOCK_FEE_CREDITS, LINK_BOT_FEE_CREDITS } from "../services/runtime-config.service";
+import { runtimeConfig, LINK_BOT_FEE_CREDITS } from "../services/runtime-config.service";
 import { Decimal } from "@prisma/client/runtime/library";
 import { t, Lang } from "../bot/i18n";
 import { notifyProcessDone } from "../services/notify.service";
@@ -99,7 +104,6 @@ function forwardAgentProgress(
         ...base,
         type: "agent_narration_chunk",
         delta: p.delta,
-        text: p.text,
       });
       break;
     case "narration_end":
@@ -111,7 +115,6 @@ function forwardAgentProgress(
         type: "agent_writing_chunk",
         toolName: p.toolName,
         delta: p.delta,
-        text: p.text,
       });
       break;
   }
@@ -421,8 +424,27 @@ export function createWebServer() {
       const { user } = await getOrCreateUserFromReq(req, auth);
       const projects = await projectService.getProjectsByUser(user.id);
 
+      // Pre-load app-store logos in one query so we can override the bot avatar
+      const projectIds = projects.map((p: any) => p.id);
+      const listings = projectIds.length
+        ? await prisma.appListing.findMany({
+            where: { projectId: { in: projectIds } },
+            select: { projectId: true, appLogoFilename: true },
+          })
+        : [];
+      const appLogoByProject: Record<string, string | null> = {};
+      for (const l of listings as any[]) {
+        appLogoByProject[l.projectId] = l.appLogoFilename || null;
+      }
+
       const result = await Promise.all(projects.map(async (p: any) => {
-        let avatarUrl: string | null = avatarCache.get(p.id) ?? null;
+        let avatarUrl: string | null = null;
+        // Highest priority: App Store-specific logo set via the App Information page
+        const appLogo = appLogoByProject[p.id];
+        if (appLogo) {
+          avatarUrl = `/bucket/${p.id}/${appLogo}`;
+        }
+        if (!avatarUrl) avatarUrl = avatarCache.get(p.id) ?? null;
         if (!avatarUrl && p.botTokenEncrypted) {
           try {
             const token = decryptToken(p.botTokenEncrypted);
@@ -1273,7 +1295,7 @@ export function createWebServer() {
 
             const result = await agentSessionService.session_update(
               projectId, text.trim(), onProgress, attachments,
-              onAskUser, lang, userCredits,
+              onAskUser, lang, userCredits, preCharge.creditsCharged,
             );
 
             const project = await projectService.getProject(projectId);
@@ -1281,7 +1303,7 @@ export function createWebServer() {
             const usage = await billingService.recordUsage(
               user.id, projectId, result.model,
               { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: result.cacheWriteTokens, cache_read_input_tokens: result.cacheReadTokens },
-              "update", undefined, preCharge.creditsCharged > 0, completedTaskId,
+              "update", undefined, preCharge.creditsCharged, completedTaskId,
             );
 
             await projectService.updateProjectStatus(projectId, "deployed");
@@ -1523,7 +1545,10 @@ export function createWebServer() {
         // Design changes from visual editor — send as plain update request (tag already at start)
         errorText = rawMsg;
       } else {
-        const shortStack = (stack || "").toString().split("\n").slice(0, 8).join("\n");
+        // Keep enough frames for the agent to actually trace the error. 8 lines
+        // typically cuts off mid-trace before reaching app code; 40 covers all
+        // realistic stacks while still bounding payload size.
+        const shortStack = (stack || "").toString().split("\n").slice(0, 40).join("\n");
         const body = `${rawMsg}${shortStack ? "\n" + shortStack : ""}`;
         if (devtoolsTag) {
           // Tag already at start; wrap the content after the tag line so tag stays first
@@ -1557,6 +1582,9 @@ export function createWebServer() {
 
       const ownerData = await prisma.user.findUnique({ where: { id: owner.id }, select: { credits: true } });
       const ownerCredits = ownerData?.credits ?? 0;
+      // Auto-bug-fix uses a non-router path (triggered from injected error
+      // monitor) so there's no proposal card. We default to "medium"
+      // complexity for the price quote — admins can re-tune that column.
       const autoFixCost = runtimeConfig.getSessionCost("bug-fix");
       if (ownerCredits < autoFixCost) {
         const errMsg = chatService.addMessage(projectId, {
@@ -1566,6 +1594,13 @@ export function createWebServer() {
         });
         broadcastToProject(projectId, { type: "message", message: errMsg });
         return;
+      }
+
+      const fixPreCharge = await billingService
+        .preChargeAction(owner.id, projectId, "bug-fix")
+        .catch(() => ({ creditsCharged: 0, newCredits: ownerCredits }));
+      if (fixPreCharge.creditsCharged > 0) {
+        broadcastToProject(projectId, { type: "balance_update", newCredits: fixPreCharge.newCredits });
       }
 
       (async () => {
@@ -1589,14 +1624,17 @@ export function createWebServer() {
             broadcastToProject(projectId, { type: "progress", projectId, messageId: progressMsgId, percent: p.percent, message: `${p.action} ${p.detail}`, checklist: items, costUsd: p.costUsd, balance: p.balance });
           };
 
-          const result = await agentSessionService.session_update(projectId, errorText, onProgress, [], undefined, ownerLang, ownerCredits);
+          const result = await agentSessionService.session_update(
+            projectId, errorText, onProgress, [], undefined, ownerLang, ownerCredits,
+            fixPreCharge.creditsCharged,
+          );
 
           const fixedProject = await projectService.getProject(projectId).catch(() => null);
           const fixTaskId = (fixedProject as any)?.lastTaskId || undefined;
           const usage = await billingService.recordUsage(
             owner.id, projectId, result.model,
             { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: result.cacheWriteTokens, cache_read_input_tokens: result.cacheReadTokens },
-            "bug-fix", undefined, false, fixTaskId,
+            "bug-fix", undefined, fixPreCharge.creditsCharged, fixTaskId,
           );
 
           await projectService.updateProjectStatus(projectId, "deployed");
@@ -1842,14 +1880,16 @@ export function createWebServer() {
           };
 
           const result = await agentSessionService.session_build(
-            projectId, project.description || "", project.plan!,
-            onProgress, onAskUser, buildLang, buildCredits,
+            projectId,
+            { description: project.description || "", brief: (project as any).plan || "" },
+            onProgress, onAskUser, buildLang, buildCredits, undefined,
+            buildPreCharge.creditsCharged,
           );
 
           const usage = await billingService.recordUsage(
             user.id, projectId, result.model,
             { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: result.cacheWriteTokens, cache_read_input_tokens: result.cacheReadTokens },
-            "build", undefined, buildPreCharge.creditsCharged > 0,
+              "build", undefined, buildPreCharge.creditsCharged,
           );
 
           await projectService.updateProjectStatus(projectId, "deployed");
@@ -2062,7 +2102,7 @@ export function createWebServer() {
       const project = await projectService.getProject(projectId);
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) { res.status(403).json({ error: "Forbidden" }); return; }
 
-      const { text } = req.body;
+      const { text, attachmentIds } = req.body;
       if (!text || !text.trim()) { res.status(400).json({ error: "Empty message" }); return; }
 
       const routerUserData = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true } });
@@ -2074,8 +2114,13 @@ export function createWebServer() {
       }
 
       // Persist the user's message so it survives reconnect.
-      const userMsg = chatService.addMessage(projectId, { role: "user", type: "text", content: text.trim() });
+      const userMsg = chatService.addMessage(projectId, { role: "user", type: "text", content: text.trim(), attachments: attachmentIds });
       broadcastToProject(projectId, { type: "message", message: userMsg });
+
+      // Build attachment list for forwarding to the build agent if this routes to a build proposal.
+      const routerAttachments = Array.isArray(userMsg.attachments) && userMsg.attachments.length > 0
+        ? userMsg.attachments.map((a: any) => ({ localPath: a.path, projectPath: `frontend/assets/${a.name}`, originalName: a.name }))
+        : undefined;
 
       res.json({ messageId: userMsg.id, status: "routing" });
 
@@ -2083,11 +2128,21 @@ export function createWebServer() {
         broadcastToProject(projectId, { type: "router_thinking", projectId, intent: null, detail: "Reading your message..." });
 
         const allHistory = chatService.getHistory(projectId, undefined, 1000);
+        // Include plain text (including proposal descriptions), completed build/update
+        // result summaries, and error messages so the router has full session context.
+        // Proposals are stored as type="text" with metadata.proposal=true, so their
+        // description is already visible without special handling.
+        const ROUTER_MSG_TYPES = new Set(["text", "result", "error"]);
         const routerHistory = allHistory
-          .filter(m => (m.role === "user" || m.role === "assistant") && m.type === "text")
+          .filter(m => (m.role === "user" || m.role === "assistant") && ROUTER_MSG_TYPES.has(m.type))
           .filter(m => m.id !== userMsg.id)
-          .slice(-12)
-          .map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
+          .slice(-20)
+          .map(m => {
+            let content = m.content || "";
+            if (m.type === "result") content = `[✅ Completed]: ${content}`;
+            else if (m.type === "error") content = `[❌ Error]: ${content}`;
+            return { role: m.role as "user" | "assistant", content };
+          });
 
         // Wire questionnaire + proposal hooks to chat + WS.
         const hooks = {
@@ -2121,6 +2176,8 @@ export function createWebServer() {
             brief?: string;
             prefilledPrompt?: string;
             creditsCost: number;
+            complexity?: string;
+            maxModeMultiplier?: number;
           }) {
             const pMsg = chatService.addMessage(projectId, {
               role: "assistant",
@@ -2130,10 +2187,16 @@ export function createWebServer() {
                 proposal: true,
                 kind: p.kind,
                 title: p.title,
+                description: p.description,
                 plan: p.plan,
                 brief: p.brief,
                 prefilledPrompt: p.prefilledPrompt,
                 creditsCost: p.creditsCost,
+                complexity: p.complexity,
+                maxModeMultiplier: p.maxModeMultiplier,
+                // Carry attachments from the user's initial message into the proposal
+                // so execute-proposal can forward them to session_build/session_update.
+                buildAttachments: routerAttachments ? routerAttachments : undefined,
               },
             });
             broadcastToProject(projectId, { type: "message", message: pMsg });
@@ -2147,6 +2210,8 @@ export function createWebServer() {
               description: p.description,
               plan: p.plan,
               creditsCost: p.creditsCost,
+              complexity: p.complexity,
+              maxModeMultiplier: p.maxModeMultiplier,
             });
             return { proposalId: pMsg.id };
           },
@@ -2252,7 +2317,32 @@ export function createWebServer() {
       const prefilledPrompt = String(proposalMsg.metadata.prefilledPrompt || "").trim();
       const plan: string[] = Array.isArray(proposalMsg.metadata.plan) ? proposalMsg.metadata.plan : [];
       const brief = String(proposalMsg.metadata.brief || "").trim();
-      const creditsCost: number = proposalMsg.metadata.creditsCost ?? 0;
+      const proposalTitle = String(proposalMsg.metadata.title || "").trim();
+      const proposalDescription = String(proposalMsg.metadata.description || "").trim();
+      const proposalComplexity = typeof proposalMsg.metadata.complexity === "string"
+        ? proposalMsg.metadata.complexity
+        : undefined;
+      // Find the user message that triggered this proposal (last user msg before proposal in history)
+      const proposalIndex = history.findIndex(m => m.id === proposalId);
+      const triggerMsg = proposalIndex > 0
+        ? [...history.slice(0, proposalIndex)].reverse().find(m => m.role === "user")
+        : undefined;
+      const userOriginalMessage = triggerMsg?.content || "";
+      const baseCreditsCost: number = proposalMsg.metadata.creditsCost ?? 0;
+
+      // MAX MODE — toggle from the proposal card. We re-read the multiplier
+      // from runtime config (NOT from the metadata or req.body) so an admin
+      // price change between propose and execute always wins, and so a
+      // tampered client can't ship a sub-1 multiplier to undercharge.
+      const maxMode = !!req.body?.max_mode;
+      const PAID_KINDS = new Set(["build", "update", "update-plan", "bug-fix"]);
+      const isPaidKind = PAID_KINDS.has(kind);
+      const maxModeMultiplier = maxMode && isPaidKind ? runtimeConfig.getMaxModeMultiplier() : 1;
+      const creditsCost = Math.max(0, Math.round(baseCreditsCost * maxModeMultiplier));
+      const buildAttachments: { localPath: string; projectPath: string; originalName: string }[] | undefined =
+        Array.isArray(proposalMsg.metadata.buildAttachments) && proposalMsg.metadata.buildAttachments.length > 0
+          ? proposalMsg.metadata.buildAttachments
+          : undefined;
 
       if (kind === "answer" || kind === "suggestions") {
         // Free sessions — answer was already shown in the bubble body.
@@ -2290,8 +2380,10 @@ export function createWebServer() {
         buildPrompt = `${agentPrompt}\n\nPlanned subtasks (complete all):\n${items}`;
       }
 
+      // Honour the exact price quoted on the proposal card. Admin price edits
+      // between propose() and execute() must NOT silently re-bill the user.
       const preCharge = await billingService
-        .preChargeAction(user.id, projectId, kind as any, plan.length || undefined)
+        .preChargeAmount(user.id, projectId, creditsCost)
         .catch(() => ({ creditsCharged: 0, newCredits: execCredits }));
       if (preCharge.creditsCharged > 0) {
         broadcastToProject(projectId, { type: "balance_update", newCredits: preCharge.newCredits });
@@ -2309,6 +2401,8 @@ export function createWebServer() {
         project_id: projectId,
         source: `router_${kind}`,
         credits_cost: preCharge.creditsCharged,
+        max_mode: maxMode,
+        complexity: proposalComplexity || null,
       });
 
       (async () => {
@@ -2324,6 +2418,8 @@ export function createWebServer() {
             taskKind: kind,
             originalText: buildPrompt,
             sourceProposalId: proposalId,
+            isMaxMode: maxMode,
+            complexity: proposalComplexity,
           },
         });
         progressMsgId = progressMsg.id;
@@ -2369,22 +2465,43 @@ export function createWebServer() {
             });
           };
 
-          const result = await agentSessionService.session_update(
-            projectId, buildPrompt, onProgress, undefined,
-            onAskUser, lang, execCredits,
-          );
+          let result: Awaited<ReturnType<typeof agentSessionService.session_build>>;
+          const sessionExtras = {
+            creditsCharged: preCharge.creditsCharged,
+            maxMode,
+            complexity: proposalComplexity,
+          };
+          if (kind === "build") {
+            result = await agentSessionService.session_build(
+              projectId,
+              {
+                name: proposalTitle,
+                description: proposalDescription,
+                brief,
+                userPrompt: userOriginalMessage,
+              },
+              onProgress, onAskUser, lang, execCredits, buildAttachments,
+              sessionExtras,
+            );
+          } else {
+            result = await agentSessionService.session_update(
+              projectId, buildPrompt, onProgress, buildAttachments,
+              onAskUser, lang, execCredits,
+              sessionExtras,
+            );
+          }
 
           const proj = await projectService.getProject(projectId);
           const completedTaskId = (proj as any)?.lastTaskId || undefined;
           const usage = await billingService.recordUsage(
             user.id, projectId, result.model,
             { input_tokens: result.inputTokens, output_tokens: result.outputTokens, cache_creation_input_tokens: result.cacheWriteTokens, cache_read_input_tokens: result.cacheReadTokens },
-            kind, undefined, preCharge.creditsCharged > 0, completedTaskId,
+            kind, undefined, preCharge.creditsCharged, completedTaskId,
           );
           await projectService.updateProjectStatus(projectId, "deployed");
 
           try {
-            const shortLabel = kind === "bug-fix" ? "Fix" : "Update";
+            const shortLabel = kind === "build" ? "App created" : kind === "bug-fix" ? "Fix" : "Update";
             await commitService.createCommit(projectId, `${shortLabel}: ${buildPrompt.substring(0, 80)}`, result.commitNum!, result.commitDir!, result.logPath);
           } catch {}
 
@@ -2416,7 +2533,7 @@ export function createWebServer() {
             sourceProposalId: proposalId,
           });
 
-          notifyProcessDone(auth.telegramId!, appName, result.shortSummary, "update", lang);
+          notifyProcessDone(auth.telegramId!, appName, result.shortSummary, kind === "build" ? "build" : "update", lang);
 
           if (abortedProjects.has(projectId)) {
             abortedProjects.delete(projectId);
@@ -2560,100 +2677,6 @@ export function createWebServer() {
       res.json({ ok: true, recovered: !isInFlight && danglingIds.length > 0 });
     } catch (err) {
       console.error("[Chat API] Abort error:", err);
-      res.status(500).json({ error: "Internal server error" });
-    }
-  });
-
-  // ── Preview paywall API ───────────────────────────────────────────────
-  // Used by the player iframe at /dev/{projectId}/ to gate the running
-  // app behind a one-time 20-credit unlock for users who never deposited.
-  // Both endpoints validate Telegram initData like other mini-app APIs.
-
-  app.get("/telegram-mini-app/api/preview/:projectId/state", async (req, res) => {
-    try {
-      const auth = validateAuth(req);
-      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await getOrCreateUserFromReq(req, auth);
-      const projectId = req.params.projectId;
-
-      const project = await projectService.getProject(projectId);
-      if (!project) { res.status(404).json({ error: "Not found" }); return; }
-
-      const hasDeposit = await billingService.hasEverDeposited(user.id);
-      const unlocked = hasDeposit ? false : await billingService.hasUnlockedPreview(user.id, projectId);
-      const fresh = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true } });
-
-      res.json({
-        requiresPayment: !hasDeposit && !unlocked,
-        balance: fresh?.credits ?? 0,
-        fee: PREVIEW_UNLOCK_FEE_CREDITS,
-        hasDeposited: hasDeposit,
-        alreadyUnlocked: unlocked,
-      });
-    } catch (err) {
-      console.error("[Preview API] state error:", err);
-      res.status(500).json({ error: "Internal server error" });
-    }
-  });
-
-  app.post("/telegram-mini-app/api/preview/:projectId/unlock", async (req, res) => {
-    try {
-      const auth = validateAuth(req);
-      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
-      const { user } = await getOrCreateUserFromReq(req, auth);
-      const projectId = req.params.projectId;
-
-      const project = await projectService.getProject(projectId);
-      if (!project) { res.status(404).json({ error: "Not found" }); return; }
-
-      // Bypass for users who already paid (deposit OR earlier unlock).
-      const hasDeposit = await billingService.hasEverDeposited(user.id);
-      if (hasDeposit) {
-        const fresh = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true } });
-        res.json({ ok: true, alreadyFree: true, newCredits: fresh?.credits ?? 0 });
-        return;
-      }
-      const alreadyUnlocked = await billingService.hasUnlockedPreview(user.id, projectId);
-      if (alreadyUnlocked) {
-        const fresh = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true } });
-        res.json({ ok: true, alreadyUnlocked: true, newCredits: fresh?.credits ?? 0 });
-        return;
-      }
-
-      const fresh = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true } });
-      const credits = fresh?.credits ?? 0;
-      if (credits < PREVIEW_UNLOCK_FEE_CREDITS) {
-        res.status(402).json({
-          error: "insufficient_credits",
-          required: PREVIEW_UNLOCK_FEE_CREDITS,
-          balance: credits,
-        });
-        return;
-      }
-
-      const newCredits = await prisma.$transaction(async (tx) => {
-        const u = await tx.user.update({
-          where: { id: user.id },
-          data: { credits: { decrement: PREVIEW_UNLOCK_FEE_CREDITS } },
-        });
-        await tx.usageLog.create({
-          data: {
-            userId: user.id,
-            projectId,
-            inputTokens: 0,
-            outputTokens: 0,
-            costUsd: new Decimal("0"),
-            operation: "preview_unlock",
-            creditsCharged: PREVIEW_UNLOCK_FEE_CREDITS,
-            },
-        });
-        return u.credits;
-      });
-
-      void trackEvent(auth.telegramId!, "preview_unlocked", { project_id: projectId });
-      res.json({ ok: true, newCredits, fee: PREVIEW_UNLOCK_FEE_CREDITS });
-    } catch (err) {
-      console.error("[Preview API] unlock error:", err);
       res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -3252,6 +3275,566 @@ export function createWebServer() {
       res.json({ ok: true });
     } catch (err) {
       console.error("[MiniApp API] Delete error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // ── App Store (owner endpoints) ─────────────────────────────────────────
+  // Public read-only routes are mounted under /api/store; owner-authenticated
+  // routes live here so they can use validateAuth + project ownership checks.
+
+  const storeUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+  // Resolve listing → owner-validated; admins are allowed too.
+  const requireListingOwner = async (req: any, res: any): Promise<{ ok: false } | { ok: true; userId: number; isAdmin: boolean; listing: any }> => {
+    const auth = validateAuth(req);
+    if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return { ok: false }; }
+    const { user } = await getOrCreateUserFromReq(req, auth);
+    const isAdmin = isAdminTelegramId(auth.telegramId);
+    const listing = await prisma.appListing.findUnique({
+      where: { id: req.params.listingId },
+      include: { project: { select: { id: true, userId: true } }, token: true },
+    });
+    if (!listing) { res.status(404).json({ error: "Listing not found" }); return { ok: false }; }
+    if (!isAdmin && listing.project.userId !== user.id) {
+      res.status(403).json({ error: "Forbidden" }); return { ok: false };
+    }
+    return { ok: true, userId: user.id, isAdmin, listing };
+  };
+
+  // Get-or-create draft for a project the caller owns.
+  app.post("/telegram-mini-app/api/store/projects/:projectId/listing", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const project = await projectService.getProject(req.params.projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) {
+        res.status(403).json({ error: "Forbidden" }); return;
+      }
+      const listing = await appStoreService.getOrCreateDraft(req.params.projectId);
+      res.json({ listing });
+    } catch (err: any) {
+      console.error("[Store] draft error:", err);
+      res.status(500).json({ error: err.message || "Internal" });
+    }
+  });
+
+  // Update draft fields (descriptions, socials, token name/symbol).
+  app.patch("/telegram-mini-app/api/store/listings/:listingId", async (req, res) => {
+    try {
+      const r = await requireListingOwner(req, res); if (!r.ok) return;
+      const updated = await appStoreService.updateDraft(req.params.listingId, req.body || {});
+      res.json({ listing: updated });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Upload a screenshot (multipart "file").
+  app.post(
+    "/telegram-mini-app/api/store/listings/:listingId/screenshots",
+    storeUpload.single("file"),
+    async (req, res) => {
+      try {
+        const r = await requireListingOwner(req, res); if (!r.ok) return;
+        if (!req.file) { res.status(400).json({ error: "No file" }); return; }
+        const ext = (req.file.mimetype.split("/")[1] || "png").toLowerCase();
+        const filename = await appStoreService.addScreenshot(
+          req.params.listingId as string,
+          r.listing.projectId,
+          req.file.buffer,
+          ext,
+        );
+        res.json({ ok: true, filename, url: `/bucket/${r.listing.projectId}/${filename}` });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    },
+  );
+
+  app.delete("/telegram-mini-app/api/store/listings/:listingId/screenshots/:filename", async (req, res) => {
+    try {
+      const r = await requireListingOwner(req, res); if (!r.ok) return;
+      await appStoreService.removeScreenshot(req.params.listingId, r.listing.projectId, req.params.filename);
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Upload an App Store-specific app logo (avatar). Independent from the
+  // bot avatar fetched from Telegram.
+  app.post(
+    "/telegram-mini-app/api/store/listings/:listingId/app-logo",
+    storeUpload.single("file"),
+    async (req, res) => {
+      try {
+        const r = await requireListingOwner(req, res); if (!r.ok) return;
+        if (!req.file) { res.status(400).json({ error: "No file" }); return; }
+        const ext = (req.file.mimetype.split("/")[1] || "png").toLowerCase();
+        const filename = await appStoreService.setAppLogo(
+          req.params.listingId as string,
+          r.listing.projectId,
+          req.file.buffer,
+          ext,
+        );
+        res.json({ ok: true, filename, url: `/bucket/${r.listing.projectId}/${filename}` });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    },
+  );
+
+  // Upload a hero/banner image for the App Store detail page.
+  app.post(
+    "/telegram-mini-app/api/store/listings/:listingId/banner",
+    storeUpload.single("file"),
+    async (req, res) => {
+      try {
+        const r = await requireListingOwner(req, res); if (!r.ok) return;
+        if (!req.file) { res.status(400).json({ error: "No file" }); return; }
+        const ext = (req.file.mimetype.split("/")[1] || "png").toLowerCase();
+        const filename = await appStoreService.setBanner(
+          req.params.listingId as string,
+          r.listing.projectId,
+          req.file.buffer,
+          ext,
+        );
+        res.json({ ok: true, filename, url: `/bucket/${r.listing.projectId}/${filename}` });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    },
+  );
+
+  app.delete("/telegram-mini-app/api/store/listings/:listingId/banner", async (req, res) => {
+    try {
+      const r = await requireListingOwner(req, res); if (!r.ok) return;
+      await appStoreService.removeBanner(req.params.listingId, r.listing.projectId);
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Readiness panel for the redesigned 7-step App Settings publish flow.
+  // Returns the per-step done/missing state so the mini-app can render the
+  // progress bar without computing it locally.
+  //
+  // Auth follows the same pattern as the rest of the store routes:
+  // validateAuth → resolve / create user → ensure project ownership (admins
+  // are allowed too).
+  app.get("/telegram-mini-app/api/store/projects/:projectId/readiness", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const isAdmin = isAdminTelegramId(auth.telegramId);
+      const project = await prisma.project.findUnique({
+        where: { id: req.params.projectId },
+        select: { id: true, userId: true },
+      });
+      if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+      if (!isAdmin && project.userId !== user.id) {
+        res.status(403).json({ error: "Forbidden" }); return;
+      }
+      const readiness = await appStoreService.getReadiness(req.params.projectId);
+      res.json(readiness);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Upload token logo (separate from app logo).
+  app.post(
+    "/telegram-mini-app/api/store/listings/:listingId/token-logo",
+    storeUpload.single("file"),
+    async (req, res) => {
+      try {
+        const r = await requireListingOwner(req, res); if (!r.ok) return;
+        if (!req.file) { res.status(400).json({ error: "No file" }); return; }
+        const ext = (req.file.mimetype.split("/")[1] || "png").toLowerCase();
+        const filename = await appStoreService.setTokenLogo(
+          req.params.listingId as string,
+          r.listing.projectId,
+          req.file.buffer,
+          ext,
+        );
+        res.json({ ok: true, filename, url: `/bucket/${r.listing.projectId}/${filename}` });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    },
+  );
+
+  // Submit for review (returns wallet address + comment to use in TonConnect).
+  app.post("/telegram-mini-app/api/store/listings/:listingId/submit", async (req, res) => {
+    try {
+      const r = await requireListingOwner(req, res); if (!r.ok) return;
+      const result = await appStoreService.submit(req.params.listingId);
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ── PF2: internal-balance token creation + balance fetch ─────────────────
+
+  // Create the App Token. Deducts initial liquidity from user's TON balance.
+  app.post("/telegram-mini-app/api/store/listings/:listingId/create-token", async (req, res) => {
+    try {
+      const r = await requireListingOwner(req, res); if (!r.ok) return;
+      const ticker = String(req.body?.ticker || "");
+      const liquidityTon = Number(req.body?.liquidityTon || 0);
+      const result = await appStoreService.createToken(req.params.listingId, r.userId, { ticker, liquidityTon });
+      res.json({ ok: true, ...result });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Get user's internal TON balance (used by App Token + Wallet pages).
+  app.get("/telegram-mini-app/api/wallet/ton-balance", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const tonBalance = await appStoreService.getUserTonBalance(user.id);
+      res.json({ tonBalance });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── V2 Publish flow: user-signed Jetton deploy + LP init ───────────────
+  //
+  // After admin approval, the publisher signs TWO TonConnect transactions:
+  //   1. /prepare-deploy → deploys their Jetton master + mints supply to themselves
+  //   2. /prepare-lp-init → seeds the liquidity pool (TON + Jettons → vault)
+  //
+  // Both endpoints return TonConnect-compatible message arrays. The frontend
+  // calls `tonConnectUI.sendTransaction({ messages, validUntil })`. The TON
+  // monitor then confirms the on-chain landing and advances the listing
+  // status (approved → deployed_pending_lp → published).
+
+  app.post("/telegram-mini-app/api/store/listings/:listingId/prepare-deploy", async (req, res) => {
+    try {
+      const r = await requireListingOwner(req, res); if (!r.ok) return;
+      const userWalletAddress = String(req.body?.userWalletAddress || "");
+      if (!userWalletAddress) { res.status(400).json({ error: "userWalletAddress required" }); return; }
+      const result = await appStoreService.preparePublishDeploy(req.params.listingId, { userWalletAddress });
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post("/telegram-mini-app/api/store/listings/:listingId/prepare-lp-init", async (req, res) => {
+    try {
+      const r = await requireListingOwner(req, res); if (!r.ok) return;
+      const userWalletAddress = String(req.body?.userWalletAddress || "");
+      const tonAmount = Number(req.body?.tonAmount);
+      const tokenShare = Number(req.body?.tokenShare);
+      if (!userWalletAddress) { res.status(400).json({ error: "userWalletAddress required" }); return; }
+      if (!Number.isFinite(tonAmount) || tonAmount <= 0) {
+        res.status(400).json({ error: "tonAmount must be a positive number" }); return;
+      }
+      if (!Number.isFinite(tokenShare) || tokenShare <= 0) {
+        res.status(400).json({ error: "tokenShare must be > 0" }); return;
+      }
+      const result = await appStoreService.preparePublishLpInit(req.params.listingId, {
+        userWalletAddress, tonAmount, tokenShare,
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ── Liquidity management ────────────────────────────────────────────────
+
+  app.post("/telegram-mini-app/api/store/listings/:listingId/lp-add", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      await getOrCreateUserFromReq(req, auth);
+      const userWalletAddress = String(req.body?.userWalletAddress || "");
+      const tonAmount = Number(req.body?.tonAmount);
+      if (!userWalletAddress) { res.status(400).json({ error: "userWalletAddress required" }); return; }
+      if (!Number.isFinite(tonAmount) || tonAmount <= 0) {
+        res.status(400).json({ error: "tonAmount must be a positive number" }); return;
+      }
+      const result = await appStoreService.prepareLpAdd(req.params.listingId, { userWalletAddress, tonAmount });
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post("/telegram-mini-app/api/store/listings/:listingId/lp-remove-preview", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      await getOrCreateUserFromReq(req, auth);
+      const userWalletAddress = String(req.body?.userWalletAddress || "");
+      const fraction = Number(req.body?.fraction);
+      const sharesToBurn = req.body?.sharesToBurn ? BigInt(String(req.body.sharesToBurn)) : undefined;
+      if (!userWalletAddress) { res.status(400).json({ error: "userWalletAddress required" }); return; }
+      const result = await appStoreService.previewLpRemove(req.params.listingId, {
+        userWalletAddress,
+        fraction: Number.isFinite(fraction) ? fraction : undefined,
+        sharesToBurn,
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  /**
+   * Custodial LP remove. The user signed (via Telegram init data) a request
+   * to burn `sharesToBurn` (or a `fraction` of their position). The backend's
+   * hot wallet then dispatches the proportional TON + Jetton payouts. For
+   * V1.5 we only dispatch TON automatically — the Jetton payout is queued
+   * for admin review (future: jetton-tx-builder.payoutJetton from vault).
+   */
+  app.post("/telegram-mini-app/api/store/listings/:listingId/lp-remove", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      await getOrCreateUserFromReq(req, auth);
+      const userWalletAddress = String(req.body?.userWalletAddress || "");
+      const fraction = Number(req.body?.fraction);
+      const sharesToBurn = req.body?.sharesToBurn ? BigInt(String(req.body.sharesToBurn)) : undefined;
+      if (!userWalletAddress) { res.status(400).json({ error: "userWalletAddress required" }); return; }
+
+      const preview = await appStoreService.previewLpRemove(req.params.listingId, {
+        userWalletAddress,
+        fraction: Number.isFinite(fraction) ? fraction : undefined,
+        sharesToBurn,
+      });
+
+      const listing = await prisma.appListing.findUnique({
+        where: { id: req.params.listingId },
+        include: { token: true },
+      });
+      if (!listing?.token) { res.status(404).json({ error: "Listing/token not found" }); return; }
+
+      // Burn shares + decrement reserves atomically.
+      const result = await applyLiquidityRemove({
+        tokenId: listing.token.id,
+        ownerWalletAddress: userWalletAddress,
+        sharesToBurn: BigInt(preview.sharesToBurn),
+      });
+
+      // Dispatch TON payout immediately. Jetton payout deferred to admin queue.
+      let tonPayoutTxHash: string | null = null;
+      try {
+        const out = await payoutTon({
+          to: userWalletAddress,
+          amountNano: result.tonOutNano,
+          comment: `lp_remove:${req.params.listingId}`,
+        });
+        tonPayoutTxHash = out.txHash;
+      } catch (err: any) {
+        console.error("[LP remove] TON payout failed:", err.message);
+      }
+
+      res.json({
+        ok: true,
+        sharesBurned: result.sharesBurned.toString(),
+        tonOutNano: result.tonOutNano.toString(),
+        tokensOut: result.tokensOut.toString(),
+        tonPayoutTxHash,
+        tokenPayoutPending: true,
+      });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Create a pending trade row, returns wallet+comment for the TonConnect tx.
+  app.post("/telegram-mini-app/api/store/tokens/:tokenId/buy", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+
+      const amount = String(req.body?.tonAmount || "");
+      if (!amount.match(/^\d+(\.\d+)?$/)) {
+        res.status(400).json({ error: "tonAmount must be a positive number" }); return;
+      }
+      const tonInNano = tonToNano(amount);
+
+      const token = await prisma.appToken.findUnique({ where: { id: req.params.tokenId } });
+      if (!token) { res.status(404).json({ error: "Token not found" }); return; }
+      if (token.status !== "live") { res.status(400).json({ error: "Token not live" }); return; }
+
+      const trade = await prisma.tokenTrade.create({
+        data: {
+          tokenId: token.id,
+          userId: user.id,
+          type: "buy",
+          tonAmount: tonInNano,
+          tokenAmount: 0n,
+          priceNanoTon: 0n,
+          feeTonAmount: 0n,
+          status: "pending_payment",
+        },
+      });
+
+      res.json({
+        tradeId: trade.id,
+        walletAddress: appStoreService.platformWalletAddress(),
+        comment: `buy:${trade.id}`,
+        tonAmount: amount,
+        expiresInSec: 600,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Sells: user-initiated. Creates a pending trade with the requested
+  // tokensIn so the monitor matches the jetton-transfer notification.
+  app.post("/telegram-mini-app/api/store/tokens/:tokenId/sell", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+
+      const amount = String(req.body?.tokenAmount || "");
+      if (!amount.match(/^\d+(\.\d+)?$/)) {
+        res.status(400).json({ error: "tokenAmount must be a positive number" }); return;
+      }
+
+      const token = await prisma.appToken.findUnique({ where: { id: req.params.tokenId } });
+      if (!token) { res.status(404).json({ error: "Token not found" }); return; }
+      if (token.status !== "live") { res.status(400).json({ error: "Token not live" }); return; }
+
+      const tokensInAtomic = tonToNano(amount); // 9 decimals same as nanoTON
+
+      // Verify the user has the balance.
+      const holding = await prisma.tokenHolding.findUnique({
+        where: { tokenId_userId: { tokenId: token.id, userId: user.id } },
+      });
+      if (!holding || holding.balance < tokensInAtomic) {
+        res.status(400).json({ error: "Insufficient holding" }); return;
+      }
+
+      const trade = await prisma.tokenTrade.create({
+        data: {
+          tokenId: token.id,
+          userId: user.id,
+          type: "sell",
+          tonAmount: 0n,
+          tokenAmount: tokensInAtomic,
+          priceNanoTon: 0n,
+          feeTonAmount: 0n,
+          status: "pending_payment",
+        },
+      });
+
+      res.json({
+        tradeId: trade.id,
+        walletAddress: appStoreService.platformWalletAddress(),
+        comment: `sell:${trade.id}`,
+        jettonMasterAddress: token.jettonMasterAddress,
+        tokenAmount: amount,
+        expiresInSec: 600,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Trade status (UI polls this after sending TonConnect tx).
+  app.get("/telegram-mini-app/api/store/trades/:tradeId", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const trade = await prisma.tokenTrade.findUnique({ where: { id: req.params.tradeId } });
+      if (!trade || trade.userId !== user.id) {
+        res.status(404).json({ error: "Not found" }); return;
+      }
+      res.json({
+        id: trade.id,
+        type: trade.type,
+        status: trade.status,
+        tonAmount: Number(trade.tonAmount) / 1e9,
+        tokenAmount: Number(trade.tokenAmount) / 1e9,
+        priceTon: Number(trade.priceNanoTon) / 1e9,
+        txHashIn: trade.txHashIn,
+        txHashOut: trade.txHashOut,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Listing status (UI polls after sending publish-fee tx).
+  app.get("/telegram-mini-app/api/store/listings/:listingId/status", async (req, res) => {
+    try {
+      const r = await requireListingOwner(req, res); if (!r.ok) return;
+      res.json({ status: r.listing.status });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Owner can re-fetch their own draft (with token sub-row).
+  app.get("/telegram-mini-app/api/store/listings/:listingId", async (req, res) => {
+    try {
+      const r = await requireListingOwner(req, res); if (!r.ok) return;
+      const listing = await appStoreService.getListing(req.params.listingId);
+      res.json({ listing });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // User portfolio (everything they hold).
+  app.get("/telegram-mini-app/api/store/portfolio", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const items = await appStoreService.getPortfolio(user.id);
+      res.json({ items });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin App Store endpoints live in admin.routes.ts (under /admin/api/*)
+  // because the browser admin dashboard uses bearer-token auth, not Telegram
+  // init data.
+
+  // ── Unlink Bot ──
+
+  app.post("/telegram-mini-app/api/projects/:projectId/unlink-bot", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const projectId = req.params.projectId as string;
+      const project = await projectService.getProject(projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) {
+        res.status(403).json({ error: "Forbidden" }); return;
+      }
+
+      try {
+        const { botRunnerService } = await import("../services/bot-runner.service");
+        await botRunnerService.stopBot(projectId);
+      } catch {}
+
+      await projectService.unlinkBot(projectId);
+
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("[MiniApp API] Unlink bot error:", err);
       res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -4343,6 +4926,10 @@ export function createWebServer() {
   app.use("/app", appRoutes);
   app.use("/bucket", bucketRoutes);
   app.use("/dev", devRoutes);
+  // App Store routes MUST be mounted before /api — apiRoutes is a user-project
+  // catch-all that returns "No backend routes configured for this project" for
+  // anything it doesn't recognise, which would shadow /api/store/*.
+  app.use("/api/store", appStoreRoutes);
   app.use("/api", apiRoutes);
   app.use("/devapi", devApiRoutes);
   app.use("/webhook", webhookRoutes);

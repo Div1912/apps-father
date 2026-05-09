@@ -13,9 +13,9 @@ Must be the **first** call in `app.js`. Handles all Telegram WebApp bootstrappin
 AF.init({
   project_id: 'YOUR_PROJECT_UUID',   // required — set to the project's UUID
   colors: {
-    header:     '#0a0e1a',           // optional — header bar color
-    bottom:     '#0a0e1a',           // optional — bottom bar color
-    background: '#0a0e1a'            // optional — app background color
+    header:     YOUR_BG_COLOR,       // must match the app's --bg CSS variable
+    bottom:     YOUR_BG_COLOR,       // all three must be the SAME value as --bg
+    background: YOUR_BG_COLOR        // e.g. '#0d0d12' if :root { --bg: #0d0d12; }
   }
 });
 ```
@@ -171,10 +171,12 @@ tg.close();
 ```js
 // app.js — skeleton
 const PROJECT_ID = 'YOUR_PROJECT_UUID';
+// Define your background color in :root { --bg: #0d0d12; } and use the same value here.
+const BG = '#0d0d12';   // ← replace with your actual --bg value
 
 AF.init({
   project_id: PROJECT_ID,
-  colors: { header: '#0a0e1a', bottom: '#0a0e1a', background: '#0a0e1a' }
+  colors: { header: BG, bottom: BG, background: BG }
 });
 
 async function init() {
@@ -199,3 +201,4 @@ Before calling `finish()`, verify:
 6. `app.js` calls `tg.HapticFeedback` directly? If yes → replace with `AF.haptic()`.
 7. `app.js` calls `tg.BackButton` directly? If yes → replace with `AF.back()`.
 8. `app.js` calls `Telegram.WebApp.initDataUnsafe?.user` directly? If yes → replace with `AF.user`.
+9. `styles.css` or `app.js` uses `var(--tg-theme-*)` for colors? If yes → replace with own CSS variables (e.g. `var(--bg)`, `var(--accent)`). These are FORBIDDEN — they inherit the user's Telegram theme and break intentional design.

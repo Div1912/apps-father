@@ -42,6 +42,14 @@ export class DeployToDevTool implements AgentTool {
     }
 
     try {
+      // Diagnostic: log the state of app.js right before validator runs
+      const path = require("path");
+      const fs = require("fs");
+      const appJsPath = path.join(ctx.projectDir, "frontend", "app.js");
+      const appJsExists = fs.existsSync(appJsPath);
+      console.log(`[DeployToDevTool] deploy#${ctx.deployCount} projectDir=${ctx.projectDir} app.js exists=${appJsExists}` +
+        (appJsExists ? ` bytes=${fs.statSync(appJsPath).size} contains-AF.openWS=${fs.readFileSync(appJsPath, "utf-8").includes("AF.openWS")}` : ""));
+
       const routeError = validateBackendRoutes(ctx.projectDir, ctx.projectId, ctx.technicalPlan);
       ctx.validatorResults.push({ stage: "deploy_to_dev", ok: !routeError, message: routeError || undefined });
       if (routeError) {

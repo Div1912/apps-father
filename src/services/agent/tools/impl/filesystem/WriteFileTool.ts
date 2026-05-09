@@ -75,8 +75,27 @@ Pick one and proceed immediately.`;
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, args.content, "utf-8");
     const lineCount = args.content.split("\n").length;
+
+    // Diagnostic — log every write so we can correlate with validator failures
+    const hasOpenWS = /AF\.openWS\s*\(/.test(args.content);
+    console.log(`[WriteFileTool] wrote ${args.path} → ${lineCount} lines, ${Buffer.byteLength(args.content, "utf-8")} bytes, contains AF.openWS=${hasOpenWS}, fullPath=${filePath}`);
     ctx.wroteFiles = true;
     await ctx.progress({ action: "✏️ Writing", detail: args.path, percent: ctx.currentPercent });
+
+    // Early-warning: if writing frontend/app.js and the plan has WS but the file lacks AF.openWS
+    const normalizedWritePath = args.path.replace(/\\/g, "/").replace(/^\/+/, "");
+    const planHasWs = Array.isArray(ctx.technicalPlan?.wsMessages) && ctx.technicalPlan.wsMessages.length > 0;
+    if (normalizedWritePath === "frontend/app.js" && planHasWs) {
+      const hasWsCall = /AF\.openWS\s*\(|new\s+WebSocket\s*\(/.test(args.content);
+      if (!hasWsCall) {
+        return `OK: Written ${lineCount} lines to ${args.path}. ` +
+          `WARNING: Your technical plan includes WebSocket messages, but this app.js does not contain AF.openWS(). ` +
+          `deploy_to_dev WILL FAIL with a validator error. ` +
+          `You MUST add WebSocket connection code before deploying. ` +
+          `Add a connectWS() function that calls: ws = AF.openWS({ onOpen: () => { ws.send(JSON.stringify({type:'auth',initData:AF.tg.initData||''})); }, onMessage: (data) => { handleWSMessage(data); }, onClose: () => { setTimeout(connectWS, 3000); } });`;
+      }
+    }
+
     return `OK: Written ${lineCount} lines to ${args.path}`;
   }
 

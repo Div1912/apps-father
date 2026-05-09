@@ -66,7 +66,7 @@ setUpdateHandler  ❌ — there is no such concept; you only react to forwarded 
 ```
 
 If you want updates → **define `POST /bot-webhook`** and process the body.
-If you want to display commands in the BotFather "/" menu → use the `set_bot_commands` tool. For app/bot name/description/menu button → use `configure_app`. These are profile/configuration calls, not webhook calls.
+For app/bot name/description/menu button → use `configure_app`. This is a profile/configuration call, not a webhook call.
 
 ---
 
@@ -74,8 +74,8 @@ If you want to display commands in the BotFather "/" menu → use the `set_bot_c
 
 | The user wants… | Pattern |
 |---|---|
-| Just a button in the chat menu that opens the Mini App | **Pattern A** — `setChatMenuButton` only, no `/bot-webhook` |
-| A list of commands shown in the `/` menu, clicking each one opens the Mini App | **Pattern A** — `set_bot_commands` + the platform default `/start` handler is fine |
+| Just a button in the chat menu that opens the Mini App | **Pattern A** — `configure_app` only, no `/bot-webhook` |
+| Custom replies to `/help`, `/balance`, `/leaderboard`, etc. directly from the bot (no Mini App round-trip) | **Pattern B** — define `/bot-webhook` |
 | Custom replies to `/help`, `/balance`, `/leaderboard`, etc. directly from the bot (no Mini App round-trip) | **Pattern B** — define `/bot-webhook` |
 | Read `/start <ref_code>` deep-link parameter to attribute a referral / promo | **Pattern B** — `/bot-webhook` parses `text` |
 | Inline-keyboard buttons with `callback_data` (Like / Vote / Confirm) | **Pattern B** — `/bot-webhook` handles `callback_query` |
@@ -86,24 +86,12 @@ You can combine all of them in a single project.
 
 ---
 
-## 3. Pattern A — Profile / commands menu only
+## 3. Pattern A — Profile / menu button only
 
-These are one-shot configuration calls. Run them via `configure_app` and `set_bot_commands` **on first build only**, not on updates.
+This is a one-shot configuration call. Run it via `configure_app` **on first build only**, not on updates.
 
 ```js
 // During first build, in agent:
-
-set_bot_commands({
-  commands: [
-    { command: "start",       description: "Open the app" },
-    { command: "help",        description: "How it works" },
-    { command: "leaderboard", description: "Top players" },
-    { command: "balance",     description: "Your balance" },
-  ],
-  // Optional: scope can target chat types or specific languages
-  // scope: { type: "all_private_chats" },
-  // language_code: "en",
-})
 
 configure_app({
   name: "Tournament App",
@@ -114,9 +102,8 @@ configure_app({
 ```
 
 Notes:
-- `setMyCommands` only **registers** the menu. Clicking `/help` still sends the literal text `/help` to the bot. If you actually want the bot to reply to `/help`, you also need Pattern B.
 - `configure_app` saves app profile metadata first, then sets the menu button atomically if a bot is linked. Text Bot projects pass `menuButtonText: ""`.
-- Never put empty strings in `commands[].command` — Telegram returns `400 Bad Request`.
+- To have the bot reply to commands like `/help`, you need Pattern B (`/bot-webhook`).
 
 ---
 
@@ -336,7 +323,6 @@ You can use `web_app` buttons in inline keyboards for direct mini-app launches (
 Whenever the project includes `/bot-webhook` or sets bot commands, **verify all of these**:
 
 ### Build-time configuration
-- [ ] `set_bot_commands` — commands match what `/bot-webhook` actually handles. No phantom commands.
 - [ ] `configure_app` — saves name, description, long description, and menu button atomically.
 
 ### Code quality inside `/bot-webhook`

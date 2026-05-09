@@ -23,13 +23,13 @@ const TOOL_DISPLAY: Record<string, { kind: ToolStepKind; title: string; targetKe
   ask_user:         { kind: "ask",         title: "Waiting for your answer" },
   technical_plan:   { kind: "thinking",   title: "Technical plan",        targetKey: "kind",     targetField: "key" },
   configure_app:    { kind: "configuring", title: "Configuring app" },
-  set_bot_commands: { kind: "configuring", title: "Setting bot commands" },
   finish:           { kind: "done",        title: "Finishing" },
   server_logs:      { kind: "searching",   title: "Reading logs" },
   simulate_telegram:{ kind: "telegram",    title: "Simulating bot message" },
   simulate_api:     { kind: "fetch",       title: "Simulating API call" },
   simulate_ws:      { kind: "shell",       title: "Simulating WebSocket" },
   visual_test:      { kind: "visual",      title: "Visual test",            targetKey: "path",     targetField: "url" },
+  image_generate:   { kind: "visual",      title: "Generating image",       targetKey: "filename", targetField: "file" },
 };
 
 function buildToolStepTarget(toolName: string, args: any): ToolStepTarget | undefined {
@@ -56,7 +56,6 @@ function summarizeToolArgs(toolName: string, args: any): string {
     case "ask_user":          return (args.question || "").substring(0, 60);
     case "technical_plan":    return `${args.kind || "app"}: ${(args.summary || "").substring(0, 80)}`;
     case "configure_app":     return args.name || "";
-    case "set_bot_commands":  return Array.isArray(args.commands) ? `${args.commands.length} commands` : "";
     case "server_logs":       return `${args.lines || 50} lines`;
     case "simulate_telegram": return args.update?.message?.text || args.update?.callback_query?.data || "update";
     case "simulate_api":      return `${args.method || "GET"} ${args.path}`;
@@ -158,6 +157,11 @@ export class AgentRunner {
         ...(agentTelegramId ? { user: agentTelegramId } : {}),
         extra_body: {
           session_id: ctx.taskId,
+          // Ask OpenRouter to attach `usage.cost` and `usage.cost_details` to
+          // every response. Without this the response.usage block only carries
+          // token counts, and we'd have to reconstruct the price from the
+          // catalog (which goes stale and misses cache-read discounts).
+          usage: { include: true },
           ...(thinkingBudget > 0 ? { thinking: { type: "enabled", budget_tokens: thinkingBudget } } : {}),
         },
         ...(this._getProviderRouting(tierConfig.modelId, tierConfig.provider)
@@ -203,6 +207,8 @@ export class AgentRunner {
               narrationOpen = false;
             }
             console.warn(`[Agent] stream failed (${streamErr?.message}), falling back to non-stream`);
+            // Brief pause before fallback — gives the network a moment to stabilize
+            await new Promise(r => setTimeout(r, 1500));
             response = await this._callWithRetry(requestPayload);
           }
         } else {
@@ -245,12 +251,27 @@ export class AgentRunner {
       ctx.totalOutputTokens += iterOut;
       ctx.totalCacheReadTokens += cached;
 
+      // Authoritative cost from OpenRouter — when the model returns it,
+      // this is the dollar amount actually charged by upstream and is what
+      // we want to show in admin Sessions. Falls back to the token×catalog
+      // estimate below when the response didn't include cost (e.g. older
+      // providers that ignore the `usage.include` flag).
+      const iterCost = Number(usage?.cost) || 0;
+      const iterCostIn = Number(usage?.cost_details?.upstream_inference_prompt_cost) || 0;
+      const iterCostOut = Number(usage?.cost_details?.upstream_inference_completions_cost) || 0;
+      ctx.totalCostUsd += iterCost;
+      ctx.totalCostUsdInput += iterCostIn;
+      ctx.totalCostUsdOutput += iterCostOut;
+
       const pricing = (ctx as any)._agentPricing as { input: number; output: number; cache_write: number; cache_read: number };
-      ctx.liveCostUsd =
-        ctx.totalInputTokens * pricing.input +
-        ctx.totalOutputTokens * pricing.output +
-        ctx.totalCacheWriteTokens * pricing.cache_write +
-        ctx.totalCacheReadTokens * pricing.cache_read;
+      ctx.liveCostUsd = ctx.totalCostUsd > 0
+        ? ctx.totalCostUsd
+        : (
+          ctx.totalInputTokens * pricing.input +
+          ctx.totalOutputTokens * pricing.output +
+          ctx.totalCacheWriteTokens * pricing.cache_write +
+          ctx.totalCacheReadTokens * pricing.cache_read
+        );
 
       // ── Parse assistant message ───────────────────────────────────────────
       const assistantMsg = response.choices?.[0]?.message;
@@ -457,10 +478,21 @@ export class AgentRunner {
         return response;
       } catch (err: any) {
         const status = err?.status || err?.error?.status;
+        const msg = String(err?.message || "");
+        const isNetworkOrParseError = !status && (
+          err instanceof SyntaxError ||
+          /truncated|parse error|unexpected end|network|connection|ECONNRESET|ETIMEDOUT|fetch failed|socket/i.test(msg)
+        );
         if (status === 429 && attempt < maxRetries) {
           const retryAfter = parseInt(err?.headers?.["retry-after"] || "0", 10);
           const delay = retryAfter > 0 ? retryAfter * 1000 : Math.min(2000 * Math.pow(2, attempt), 30000);
           console.log(`[Agent] Rate limited (429). Retry ${attempt + 1}/${maxRetries} after ${delay}ms`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        if (isNetworkOrParseError && attempt < maxRetries) {
+          const delay = Math.min(2000 * Math.pow(2, attempt), 16000);
+          console.warn(`[Agent] Network/parse error (${msg.substring(0, 80)}). Retry ${attempt + 1}/${maxRetries} after ${delay}ms`);
           await new Promise(r => setTimeout(r, delay));
           continue;
         }

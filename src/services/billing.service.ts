@@ -4,7 +4,7 @@ import crypto from "crypto";
 import { Decimal } from "@prisma/client/runtime/library";
 import { Cell } from "@ton/core";
 import { runtimeConfig } from "./runtime-config.service";
-import type { AgentSessionType } from "./runtime-config.service";
+import type { AgentSessionType, AgentComplexity } from "./runtime-config.service";
 import { getModelPricing } from "./openrouter.service";
 import { notifyDeposit, notifyReferralBonus } from "./notify.service";
 import { trackEvent } from "./analytics.service";
@@ -132,9 +132,34 @@ export class BillingService {
     userId: number,
     projectId: string | null,
     sessionType: AgentSessionType,
+    complexity?: AgentComplexity,
     planLength?: number,
   ): Promise<{ creditsCharged: number; newCredits: number }> {
-    const creditsCharged = runtimeConfig.getSessionCost(sessionType, planLength);
+    return this._preChargeWithAmount(
+      userId, projectId,
+      runtimeConfig.getSessionCost(sessionType, complexity, planLength),
+    );
+  }
+
+  /**
+   * Pre-charge an exact, already-computed credit amount. Used by
+   * `execute-proposal` to honour the price quoted to the user on the
+   * proposal card, immune to admin price edits between propose and execute.
+   */
+  async preChargeAmount(
+    userId: number,
+    projectId: string | null,
+    creditsCharged: number,
+  ): Promise<{ creditsCharged: number; newCredits: number }> {
+    return this._preChargeWithAmount(userId, projectId, creditsCharged);
+  }
+
+  private async _preChargeWithAmount(
+    userId: number,
+    projectId: string | null,
+    creditsChargedRaw: number,
+  ): Promise<{ creditsCharged: number; newCredits: number }> {
+    const creditsCharged = Math.max(0, creditsChargedRaw | 0);
     if (creditsCharged <= 0) {
       const u = await prisma.user.findUnique({ where: { id: userId }, select: { credits: true } });
       return { creditsCharged: 0, newCredits: u?.credits ?? 0 };
@@ -242,14 +267,20 @@ export class BillingService {
     usage: TokenUsage,
     operation: string,
     _legacyTierId?: string,
-    preCharged = false,
+    preCharged: boolean | number = false,
     taskId?: string,
   ): Promise<UsageResult> {
     const costUsd = await this.calculateCostAsync(model, usage);
 
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { credits: true } });
-    // When preCharged the credits were already deducted at session start; pass 0 here.
-    const creditsCharged = preCharged ? 0 : 0;
+    // When preCharged is a number we record that exact amount (it represents
+    // the credits already deducted via preChargeAction at session start).
+    // When `true` is passed, we keep the legacy behaviour of "no extra deduct"
+    // but still record 0 so the row stays consistent with preChargeAction.
+    // Old call sites pass `true` — they should migrate to passing the number.
+    const creditsCharged = typeof preCharged === "number"
+      ? Math.max(0, preCharged | 0)
+      : 0;
 
     const result = await prisma.$transaction(async (tx) => {
       await tx.usageLog.create({

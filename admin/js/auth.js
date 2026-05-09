@@ -49,6 +49,9 @@
       btn.textContent = "Signing in…";
       try {
         await Api.login(pw.value);
+        // Fresh login → wipe any persisted tab state from the previous
+        // session so the shell starts on Dashboard with a single tab.
+        try { localStorage.removeItem("af_admin_tabs_v1"); } catch (_) {}
         if (typeof onSuccess === "function") onSuccess();
       } catch (ex) {
         err.textContent = ex.message || "Login failed";

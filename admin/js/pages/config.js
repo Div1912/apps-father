@@ -167,7 +167,10 @@
           <div class="cfg-footer">
             <button class="btn btn-primary" id="cfg-save">Save All</button>
           </div>
-          <div id="cfg-sessions-section" style="margin-top:2rem"></div>
+          <p class="sub" style="margin:1.5rem 0 0;font-size:0.85rem;opacity:0.7">
+            Agent session pricing (per-complexity matrix) and per-session model/iteration limits live on the
+            <strong>Models</strong> tab.
+          </p>
         `;
 
         const onSave = async () => {
@@ -207,111 +210,6 @@
             modelPickers.forEach(dl => { dl.innerHTML = html; });
           });
         }
-
-        // Load and render agent session config
-        loadSessionConfig();
-      }
-
-      async function loadSessionConfig() {
-        const el = host.querySelector("#cfg-sessions-section");
-        if (!el) return;
-        try {
-          const data = await Api.request("/config/sessions");
-          renderSessionConfig(el, data.sessions || {}, data.pricing || {});
-        } catch (err) {
-          el.innerHTML = `<div class="error-state">Failed to load session config: ${Fmt.escapeHtml(err.message)}</div>`;
-        }
-      }
-
-      function renderSessionConfig(el, sessions, pricing) {
-        const SESSION_TYPES = ["router","answer","build","update","update-plan","bug-fix","suggestions","context"];
-        const PRICING_LABELS = {
-          build: "Build (credits)",
-          update: "Update (credits)",
-          "update-plan-base": "Update-Plan base (credits)",
-          "update-plan-per-item": "Update-Plan per item (credits)",
-          "bug-fix": "Bug-Fix (credits)",
-        };
-
-        el.innerHTML = `
-          <h2 style="margin:0 0 0.5rem;font-size:1.1rem">Agent Session Configuration</h2>
-          <p class="sub" style="margin-bottom:1rem">Per-session model, tokens, thinking budget, and iteration limits. Pricing is in credits (0 = free).</p>
-
-          <section class="cfg-section" style="margin-bottom:1.5rem">
-            <header><h3>Session Pricing</h3><span>Flat credit costs per session type</span></header>
-            <div class="cfg-rows">
-              ${Object.entries(PRICING_LABELS).map(([k, label]) => `
-                <div class="cfg-row">
-                  <label class="cfg-label">${Fmt.escapeHtml(label)}</label>
-                  <div class="cfg-control">
-                    <input class="input" data-pricing-key="${Fmt.escapeHtml(k)}" type="number" min="0" step="5" value="${pricing[k] ?? 0}" style="width:120px"/>
-                  </div>
-                </div>
-              `).join("")}
-            </div>
-          </section>
-
-          <section class="cfg-section" style="margin-bottom:1.5rem">
-            <header><h3>Session Configs</h3><span>Model + limits per session type</span></header>
-            <div style="overflow-x:auto">
-              <table style="width:100%;border-collapse:collapse;font-size:0.82rem">
-                <thead>
-                  <tr style="background:var(--bg2,#f5f5f5)">
-                    <th style="text-align:left;padding:6px 8px">Type</th>
-                    <th style="padding:6px 8px">Model</th>
-                    <th style="padding:6px 8px">Max Tokens</th>
-                    <th style="padding:6px 8px">Thinking</th>
-                    <th style="padding:6px 8px">Reasoning</th>
-                    <th style="padding:6px 8px">Iterations</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${SESSION_TYPES.map(type => {
-                    const s = sessions[type] || {};
-                    return `<tr style="border-top:1px solid var(--border,#eee)">
-                      <td style="padding:6px 8px;font-weight:500">${Fmt.escapeHtml(type)}</td>
-                      <td style="padding:4px"><input class="input" data-sess="${Fmt.escapeHtml(type)}" data-field="model" type="text" value="${Fmt.escapeHtml(s.model||'')}" style="width:260px" list="or-models-sess"/></td>
-                      <td style="padding:4px"><input class="input" data-sess="${Fmt.escapeHtml(type)}" data-field="max_tokens" type="number" min="256" step="256" value="${s.max_tokens||0}" style="width:90px"/></td>
-                      <td style="padding:4px"><input class="input" data-sess="${Fmt.escapeHtml(type)}" data-field="thinking" type="number" min="0" step="500" value="${s.thinking||0}" style="width:80px" title="0 = disabled"/></td>
-                      <td style="padding:4px;text-align:center"><input type="checkbox" data-sess="${Fmt.escapeHtml(type)}" data-field="reasoning" ${s.reasoning ? 'checked' : ''} title="Enable reasoning budget"/></td>
-                      <td style="padding:4px"><input class="input" data-sess="${Fmt.escapeHtml(type)}" data-field="iterations" type="number" min="1" step="1" value="${s.iterations||1}" style="width:70px"/></td>
-                    </tr>`;
-                  }).join("")}
-                </tbody>
-              </table>
-              <datalist id="or-models-sess"></datalist>
-            </div>
-          </section>
-
-          <button class="btn btn-primary" id="cfg-sessions-save">Save Session Config</button>
-        `;
-
-        // Hydrate model datalist
-        loadOrModels().then(models => {
-          const dl = el.querySelector("#or-models-sess");
-          if (dl) dl.innerHTML = models.map(m => `<option value="${Fmt.escapeHtml(m.id)}">`).join("");
-        });
-
-        el.querySelector("#cfg-sessions-save").addEventListener("click", async () => {
-          const pricingPayload = {};
-          el.querySelectorAll("[data-pricing-key]").forEach(inp => {
-            pricingPayload[inp.dataset.pricingKey] = Number(inp.value) || 0;
-          });
-          const sessPayload = {};
-          SESSION_TYPES.forEach(type => {
-            sessPayload[type] = {};
-            el.querySelectorAll(`[data-sess="${type}"]`).forEach(inp => {
-              const field = inp.dataset.field;
-              if (inp.type === "checkbox") sessPayload[type][field] = inp.checked;
-              else if (field === "model") sessPayload[type][field] = inp.value.trim();
-              else sessPayload[type][field] = Number(inp.value) || 0;
-            });
-          });
-          try {
-            await Api.request("/config/sessions", { method: "POST", body: { sessions: sessPayload, pricing: pricingPayload } });
-            Fmt.toast("Session config saved", "ok");
-          } catch (err) { Fmt.toast(err.message || "Failed", "err"); }
-        });
       }
 
       host.querySelector("#cfg-reload").addEventListener("click", load);

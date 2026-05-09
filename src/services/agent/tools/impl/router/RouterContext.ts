@@ -1,16 +1,19 @@
 import type { AskContext } from "../ask/AskContext";
+import type { AgentComplexity } from "../../../../runtime-config.service";
 
 /**
  * The kind of action the proposal card asks the user to confirm.
  * Maps 1-to-1 with AgentSessionType from runtime-config.service.
  *  - answer      : just an answer bubble, no follow-up agent run (free)
- *  - build       : create a new app from scratch (100 credits)
- *  - update      : one focused change to the app (85 credits)
- *  - update-plan : multi-step change with a plan list (50 + N×25 credits)
- *  - bug-fix     : diagnose + fix a reported bug (30 credits)
+ *  - build       : create a new app from scratch (priced by complexity)
+ *  - update      : one focused change to the app (priced by complexity)
+ *  - update-plan : multi-step change with a plan list (priced by complexity + per-item)
+ *  - bug-fix     : diagnose + fix a reported bug (priced by complexity)
  *  - suggestions : free-form suggestions, no agent run triggered (free)
  */
 export type ProposalKind = "answer" | "build" | "update" | "update-plan" | "bug-fix" | "suggestions";
+
+export type ProposalComplexity = AgentComplexity;
 
 export interface QuestionnaireResult {
   answer: string;
@@ -40,8 +43,22 @@ export interface RouterChatHooks {
     brief?: string;
     /** Pre-resolved prompt sent to the agent if the user clicks Start */
     prefilledPrompt?: string;
-    /** Credit cost computed from session pricing (0 for free sessions) */
+    /** Credit cost computed from session pricing (0 for free sessions). */
     creditsCost: number;
+    /**
+     * Complexity bucket the router classified this request into. Determines
+     * which column of the agentPricing matrix produced creditsCost. Required
+     * for paid kinds (build / update / update-plan / bug-fix), undefined for
+     * free kinds (answer / suggestions).
+     */
+    complexity?: ProposalComplexity;
+    /**
+     * Markup applied to creditsCost when the user toggles MAX MODE on the
+     * card. Frontend uses this to render the live "with-MAX" price; the
+     * server uses runtimeConfig.getMaxModeMultiplier() at execute time to
+     * resist client tampering, so this is purely informational.
+     */
+    maxModeMultiplier?: number;
   }): Promise<{ proposalId: string }>;
 
   /**

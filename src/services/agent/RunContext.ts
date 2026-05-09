@@ -63,6 +63,17 @@ export class RunContext {
   totalCacheWriteTokens = 0;
   totalCacheReadTokens = 0;
   liveCostUsd = 0;
+  /**
+   * Authoritative USD cost reported by OpenRouter (sum of `usage.cost`
+   * across iterations). Preferred over the token×price-table estimate when
+   * non-zero. Filled when the request opts into usage accounting via
+   * `extra_body.usage = { include: true }`.
+   */
+  totalCostUsd = 0;
+  /** Sum of `usage.cost_details.upstream_inference_prompt_cost`. */
+  totalCostUsdInput = 0;
+  /** Sum of `usage.cost_details.upstream_inference_completions_cost`. */
+  totalCostUsdOutput = 0;
   readonly startBalance: number;
   currentPercent: number | undefined;
 
