@@ -2170,6 +2170,7 @@ export function createWebServer() {
             creditsCost: number;
             complexity?: string;
             maxModeMultiplier?: number;
+            featureId?: string;
           }) {
             const pMsg = chatService.addMessage(projectId, {
               role: "assistant",
@@ -2186,6 +2187,7 @@ export function createWebServer() {
                 creditsCost: p.creditsCost,
                 complexity: p.complexity,
                 maxModeMultiplier: p.maxModeMultiplier,
+                featureId: p.featureId,
                 // Carry attachments from the user's initial message into the proposal
                 // so execute-proposal can forward them to session_build/session_update.
                 buildAttachments: routerAttachments ? routerAttachments : undefined,
@@ -2204,6 +2206,7 @@ export function createWebServer() {
               creditsCost: p.creditsCost,
               complexity: p.complexity,
               maxModeMultiplier: p.maxModeMultiplier,
+              featureId: p.featureId,
             });
             return { proposalId: pMsg.id };
           },

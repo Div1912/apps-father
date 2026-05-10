@@ -24,16 +24,25 @@ $STEPS = @(
   [pscustomobject]@{ id="restart";         label="Restart PM2";                  default=$true  }
 )
 
-# Load saved prefs
+# Load saved prefs (PS 5.1-compatible: ConvertFrom-Json returns PSCustomObject, not hashtable)
 $saved = @{}
 if (Test-Path $PREFS_FILE) {
-  try { $saved = Get-Content $PREFS_FILE -Raw | ConvertFrom-Json -AsHashtable } catch {}
+  try {
+    $json = Get-Content $PREFS_FILE -Raw | ConvertFrom-Json
+    $json.PSObject.Properties | ForEach-Object { $saved[$_.Name] = $_.Value }
+  } catch {}
 }
 
 $env_idx = if ($saved.ContainsKey("env_idx")) { [int]$saved["env_idx"] } else { 0 }
 $checked = @{}
 foreach ($s in $STEPS) {
-  $checked[$s.id] = if ($saved.ContainsKey($s.id)) { [bool]$saved[$s.id] } else { $s.default }
+  if ($saved.ContainsKey($s.id)) {
+    $v = $saved[$s.id]
+    # JSON booleans can deserialize as bool or as string depending on PS version
+    $checked[$s.id] = if ($v -is [bool]) { $v } else { $v -eq $true -or "$v" -eq "True" }
+  } else {
+    $checked[$s.id] = $s.default
+  }
 }
 
 $ENVS       = @("DEV", "PROD")

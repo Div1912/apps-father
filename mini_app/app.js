@@ -473,6 +473,24 @@ function destroySpoilerPoints(container) {
   SimpleSpoiler.destroy(container);
 }
 
+// ── Image lightbox ──────────────────────────────────────────────────────────
+function openImgLightbox(src) {
+  const lb = document.getElementById('img-lightbox');
+  const img = document.getElementById('img-lightbox-img');
+  if (!lb || !img) return;
+  img.src = src;
+  lb.classList.add('is-open');
+}
+function closeImgLightbox() {
+  const lb = document.getElementById('img-lightbox');
+  if (lb) lb.classList.remove('is-open');
+}
+// Wire once at startup
+document.addEventListener('DOMContentLoaded', () => {
+  const lb = document.getElementById('img-lightbox');
+  if (lb) lb.addEventListener('click', closeImgLightbox);
+});
+
 // ── Rendering ──
 
 function renderAppList(filter) {
@@ -2204,6 +2222,31 @@ async function openSwapPage(opts) {
   _swapPageInit(opts || {});
 }
 
+function _swapApplyOpts(opts, market, portfolio, tonBalance) {
+  let fromTok = { ...SWAP_TON, balance: tonBalance };
+  let toTok = null;
+  if (opts.fromTokenId) {
+    const m = market.find(t => t.tokenId === opts.fromTokenId);
+    if (m) {
+      const h = portfolio.find(p => p.tokenId === m.tokenId);
+      fromTok = { ...m, balance: h ? Number(h.balance) : 0 };
+      toTok = { ...SWAP_TON, balance: tonBalance };
+    }
+  } else if (opts.toListingId) {
+    const m = market.find(t => t.listingId === opts.toListingId);
+    if (m) {
+      const h = portfolio.find(p => p.tokenId === m.tokenId);
+      toTok = { ...m, balance: h ? Number(h.balance) : 0 };
+    }
+  }
+  if (!toTok && market.length) {
+    const h = portfolio.find(p => p.tokenId === market[0].tokenId);
+    toTok = { ...market[0], balance: h ? Number(h.balance) : 0 };
+  }
+  _swapPageState.from = fromTok;
+  _swapPageState.to = toTok;
+}
+
 async function _swapPageInit(opts) {
   const statusEl = document.getElementById('sw-status');
   if (statusEl) statusEl.textContent = '';
@@ -2220,6 +2263,12 @@ async function _swapPageInit(opts) {
   if (detailsEl) detailsEl.style.display = 'none';
   _swapResetSwipeThumb();
 
+  // Instantly pre-select tokens from cache so the page feels responsive
+  if (_swapPageState.marketTokens.length && opts && (opts.fromTokenId || opts.toListingId)) {
+    _swapApplyOpts(opts, _swapPageState.marketTokens, _swapPageState.portfolio, _swapPageState.tonBalance);
+    _swapRenderSides();
+  }
+
   const [, bal, market, portfolio] = await Promise.all([
     _wal2FetchTonPrice(),
     _wal2FetchTonBalance(),
@@ -2230,27 +2279,7 @@ async function _swapPageInit(opts) {
   _swapPageState.marketTokens = market;
   _swapPageState.portfolio = portfolio;
 
-  let fromTok = { ...SWAP_TON, balance: bal };
-  let toTok = null;
-  if (opts.fromTokenId) {
-    const m = market.find(t => t.tokenId === opts.fromTokenId);
-    if (m) {
-      const h = portfolio.find(p => p.tokenId === m.tokenId);
-      fromTok = { ...m, balance: h ? Number(h.balance) : 0 };
-      toTok = { ...SWAP_TON, balance: bal };
-    }
-  } else if (opts.toListingId) {
-    const m = market.find(t => t.listingId === opts.toListingId);
-    if (m) toTok = { ...m, balance: 0 };
-  }
-  if (!toTok) {
-    if (market.length) {
-      const h = portfolio.find(p => p.tokenId === market[0].tokenId);
-      toTok = { ...market[0], balance: h ? Number(h.balance) : 0 };
-    }
-  }
-  _swapPageState.from = fromTok;
-  _swapPageState.to = toTok;
+  _swapApplyOpts(opts || {}, market, portfolio, bal);
   _swapRenderSides();
   _swapUpdateSwipeEnabled();
 }
@@ -4817,7 +4846,18 @@ function renderProposalBubble(el, msg) {
     html += `</ol>`;
   }
 
-  const FREE_KINDS = ['answer', 'suggestions'];
+  // ── Paid-feature gate card: render a CTA that opens the Paid Features page ─
+  if (kind === 'paid-feature') {
+    const featureId = String(meta.featureId || '');
+    html += `<div class="proposal-actions">`;
+    html += `<button class="proposal-btn-primary proposal-btn-primary--feature" data-feature-id="${esc(featureId)}">`;
+    html += `<svg class="proposal-btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`;
+    html += `<span class="proposal-btn-label"><span class="proposal-btn-verb">Open Paid Features</span></span>`;
+    html += `</button>`;
+    html += `</div>`;
+  }
+
+  const FREE_KINDS = ['answer', 'suggestions', 'paid-feature'];
   if (!FREE_KINDS.includes(kind)) {
     const verb = kind === 'bug-fix' ? 'Fix' : kind === 'build' ? 'Build' : 'Start';
     const isBugFix = kind === 'bug-fix';
@@ -4828,11 +4868,18 @@ function renderProposalBubble(el, msg) {
         ? `<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/>`
         : `<polygon points="5 3 19 12 5 21 5 3"/>`;
 
+    // Read saved MAX-mode state. Priority:
+    //   1. Per-proposal key (mm:<id>) — set when this exact proposal was interacted with.
+    //   2. Global preference (af_maxmode) — carries the last-used choice to NEW proposals.
+    const _perMM   = localStorage.getItem(`mm:${msg.id}`);
+    const _globalMM = localStorage.getItem('af_maxmode');
+    const _initMax  = _perMM !== null ? _perMM === '1' : _globalMM === '1';
+
     if (maxModeMultiplier > 0 && creditsCost > 0) {
       const maxLabel = `×${maxModeMultiplier % 1 === 0 ? maxModeMultiplier : maxModeMultiplier.toFixed(2)}`;
       const checkboxId = `maxmode-${esc(msg.id)}`;
       html += `<label class="proposal-maxmode" for="${checkboxId}">`;
-      html += `<input type="checkbox" id="${checkboxId}" class="proposal-maxmode-input" data-proposal-id="${esc(msg.id)}" ${accepted ? 'disabled' : ''}/>`;
+      html += `<input type="checkbox" id="${checkboxId}" class="proposal-maxmode-input" data-proposal-id="${esc(msg.id)}" ${accepted ? 'disabled' : ''} ${_initMax ? 'checked' : ''}/>`;
       html += `<span class="proposal-maxmode-track"><span class="proposal-maxmode-thumb"></span></span>`;
       html += `<div class="proposal-maxmode-text">`;
       html += `<div class="proposal-maxmode-title"><span class="proposal-maxmode-icon">⚡</span>MAX Mode<span class="proposal-maxmode-mult">${esc(maxLabel)} price</span></div>`;
@@ -4841,12 +4888,16 @@ function renderProposalBubble(el, msg) {
       html += `</label>`;
     }
 
+    const _initCredits = _initMax && maxModeMultiplier > 0
+      ? Math.max(0, Math.round(creditsCost * maxModeMultiplier))
+      : creditsCost;
+
     html += `<div class="proposal-actions">`;
-    html += `<button class="proposal-btn-primary" data-proposal-id="${esc(msg.id)}" `;
+    html += `<button class="proposal-btn-primary${_initMax ? ' proposal-btn-primary--max' : ''}" data-proposal-id="${esc(msg.id)}" `;
     html += `data-base-credits="${creditsCost}" data-multiplier="${maxModeMultiplier || 1}" `;
     html += `data-verb="${esc(verb)}" ${accepted ? 'disabled' : ''}>`;
     html += `<svg class="proposal-btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">${btnIcon}</svg>`;
-    html += renderProposalBtnLabel(verb, creditsCost);
+    html += renderProposalBtnLabel(verb, _initCredits);
     html += `</button>`;
     html += `</div>`;
   }
@@ -4855,29 +4906,47 @@ function renderProposalBubble(el, msg) {
 
   el.innerHTML = html;
 
-  if (accepted) return;
+  // Paid-feature card: clicking the button just opens the Paid Features page
+  // for the current project. No server call, no agent run, no charge.
+  if (kind === 'paid-feature') {
+    const fbtn = el.querySelector('.proposal-btn-primary--feature');
+    if (fbtn) {
+      fbtn.addEventListener('click', () => {
+        const pid = chatProjectId || (currentProject && currentProject.id);
+        if (pid) openFeatures(pid);
+      });
+    }
+    return;
+  }
 
-  const btn = el.querySelector('.proposal-btn-primary');
+  const btn      = el.querySelector('.proposal-btn-primary');
   const maxToggle = el.querySelector('.proposal-maxmode-input');
+  const mmKey    = `mm:${msg.id}`;
+
+  if (accepted) return;
 
   if (maxToggle && btn) {
     maxToggle.addEventListener('change', () => {
+      const val = maxToggle.checked ? '1' : '0';
+      localStorage.setItem(mmKey, val);
+      localStorage.setItem('af_maxmode', val); // update global preference
       const baseCredits = Number(btn.dataset.baseCredits || 0);
       const mult = maxToggle.checked ? Number(btn.dataset.multiplier || 1) : 1;
       const newPrice = Math.max(0, Math.round(baseCredits * mult));
       btn.classList.toggle('proposal-btn-primary--max', maxToggle.checked);
-      const labelHtml = renderProposalBtnLabel(btn.dataset.verb || 'Start', newPrice);
-      // Replace just the label children (keep the leading <svg>).
       const svg = btn.querySelector('svg');
       btn.innerHTML = '';
       if (svg) btn.appendChild(svg);
-      btn.insertAdjacentHTML('beforeend', labelHtml);
+      btn.insertAdjacentHTML('beforeend', renderProposalBtnLabel(btn.dataset.verb || 'Start', newPrice));
     });
   }
 
   if (btn) {
     btn.addEventListener('click', () => {
       const useMax = !!(maxToggle && maxToggle.checked);
+      const val = useMax ? '1' : '0';
+      localStorage.setItem(mmKey, val);
+      localStorage.setItem('af_maxmode', val); // update global preference
       btn.disabled = true;
       btn.classList.add('loading');
       if (maxToggle) maxToggle.disabled = true;
@@ -5891,11 +5960,18 @@ async function openDetail(id) {
   const webappUrlRow = document.getElementById('webapp-url-row');
   const webappUrlSpoiler = document.getElementById('webapp-url-spoiler');
   document.getElementById('webapp-url-text').textContent = webappUrl;
+  // Keep row invisible until spoiler dots are ready, then fade in — prevents blank flash
   webappUrlRow.style.display = '';
+  webappUrlRow.style.opacity = '0';
   webappUrlSpoiler.classList.add('spoiler-active');
   webappUrlSpoiler.classList.remove('js-spoiler-revealed');
   destroySpoilerPoints(webappUrlSpoiler);
-  setTimeout(() => generateSpoilerPoints(webappUrlSpoiler), 50);
+  setTimeout(() => {
+    generateSpoilerPoints(webappUrlSpoiler);
+    webappUrlRow.style.transition = 'opacity 0.15s';
+    webappUrlRow.style.opacity = '1';
+    setTimeout(() => { webappUrlRow.style.transition = ''; }, 160);
+  }, 300);
 
   currentToken = null;
   const spoiler = document.getElementById('token-spoiler');
@@ -6477,15 +6553,32 @@ function openReferral() {
   const container = document.getElementById('referral-anim');
   container.innerHTML = '';
   if (referralAnimInstance) { referralAnimInstance.destroy(); referralAnimInstance = null; }
-  fetch('tgs/duck_burn.tgs')
-    .then(r => r.arrayBuffer())
-    .then(buf => {
-      const json = JSON.parse(pako.inflate(new Uint8Array(buf), { to: 'string' }));
-      referralAnimInstance = lottie.loadAnimation({
-        container, renderer: 'svg', loop: true, autoplay: true, animationData: json,
-      });
-    })
-    .catch(err => console.error('Failed to load referral TGS:', err));
+
+  // Use a generation counter so only the latest load call creates the animation
+  openReferral._gen = (openReferral._gen || 0) + 1;
+  const myGen = openReferral._gen;
+
+  const _doLoad = (json) => {
+    if (myGen !== openReferral._gen) return; // superseded by a newer call
+    container.innerHTML = '';
+    if (referralAnimInstance) { referralAnimInstance.destroy(); referralAnimInstance = null; }
+    referralAnimInstance = lottie.loadAnimation({
+      container, renderer: 'svg', loop: true, autoplay: true, animationData: json,
+    });
+  };
+
+  if (openReferral._cachedJson) {
+    _doLoad(openReferral._cachedJson);
+  } else {
+    fetch('tgs/duck_burn.tgs')
+      .then(r => r.arrayBuffer())
+      .then(buf => {
+        const json = JSON.parse(pako.inflate(new Uint8Array(buf), { to: 'string' }));
+        openReferral._cachedJson = json;
+        _doLoad(json);
+      })
+      .catch(err => console.error('Failed to load referral TGS:', err));
+  }
 
   document.getElementById('referral-content').innerHTML = `
     <div class="tm-info-list" style="gap:0">
@@ -9671,16 +9764,6 @@ async function init() {
 
   document.getElementById('btn-topup')?.addEventListener('click', () => openTopup('list'));
   document.getElementById('btn-earn-credits')?.addEventListener('click', () => openTasks());
-  document.getElementById('btn-store-page')?.addEventListener('click', () => openStore());
-  document.getElementById('btn-portfolio-page')?.addEventListener('click', () => openPortfolio());
-  document.getElementById('btn-referral-page').addEventListener('click', () => openReferral());
-  document.getElementById('btn-release-notes-page').addEventListener('click', () => openReleaseNotes());
-  document.getElementById('btn-help-page').addEventListener('click', () => openHelp());
-  document.getElementById('btn-language-page')?.addEventListener('click', () => openLanguage());
-  document.getElementById('btn-support')?.addEventListener('click', () => {
-    if (tg?.openTelegramLink) tg.openTelegramLink('https://t.me/AppsFather_support');
-    else window.open('https://t.me/AppsFather_support', '_blank');
-  });
   document.getElementById('btn-admin')?.addEventListener('click', () => openAdmin());
   document.getElementById('btn-partner')?.addEventListener('click', () => openPartner());
 
@@ -10654,6 +10737,10 @@ function renderStoreApp(d) {
       `<div class="store-d-screens-dot${i === 0 ? ' active' : ''}"></div>`
     ).join('');
     screensSection.style.display = '';
+    // Lightbox on tap
+    screensWrap.querySelectorAll('.store-d-screen img').forEach(img => {
+      img.addEventListener('click', () => openImgLightbox(img.src));
+    });
     // Sync dots to scroll position.
     if (storeDetailState.scrollHandler) {
       screensWrap.removeEventListener('scroll', storeDetailState.scrollHandler);
@@ -11158,7 +11245,7 @@ function _setupStoreAppTradeButtons(listing, token) {
   const symbol = token.symbol ? `$${token.symbol}` : 'token';
   const buyHandler = () => {
     try {
-      openSwapPage({ toListingId: listing.id });
+      openSwapPage({ toListingId: listing.listingId });
     } catch (e) { console.warn('openSwapPage(buy) failed', e); }
   };
   const sellHandler = () => {
@@ -11170,7 +11257,7 @@ function _setupStoreAppTradeButtons(listing, token) {
   if (tg.MainButton) {
     tg.MainButton.setText(`Buy ${symbol}`);
     tg.MainButton.color = '#1aa6fe';
-    tg.MainButton.textColor = '#ffffff';
+    tg.MainButton.textColor = '#000000';
     tg.MainButton.onClick(buyHandler);
     tg.MainButton.show();
     _storeAppBtnHandlers.main = buyHandler;

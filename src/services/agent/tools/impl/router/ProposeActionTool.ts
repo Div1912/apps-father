@@ -2,9 +2,11 @@ import type { RouterTool } from "./RouterTool";
 import type { RouterContext, ProposalKind, ProposalComplexity } from "./RouterContext";
 import { runtimeConfig, AGENT_COMPLEXITIES } from "../../../../../services/runtime-config.service";
 import type { AgentSessionType } from "../../../../../services/runtime-config.service";
+import { PAID_FEATURES } from "../../../../../services/features.service";
 
-const VALID_KINDS: ProposalKind[] = ["answer", "build", "update", "update-plan", "bug-fix", "suggestions"];
+const VALID_KINDS: ProposalKind[] = ["answer", "build", "update", "update-plan", "bug-fix", "suggestions", "paid-feature"];
 const PAID_KINDS: ProposalKind[] = ["build", "update", "update-plan", "bug-fix"];
+const VALID_FEATURE_IDS = PAID_FEATURES.map(f => f.id);
 
 /**
  * Terminal tool. The router calls this exactly once to classify the user's
@@ -33,12 +35,13 @@ export class ProposeActionTool implements RouterTool {
       name: "propose_action",
       description:
         "Finalize the routing turn. Classify the user intent and emit a proposal card.\n" +
-        " - 'answer'      : you already have the answer; put it in `description`. No agent run.\n" +
-        " - 'suggestions' : you have helpful ideas / suggestions; put them in `description`. No agent run.\n" +
-        " - 'build'       : user wants to create a new app. Put a detailed brief in `brief`.\n" +
-        " - 'update'      : user wants one focused change. Put a self-contained prompt in `prefilledPrompt`.\n" +
-        " - 'update-plan' : user wants multiple changes. List them in `plan` (array of strings). Also set `prefilledPrompt` with all items as context.\n" +
-        " - 'bug-fix'     : user reported a bug. Diagnose in `description`, pass fix prompt in `prefilledPrompt`.\n" +
+        " - 'answer'       : you already have the answer; put it in `description`. No agent run.\n" +
+        " - 'suggestions'  : you have helpful ideas / suggestions; put them in `description`. No agent run.\n" +
+        " - 'build'        : user wants to create a new app. Put a detailed brief in `brief`.\n" +
+        " - 'update'       : user wants one focused change. Put a self-contained prompt in `prefilledPrompt`.\n" +
+        " - 'update-plan'  : user wants multiple changes. List them in `plan` (array of strings). Also set `prefilledPrompt` with all items as context.\n" +
+        " - 'bug-fix'      : user reported a bug. Diagnose in `description`, pass fix prompt in `prefilledPrompt`.\n" +
+        " - 'paid-feature' : user is asking for a capability that is GATED behind a locked paid feature (Stars Payment, TON Payment, Disable Splash, Get Code, Admin Panel). Set `featureId` to one of: stars_payment | ton_payment | disable_splash | get_code | admin_panel. Description tells the user the feature is locked and points them to the Paid Features page. No agent run.\n" +
         "\n" +
         "Rule: if the user lists MORE THAN ONE distinct change/feature, always use 'update-plan'.\n" +
         "\n" +
@@ -85,6 +88,11 @@ export class ProposeActionTool implements RouterTool {
             type: "string",
             description: "Self-contained prompt sent to the agent on click. Required for 'update', 'update-plan', 'bug-fix'. Not needed for 'build' (brief is used instead).",
           },
+          featureId: {
+            type: "string",
+            enum: VALID_FEATURE_IDS,
+            description: "Required for kind='paid-feature'. The locked feature the user is asking about. Pick the closest match from the catalog.",
+          },
         },
         required: ["kind", "title", "description"],
         additionalProperties: false,
@@ -101,6 +109,7 @@ export class ProposeActionTool implements RouterTool {
       : undefined;
     const brief = typeof args?.brief === "string" ? args.brief.trim() : undefined;
     const prefilledPrompt = typeof args?.prefilledPrompt === "string" ? args.prefilledPrompt.trim() : undefined;
+    const featureId = typeof args?.featureId === "string" ? args.featureId.trim() : undefined;
 
     // Strict allow-list. Anything outside the known enum is dropped — protects
     // against the LLM echoing user-provided strings like "free" or "discount"
@@ -130,6 +139,12 @@ export class ProposeActionTool implements RouterTool {
     if (PAID_KINDS.includes(kind) && !complexity) {
       return `Error: complexity is required for kind='${kind}'. Pick one of: ${AGENT_COMPLEXITIES.join(", ")}.`;
     }
+    if (kind === "paid-feature") {
+      if (!featureId) return `Error: featureId is required for kind='paid-feature'. Pick one of: ${VALID_FEATURE_IDS.join(", ")}.`;
+      if (!VALID_FEATURE_IDS.includes(featureId)) {
+        return `Error: featureId must be one of ${VALID_FEATURE_IDS.join(", ")}. Got: ${featureId}`;
+      }
+    }
     if (ctx.proposalEmitted) {
       return "Error: a proposal was already emitted for this turn. Do not call propose_action again.";
     }
@@ -138,11 +153,12 @@ export class ProposeActionTool implements RouterTool {
     // value directly — only the complexity bucket, which we strictly validate
     // above. Even a malicious user prompt that talks the model into emitting
     // "complexity=trivial" for a huge job is bounded by the matrix admin set.
-    const creditsCost = runtimeConfig.getSessionCost(
-      kind as AgentSessionType,
-      complexity,
-      plan?.length,
-    );
+    // Free kinds (answer / suggestions / paid-feature) always cost 0 — the
+    // pricing matrix has no row for them, but we don't want to depend on that
+    // implementation detail here.
+    const creditsCost = PAID_KINDS.includes(kind)
+      ? runtimeConfig.getSessionCost(kind as AgentSessionType, complexity, plan?.length)
+      : 0;
 
     const maxModeMultiplier = PAID_KINDS.includes(kind)
       ? runtimeConfig.getMaxModeMultiplier()
@@ -153,10 +169,11 @@ export class ProposeActionTool implements RouterTool {
       creditsCost,
       complexity,
       maxModeMultiplier,
+      featureId: kind === "paid-feature" ? featureId : undefined,
     });
 
     ctx.proposalEmitted = true;
 
-    return `Proposal sent to user (id=${proposalId}, kind=${kind}, complexity=${complexity ?? "n/a"}, credits=${creditsCost}). Stop — do not call any more tools this turn.`;
+    return `Proposal sent to user (id=${proposalId}, kind=${kind}, complexity=${complexity ?? "n/a"}, credits=${creditsCost}${featureId ? `, featureId=${featureId}` : ""}). Stop — do not call any more tools this turn.`;
   }
 }

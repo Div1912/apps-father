@@ -4,14 +4,16 @@ import type { AgentComplexity } from "../../../../runtime-config.service";
 /**
  * The kind of action the proposal card asks the user to confirm.
  * Maps 1-to-1 with AgentSessionType from runtime-config.service.
- *  - answer      : just an answer bubble, no follow-up agent run (free)
- *  - build       : create a new app from scratch (priced by complexity)
- *  - update      : one focused change to the app (priced by complexity)
- *  - update-plan : multi-step change with a plan list (priced by complexity + per-item)
- *  - bug-fix     : diagnose + fix a reported bug (priced by complexity)
- *  - suggestions : free-form suggestions, no agent run triggered (free)
+ *  - answer       : just an answer bubble, no follow-up agent run (free)
+ *  - build        : create a new app from scratch (priced by complexity)
+ *  - update       : one focused change to the app (priced by complexity)
+ *  - update-plan  : multi-step change with a plan list (priced by complexity + per-item)
+ *  - bug-fix      : diagnose + fix a reported bug (priced by complexity)
+ *  - suggestions  : free-form suggestions, no agent run triggered (free)
+ *  - paid-feature : the requested feature is gated behind a paid feature unlock — show
+ *                   a card directing the user to the Paid Features page (free, no agent run)
  */
-export type ProposalKind = "answer" | "build" | "update" | "update-plan" | "bug-fix" | "suggestions";
+export type ProposalKind = "answer" | "build" | "update" | "update-plan" | "bug-fix" | "suggestions" | "paid-feature";
 
 export type ProposalComplexity = AgentComplexity;
 
@@ -59,6 +61,12 @@ export interface RouterChatHooks {
      * resist client tampering, so this is purely informational.
      */
     maxModeMultiplier?: number;
+    /**
+     * For kind="paid-feature" — id of the locked feature in the catalog
+     * (PAID_FEATURES). Frontend uses this to deep-link the user into
+     * /features and pre-highlight the relevant card.
+     */
+    featureId?: string;
   }): Promise<{ proposalId: string }>;
 
   /**

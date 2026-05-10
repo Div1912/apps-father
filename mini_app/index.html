@@ -17,7 +17,7 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <link href="bootstrap.min.css" rel="stylesheet">
   <link href="bootstrap-extra.css" rel="stylesheet">
-  <link href="styles.css?r=341" rel="stylesheet">
+  <link href="styles.css?r=360" rel="stylesheet">
   <script>
     window.op = window.op || function () { var n = []; return new Proxy(function () { arguments.length && n.push([].slice.call(arguments)) }, { get: function (t, r) { return "q" === r ? n : function () { n.push([r].concat([].slice.call(arguments))) } }, has: function (t, r) { return "q" === r } }) }();
     window.op('init', {
@@ -191,42 +191,6 @@
           </div>
         </section>
 
-        <section class="tm-section" style="padding-top:0;">
-          <div class="tm-table-wrap">
-            <a class="tm-row tm-row-link" id="btn-store-page">
-              <span class="tm-icon" style="background:linear-gradient(135deg,#3a8df0,#1aa6fe);color:#fff;display:inline-flex;align-items:center;justify-content:center;border-radius:8px">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l1-6h16l1 6"/><path d="M5 9v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9"/><path d="M9 13h6"/></svg>
-              </span>
-              <span data-i18n="store">App Store</span>
-            </a>
-            <a class="tm-row tm-row-link" id="btn-portfolio-page">
-              <span class="tm-icon" style="background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;display:inline-flex;align-items:center;justify-content:center;border-radius:8px">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>
-              </span>
-              <span data-i18n="portfolio">My Portfolio</span>
-            </a>
-            <a class="tm-row tm-row-link" id="btn-referral-page">
-              <span class="tm-icon af-icon-referral"></span>
-              <span data-i18n="referral_program">Referral Program</span>
-            </a>
-            <a class="tm-row tm-row-link" id="btn-release-notes-page">
-              <span class="tm-icon af-icon-release-notes"></span>
-              <span data-i18n="release_notes">Release Notes</span>
-            </a>
-            <a class="tm-row tm-row-link" id="btn-help-page">
-              <span class="tm-icon af-icon-help"></span>
-              <span data-i18n="help">Help</span>
-            </a>
-            <a class="tm-row tm-row-link" id="btn-language-page">
-              <span class="tm-icon af-icon-language"></span>
-              <span data-i18n="language">Language</span>
-            </a>
-            <a class="tm-row tm-row-link" id="btn-support">
-              <span class="tm-icon af-icon-support"></span>
-              <span data-i18n="support">Contact Support</span>
-            </a>
-          </div>
-        </section>
 
       </main>
     </div>
@@ -1422,8 +1386,8 @@
     </div>
   </div>
 
-  <script src="i18n.js?r=340" defer></script>
-  <script src="app.js?r=340" defer></script>
+  <script src="i18n.js?r=350" defer></script>
+  <script src="app.js?r=350" defer></script>
   <script>
     function initAnalytics() {
       window.telegramAnalytics.init({
@@ -1538,15 +1502,15 @@
 
       <section class="store-tabs-row">
         <button class="store-tab active" data-tab="trending">
-          <span class="store-tab-icon">🔥</span>
+          <span class="store-tab-icon"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24"><path fill="currentColor" d="m16.85 6.85l1.44 1.44l-4.88 4.88l-3.29-3.29a.996.996 0 0 0-1.41 0l-6 6.01a.996.996 0 1 0 1.41 1.41L9.41 12l3.29 3.29c.39.39 1.02.39 1.41 0l5.59-5.58l1.44 1.44a.5.5 0 0 0 .85-.35V6.5a.48.48 0 0 0-.49-.5h-4.29a.5.5 0 0 0-.36.85"/></svg></span>
           <span>Trending</span>
         </button>
         <button class="store-tab" data-tab="new">
-          <span class="store-tab-icon">✨</span>
+          <span class="store-tab-icon"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 16 16"><path fill="currentColor" d="M3.75 10.999h4.5a.75.75 0 0 1 .102 1.493l-.102.007h-4.5a.75.75 0 0 1-.102-1.493zh4.5zm1.47-5.78a.75.75 0 0 1 .976-.072l.084.073l3.5 3.5a.75.75 0 0 1-.976 1.133L8.72 9.78l-3.5-3.5a.75.75 0 0 1 0-1.06M11.75 3a.75.75 0 0 1 .743.648l.007.102v4.5a.75.75 0 0 1-1.493.102L11 8.25v-4.5a.75.75 0 0 1 .75-.75"/></svg></span>
           <span>New</span>
         </button>
         <button class="store-tab" data-tab="top">
-          <span class="store-tab-icon">📈</span>
+          <span class="store-tab-icon"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24"><path fill="currentColor" d="M3 21q-.425 0-.712-.288T2 20V10q0-.425.288-.712T3 9h3.5q.425 0 .713.288T7.5 10v10q0 .425-.288.713T6.5 21zm7.25 0q-.425 0-.712-.288T9.25 20V4q0-.425.288-.712T10.25 3h3.5q.425 0 .713.288T14.75 4v16q0 .425-.288.713T13.75 21zm7.25 0q-.425 0-.712-.288T16.5 20v-8q0-.425.288-.712T17.5 11H21q.425 0 .713.288T22 12v8q0 .425-.288.713T21 21z"/></svg></span>
           <span>Top</span>
         </button>
       </section>
@@ -2569,6 +2533,11 @@
         </li>
       </ul>
     </nav>
+  </div>
+
+  <!-- Screenshot lightbox -->
+  <div id="img-lightbox" class="img-lightbox">
+    <img id="img-lightbox-img" class="img-lightbox-img" src="" alt="">
   </div>
 
 </body>
