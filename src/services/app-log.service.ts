@@ -36,6 +36,10 @@ const MAX_BUFFER           = 5_000;       // drop-oldest above this
 const MAX_BATCH            = 1_000;       // per-flush insert chunk
 const MAX_MESSAGE_BYTES    = 16 * 1024;   // truncate huge lines
 const ENABLED_BY_DEFAULT   = true;
+// Keep logs for this many days; older rows are deleted nightly.
+const LOG_RETENTION_DAYS   = 3;
+// How often to run the rotation cleanup (every 6 hours).
+const ROTATION_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 interface LogRow {
   ts: Date;
@@ -220,6 +224,21 @@ async function flush(): Promise<void> {
   }
 }
 
+/** Delete log rows older than LOG_RETENTION_DAYS. Runs silently. */
+async function rotateOldLogs(): Promise<void> {
+  try {
+    const cutoff = new Date(Date.now() - LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+    const { count } = await prisma.appLog.deleteMany({ where: { ts: { lt: cutoff } } });
+    if (count > 0) {
+      process.stderr.write(`[AppLog] rotation deleted ${count} rows older than ${LOG_RETENTION_DAYS} days\n`);
+    }
+  } catch (err: any) {
+    process.stderr.write(`[AppLog] rotation failed: ${err?.message || err}\n`);
+  }
+}
+
+let rotationTimer: NodeJS.Timeout | null = null;
+
 /** Start the periodic flush timer. Idempotent. */
 export function startAppLogFlusher(): void {
   if (timer) return;
@@ -227,8 +246,19 @@ export function startAppLogFlusher(): void {
   timer = setInterval(() => {
     void flush();
   }, FLUSH_INTERVAL_MS);
-  // Don't keep the event loop alive just for the flusher.
   timer.unref?.();
+
+  // Run rotation once at startup (after a short delay to let the app settle),
+  // then every ROTATION_INTERVAL_MS.
+  if (!rotationTimer) {
+    const startRotation = () => {
+      void rotateOldLogs();
+      rotationTimer = setInterval(() => void rotateOldLogs(), ROTATION_INTERVAL_MS);
+      rotationTimer.unref?.();
+    };
+    // Delay first rotation by 2 minutes so startup traffic isn't impacted.
+    setTimeout(startRotation, 2 * 60 * 1000);
+  }
 }
 
 /** Force-flush (used at shutdown). */
@@ -240,10 +270,8 @@ export async function drainAppLogs(): Promise<void> {
 /** Stop the flusher (no more flushes will be scheduled). Used at shutdown. */
 export function stopAppLogFlusher(): void {
   stopped = true;
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-  }
+  if (timer) { clearInterval(timer); timer = null; }
+  if (rotationTimer) { clearInterval(rotationTimer); rotationTimer = null; }
 }
 
 /** Disable the persistent sink at runtime (e.g. for tests). */

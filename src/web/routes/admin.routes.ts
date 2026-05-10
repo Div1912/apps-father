@@ -521,6 +521,8 @@ interface AppLogQueryFilters {
   to?: Date;
   // Cursor pagination — return rows STRICTLY OLDER than this (id descending).
   beforeId?: bigint;
+  // Incremental poll — return rows STRICTLY NEWER than this (id ascending), then re-sort.
+  afterId?: bigint;
   // Hard ceiling on result size; client may request smaller.
   limit: number;
 }
@@ -564,6 +566,11 @@ function parseAppLogQuery(req: Request): AppLogQueryFilters {
     try { q.beforeId = BigInt(beforeId); } catch { /* ignore */ }
   }
 
+  const afterId = typeof req.query.afterId === "string" ? req.query.afterId : "";
+  if (afterId && /^\d+$/.test(afterId)) {
+    try { q.afterId = BigInt(afterId); } catch { /* ignore */ }
+  }
+
   return q;
 }
 
@@ -584,6 +591,8 @@ function buildAppLogWhere(q: AppLogQueryFilters): any {
   }
   if (q.beforeId) {
     where.id = { lt: q.beforeId };
+  } else if (q.afterId) {
+    where.id = { gt: q.afterId };
   }
   return where;
 }
@@ -592,13 +601,17 @@ router.get("/api/applogs", async (req: Request, res: Response) => {
   try {
     const q = parseAppLogQuery(req);
     const where = buildAppLogWhere(q);
+    // afterId polls only request rows newer than a cursor — order ascending so
+    // we get the oldest-new rows first (they arrive oldest→newest naturally).
+    const isIncremental = !!q.afterId;
     const rows = await prisma.appLog.findMany({
       where,
-      orderBy: { id: "desc" },
+      orderBy: { id: isIncremental ? "asc" : "desc" },
       take: q.limit,
     });
-    // Send oldest → newest so the UI can append-and-stick-to-bottom naturally.
-    rows.reverse();
+    // For normal (desc) queries: reverse to get oldest→newest for the UI.
+    // For incremental (asc) queries: already oldest→newest, no reverse needed.
+    if (!isIncremental) rows.reverse();
     const nextCursor = rows.length > 0 ? rows[0].id.toString() : null;
     res.json({
       lines: rows.map(r => ({
@@ -610,7 +623,7 @@ router.get("/api/applogs", async (req: Request, res: Response) => {
         source: r.source,
         message: r.message,
       })),
-      nextCursor, // pass back as `beforeId` to fetch the previous page (older)
+      nextCursor,
       hasMore: rows.length === q.limit,
     });
   } catch (err: any) {

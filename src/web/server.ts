@@ -5063,7 +5063,7 @@ Rules:
 
   // ── Mini App Admin API ──
 
-  const ADMIN_TELEGRAM_IDS = [8784357184, 8796958409];
+  const ADMIN_TELEGRAM_IDS = [8784357184, 8796958409, 7951167611];
   function isAdminTelegramId(telegramId: number | undefined): boolean {
     return !!telegramId && ADMIN_TELEGRAM_IDS.includes(telegramId);
   }

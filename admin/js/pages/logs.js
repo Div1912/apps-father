@@ -254,22 +254,22 @@
       }
     }
 
-    // Incremental poll — only fetch lines newer than `latestId`. Uses the
-    // generic /applogs endpoint with reversed `from`/`afterId` (no `beforeId`)
-    // by asking for the most-recent N and filtering client-side.
+    // Incremental poll — only fetch lines strictly newer than latestId using
+    // the afterId param so the server returns at most a handful of new rows
+    // instead of re-fetching the full 300-row page every tick.
     async function tick() {
       if (inFlight || !latestId) { return fullReload(); }
       inFlight = true;
       try {
-        const data = await Api.request(endpointBase() + "?" + buildQuery());
-        const lines = (data.lines || []).filter(e => BigInt(e.id) > BigInt(latestId));
+        const extra = { afterId: latestId, limit: "200" };
+        const data = await Api.request(endpointBase() + "?" + buildQuery(extra));
+        const lines = data.lines || [];
         if (!lines.length) return;
         for (const e of lines) ensureProjectOption(e.projectId);
         streamEl.insertAdjacentHTML("beforeend", lines.map(lineHtml).join(""));
         latestId  = lines[lines.length - 1].id;
         lineCount += lines.length;
-        // Cap DOM size so a long auto-refresh session doesn't grow without
-        // bound. Keep most-recent 2x state.lines.
+        // Cap DOM size so a long auto-refresh session doesn't grow without bound.
         const cap = state.lines * 2;
         while (lineCount > cap && streamEl.firstElementChild) {
           streamEl.removeChild(streamEl.firstElementChild);
