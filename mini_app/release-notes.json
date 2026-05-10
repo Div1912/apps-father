@@ -1,5 +1,52 @@
 [
   {
+    "version": "4.0.0",
+    "date": "2026-05-10",
+    "title": "Agent v4",
+    "image": "assets/updates/5.png",
+    "sections": [
+      {
+        "label": "New UI",
+        "items": [
+          "Fully redesigned interface — cleaner layout, smoother navigation, and a more intuitive project experience",
+          "New agent build UI — live progress timeline shows exactly what the agent is doing step by step as it builds your app",
+          "Credit price estimation shown upfront before you confirm any action — no surprises"
+        ]
+      },
+      {
+        "label": "New Features",
+        "items": [
+          "Project Briefing — every project now has a living document the agent keeps updated, so it always remembers your app's full context, screens, and logic across sessions",
+          "File Bucket — each project gets its own private file storage for images, videos, and assets your app can upload and serve",
+          "Wallet — built-in TON wallet lets you top up credits, hold TON balance, and manage transactions without leaving the app",
+          "Token Swaps & App Stocks — buy and sell your app's token directly in the Wallet via the integrated swap interface",
+          "App Store — publish your app with a listing, screenshots, and description so others can discover and use it",
+          "Image Generation — generate AI images and use them directly as assets inside your app",
+          "Agent Vision — attach screenshots or mockups and the agent understands them visually when building or updating",
+          "Draw Mockups — sketch a rough layout and the agent uses your drawing as a blueprint",
+          "Pro Mode — higher quality build mode with deeper reasoning for complex apps",
+          "Free Agent Asks — clarifying questions the agent asks before building are completely free"
+        ]
+      },
+      {
+        "label": "Security & Control",
+        "items": [
+          "Improved app security — user code runs in a sandboxed environment; platform secrets are no longer accessible to project code",
+          "Unlink Bot — you can now safely unlink your Telegram bot from a project at any time from the project settings",
+          "Bot token is encrypted at rest and never exposed to your app's backend code"
+        ]
+      },
+      {
+        "label": "Performance",
+        "items": [
+          "Up to 1.5x faster builds — agent pipeline optimised to reduce iteration time",
+          "Up to 2x quality improvement — smarter planning and self-review pass before publishing",
+          "Questions UI — agent asks one focused question at a time with tap-to-answer buttons instead of text walls"
+        ]
+      }
+    ]
+  },
+  {
     "version": "3.1.0",
     "date": "2026-04-30",
     "title": "Agent Update — Smarter, Cleaner, More Reliable",

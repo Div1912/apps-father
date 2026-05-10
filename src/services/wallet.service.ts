@@ -82,6 +82,78 @@ export async function getUsdtBalance(): Promise<number> {
 }
 
 /**
+ * Send native TON from the hot wallet to a recipient address.
+ * @param toAddress  Recipient TON address (any format)
+ * @param amountTon  Amount in TON (e.g. 0.5)
+ * @returns Transaction hash or fallback identifier
+ */
+export async function sendTon(toAddress: string, amountTon: number): Promise<string> {
+  if (!isFinite(amountTon) || amountTon <= 0) throw new Error(`Invalid TON amount: ${amountTon}`);
+
+  const { contract, keyPair } = await openWallet();
+  const dest = Address.parse(toAddress);
+  const nanoAmount = toNano(amountTon.toFixed(9));
+
+  const seqno = await retry(() => contract.getSeqno(), "getSeqno");
+  console.log(`[Wallet] seqno=${seqno}, sending ${amountTon} TON to ${toAddress}`);
+
+  try {
+    await contract.sendTransfer({
+      seqno,
+      secretKey: keyPair.secretKey,
+      sendMode: SendMode.PAY_GAS_SEPARATELY + SendMode.IGNORE_ERRORS,
+      messages: [
+        internal({
+          to: dest,
+          value: nanoAmount,
+          bounce: false,
+        }),
+      ],
+    });
+  } catch (err: any) {
+    console.error("[Wallet] Failed to broadcast TON transfer:", err.message);
+    throw new Error("broadcast_failed: " + err.message);
+  }
+
+  // Poll for seqno change to confirm
+  let confirmed = false;
+  let retries = 20;
+  let waitMs = 15000;
+
+  while (retries > 0) {
+    await delay(waitMs);
+    waitMs = 10000;
+    try {
+      const newSeqno = await contract.getSeqno();
+      if (newSeqno > seqno) { confirmed = true; break; }
+      retries--;
+      console.log(`[Wallet] Seqno unchanged (${newSeqno}), ${retries} retries left`);
+    } catch (err: any) {
+      retries--;
+      console.error(`[Wallet] Poll error (${retries} left):`, err.message);
+    }
+  }
+
+  let txHash = "";
+  if (confirmed) {
+    try {
+      const txs = await client.getTransactions(contract.address, { limit: 3 });
+      if (txs.length > 0) txHash = txs[0].hash().toString("hex");
+    } catch {}
+  }
+
+  if (confirmed) {
+    const hash = txHash || "confirmed_" + Date.now().toString(16);
+    console.log(`[Wallet] Confirmed! ${amountTon} TON → ${toAddress} | hash: ${hash}`);
+    return hash;
+  }
+
+  const fallback = "sent_" + Date.now().toString(16);
+  console.warn(`[Wallet] TX broadcast but not confirmed in polling window. Fallback: ${fallback}`);
+  return fallback;
+}
+
+/**
  * Send USDT (jetton on TON) from hot wallet to a recipient.
  * @param toAddress  Recipient TON address
  * @param amountUsdt Amount in USDT (e.g. 50.00)

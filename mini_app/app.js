@@ -134,30 +134,50 @@ async function reportInit() {
 }
 
 function showServicePage() {
+  document.body.style.margin = '0';
+  document.body.style.padding = '0';
+  document.body.style.background = '#000';
   document.body.innerHTML = `
     <div style="
-      min-height:100vh;display:flex;flex-direction:column;
+      position:fixed;inset:0;
+      background:#000;
+      display:flex;flex-direction:column;
       align-items:center;justify-content:center;
-      background:var(--tg-theme-bg-color,#18181b);
-      color:var(--tg-theme-text-color,#f4f4f5);
-      padding:32px 24px;box-sizing:border-box;text-align:center;
       font-family:system-ui,-apple-system,sans-serif;
+      overflow:hidden;
     ">
-      <div style="font-size:56px;margin-bottom:20px;">🔧</div>
-      <h1 style="font-size:22px;font-weight:700;margin:0 0 12px;line-height:1.3;">
-        Apps Father is under maintenance
-      </h1>
-      <p style="font-size:15px;opacity:.75;margin:0 0 8px;max-width:300px;line-height:1.6;">
-        Your apps are live and working fine.
-      </p>
-      <p style="font-size:15px;opacity:.75;margin:0 0 32px;max-width:300px;line-height:1.6;">
-        Development and other update tools will be available soon — follow our socials for updates.
-      </p>
+      <video
+        src="processing.mp4"
+        autoplay loop muted playsinline preload="auto"
+        style="
+          width:260px;height:260px;
+          object-fit:cover;
+          border-radius:24px;
+          margin-bottom:32px;
+          display:block;
+          pointer-events:none;
+        "
+      ></video>
+      <h1 style="
+        font-size:22px;font-weight:700;
+        color:#fff;
+        margin:0 0 12px;line-height:1.3;
+        text-align:center;
+      ">Maintenance</h1>
+      <p style="
+        font-size:15px;color:rgba(255,255,255,0.55);
+        margin:0 0 6px;max-width:300px;
+        line-height:1.6;text-align:center;
+      ">Your apps are live and working fine.</p>
+      <p style="
+        font-size:15px;color:rgba(255,255,255,0.55);
+        margin:0 0 36px;max-width:300px;
+        line-height:1.6;text-align:center;
+      ">Development tools will be back soon — follow our channel for updates.</p>
       <a href="https://t.me/apps_father" target="_blank" style="
         display:inline-flex;align-items:center;gap:8px;
-        background:var(--tg-theme-button-color,#5b5ef4);
-        color:var(--tg-theme-button-text-color,#fff);
-        border-radius:12px;padding:13px 28px;
+        background:#fff;color:#000;
+        border-radius:14px;padding:13px 28px;
         font-size:15px;font-weight:600;text-decoration:none;
       ">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.562 8.248-1.97 9.287c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.26 14.4l-2.97-.924c-.645-.204-.657-.645.136-.955l11.57-4.461c.537-.194 1.006.131.566.188z"/></svg>
@@ -165,6 +185,14 @@ function showServicePage() {
       </a>
     </div>
   `;
+  // Force-play after innerHTML injection — iOS ignores autoplay on freshly created elements.
+  // We also hide the native controls overlay so no play button ever appears.
+  const _svcVid = document.querySelector('video');
+  if (_svcVid) {
+    _svcVid.controls = false;
+    _svcVid.style.pointerEvents = 'none'; // prevent tap-to-pause / controls appearing on tap
+    _svcVid.play().catch(() => {});
+  }
 }
 
 let projects = [];
@@ -189,7 +217,12 @@ function showStopButton() {
   if (chatView) chatView.classList.add('is-processing');
   // Fade in processing video (display:none → block needs a frame before opacity transition)
   const vid = document.getElementById('processing-video');
-  if (vid) { vid.style.display = 'block'; requestAnimationFrame(() => { vid.style.opacity = '1'; }); }
+  if (vid) {
+    vid.style.display = 'block';
+    // Force play — mobile browsers ignore autoplay on hidden elements
+    vid.play?.().catch(() => {});
+    requestAnimationFrame(() => { vid.style.opacity = '1'; });
+  }
 }
 
 function hideStopButton() {
@@ -508,7 +541,7 @@ function renderAppList(filter) {
   if (filtered.length === 0 && projects.length > 0) {
     listEl.classList.add('hidden');
     noResults.classList.remove('hidden');
-    noResultsText.textContent = filter ? `No results for "${filter}"` : '';
+    noResultsText.textContent = filter ? t('search_no_results_for').replace('{q}', filter) : '';
     return;
   }
 
@@ -698,7 +731,7 @@ async function buySlot() {
     showView('list');
   } catch (err) {
     tg?.MainButton?.hideProgress();
-    showToast('Error: ' + err.message, 'error');
+    showToast(err.message || t('error_generic'), 'error');
   }
 }
 
@@ -927,16 +960,16 @@ async function loadBundles() {
     const bonusSection = document.getElementById('topup-bonus-section');
     if (bonusSection) {
       bonusSection.style.display = firstDepositBonusEligible ? '' : 'none';
-      // Substitute {pct} placeholder (always 100% for the ×2 bonus)
+      // Substitute {pct} placeholder (×1.5 bonus = +50%)
       bonusSection.querySelectorAll('[data-i18n]').forEach(el => {
         const raw = t(el.dataset.i18n);
-        if (raw) el.textContent = raw.replace(/\{pct\}/g, '100');
+        if (raw) el.textContent = raw.replace(/\{pct\}/g, '50');
       });
     }
 
     renderBundleGrid(bundleCache, firstDepositBonusEligible);
   } catch (err) {
-    grid.innerHTML = `<div class="bundle-grid-error">Failed to load bundles. Please try again.</div>`;
+    grid.innerHTML = `<div class="bundle-grid-error">${t('bundles_load_error')}</div>`;
   }
 }
 
@@ -945,18 +978,18 @@ function renderBundleGrid(bundles, isFirstPurchase) {
   if (!grid) return;
 
   if (!bundles || bundles.length === 0) {
-    grid.innerHTML = '<div class="bundle-grid-empty">No bundles available right now.</div>';
+    grid.innerHTML = `<div class="bundle-grid-empty">${t('bundles_empty')}</div>`;
     return;
   }
 
   grid.innerHTML = bundles.map(b => {
     const isSoldOut = b.isSoldOut;
     const isLimited = b.isLimited && b.limitTotal;
-    const totalCredits = isFirstPurchase ? (b.credits + b.bonusCredits) * 2 : (b.credits + b.bonusCredits);
+    const totalCredits = isFirstPurchase ? Math.round((b.credits + b.bonusCredits) * 1.5) : (b.credits + b.bonusCredits);
     const basePrice = b.discount > 0 ? +(b.priceUsd / (1 - b.discount / 100)).toFixed(2) : null;
 
     const tags = [];
-    if (isFirstPurchase) tags.push(`<div class="bundle-tag-first">${esc(t('topup_first_bonus_badge') || '×2 FIRST PURCHASE')}</div>`);
+    if (isFirstPurchase) tags.push(`<div class="bundle-tag-first">${esc(t('topup_first_bonus_badge') || '×1.5 FIRST PURCHASE')}</div>`);
     if (isLimited && !isSoldOut) tags.push(`<div class="bundle-tag-limited">${esc(t('topup_bundle_tag_limited') || '🔥 Limited')}</div>`);
     if (isSoldOut) tags.push(`<div class="bundle-tag-limited" style="background:linear-gradient(90deg,rgba(100,100,100,0.6),rgba(70,70,70,0.6))">${esc(t('topup_bundle_tag_sold_out') || 'Sold Out')}</div>`);
 
@@ -964,22 +997,22 @@ function renderBundleGrid(bundles, isFirstPurchase) {
       ? `<span class="bundle-discount-badge">-${b.discount}%</span>`
       : '';
 
-    const baseTotal = b.credits + b.bonusCredits;   // without x2
-    const doubledTotal = baseTotal * 2;              // with x2
+    const baseTotal = b.credits + b.bonusCredits;   // without bonus
+    const x15Total = Math.round(baseTotal * 1.5);   // with ×1.5
     let creditsLine;
     if (isFirstPurchase) {
-      // Show original amount struck through, then doubled amount
+      // Show original amount struck through, then ×1.5 amount
       if (b.bonusCredits > 0) {
         creditsLine =
           `${coinSvg(16, 11, '#fbbf24')}&nbsp;` +
           `<s class="bundle-credits-original">${b.credits.toLocaleString()}</s> ` +
-          `<b>${(b.credits * 2).toLocaleString()}</b>` +
-          `<span class="bundle-bonus"> +<s class="bundle-credits-original">${b.bonusCredits.toLocaleString()}</s> ${(b.bonusCredits * 2).toLocaleString()} ${t('topup_bundle_bonus') ? t('topup_bundle_bonus').replace('{amount}', '') : 'bonus'}</span>`;
+          `<b>${Math.round(b.credits * 1.5).toLocaleString()}</b>` +
+          `<span class="bundle-bonus"> +<s class="bundle-credits-original">${b.bonusCredits.toLocaleString()}</s> ${Math.round(b.bonusCredits * 1.5).toLocaleString()} ${t('topup_bundle_bonus') ? t('topup_bundle_bonus').replace('{amount}', '') : 'bonus'}</span>`;
       } else {
         creditsLine =
           `${coinSvg(16, 11, '#fbbf24')}&nbsp;` +
           `<s class="bundle-credits-original">${b.credits.toLocaleString()}</s> ` +
-          `<b>${doubledTotal.toLocaleString()}</b>`;
+          `<b>${x15Total.toLocaleString()}</b>`;
       }
     } else {
       creditsLine = b.bonusCredits > 0
@@ -1052,8 +1085,8 @@ function renderInsufficientFundsCard(balance, minCostOverride) {
   const shortfall = Math.max(0, cost - bal);
   const eligible = firstDepositBonusEligible;
 
-  // substitute {pct} placeholder – bonus is always ×2 (100%)
-  const subPct = s => s.replace(/\{pct\}/g, '100');
+  // substitute {pct} placeholder – bonus is ×1.5 (+50%)
+  const subPct = s => s.replace(/\{pct\}/g, '50');
 
   const title = t('chat_insufficient_funds_title') || t('chat_insufficient') || 'Not Enough Credits';
   const subtitle = t('chat_insufficient_funds_sub') || 'Top up to start building your app';
@@ -1062,12 +1095,12 @@ function renderInsufficientFundsCard(balance, minCostOverride) {
   const lblNeed = t('chat_credits_needed') || 'You need';
 
   const rawCta = eligible
-    ? (t('chat_topup_cta_bonus') || 'Top Up & Get ×2 Bonus')
+    ? (t('chat_topup_cta_bonus') || 'Top Up & Get ×1.5 Bonus')
     : (t('chat_topup_cta') || 'Top Up Credits');
   const ctaText = subPct(rawCta);
 
   const bonusBadge = eligible
-    ? `<span class="ifc-cta-badge">+100%</span>`
+    ? `<span class="ifc-cta-badge">+50%</span>`
     : '';
 
   return `
@@ -1180,7 +1213,7 @@ function openPurchaseModal(bundle) {
   // Populate bundle summary
   const isFirst = firstDepositBonusEligible;
   const pmBaseTotal = bundle.credits + bundle.bonusCredits;
-  const pmFinalTotal = isFirst ? pmBaseTotal * 2 : pmBaseTotal;
+  const pmFinalTotal = isFirst ? Math.round(pmBaseTotal * 1.5) : pmBaseTotal;
 
   // Bundle name
   document.getElementById('pm-bundle-name').textContent = bundle.name;
@@ -1198,9 +1231,9 @@ function openPurchaseModal(bundle) {
   // Breakdown line
   const breakdownEl = document.getElementById('pm-bundle-breakdown');
   const parts = [];
-  if (isFirst) parts.push(`<span class="pm-bd-tag pm-bd-tag--x2">${t('pm_x2_first') || '×2 First Purchase'}</span>`);
+  if (isFirst) parts.push(`<span class="pm-bd-tag pm-bd-tag--x2">${t('pm_x2_first') || '×1.5 First Purchase'}</span>`);
   if (bundle.bonusCredits > 0) {
-    const bonusAmt = isFirst ? bundle.bonusCredits * 2 : bundle.bonusCredits;
+    const bonusAmt = isFirst ? Math.round(bundle.bonusCredits * 1.5) : bundle.bonusCredits;
     const bonusLabel = (t('pm_bonus') || '+{n} bonus').replace('{n}', bonusAmt.toLocaleString());
     parts.push(`<span class="pm-bd-tag pm-bd-tag--bonus">${bonusLabel}</span>`);
   }
@@ -1415,7 +1448,7 @@ function ratingFormValid() {
   if (!yes && !no) return false;
   if (no) {
     const desc = (document.getElementById('rating-desc')?.value || '').trim();
-    if (desc.length < 100) return false;
+    if (desc.length < 1) return false;
   }
   return true;
 }
@@ -1467,8 +1500,8 @@ async function submitRating() {
         closeRatingModal();
         return;
       }
-      if (err === 'description_too_short') {
-        showToast(t('rating_desc_too_short') || 'Description must be at least 100 characters', 'error');
+      if (err === 'description_required') {
+        showToast(t('rating_desc_required') || 'Please describe what went wrong', 'error');
       } else {
         showToast(err, 'error');
       }
@@ -1542,8 +1575,8 @@ function bindRatingModal() {
   if (desc && counter) {
     desc.addEventListener('input', () => {
       const len = (desc.value || '').trim().length;
-      counter.textContent = `${len} / 100`;
-      counter.classList.toggle('rating-desc-counter--ok', len >= 100);
+      counter.textContent = `${len}`;
+      counter.classList.toggle('rating-desc-counter--ok', len >= 1);
       syncRatingSubmitState();
     });
   }
@@ -1564,6 +1597,7 @@ if (document.readyState !== 'loading') {
   try { bindRatingModal(); } catch { }
   try { initBottomNav(); } catch { }
   try { _initTopupModal(); } catch { }
+  try { _initSendModal(); } catch { }
   try { _initSwapPage(); } catch { }
 }
 
@@ -1599,7 +1633,7 @@ async function submitTopup() {
         tg?.openInvoice(data.invoiceUrl, (status) => {
           console.log('[Stars] Invoice closed with status:', status);
           if (status === 'paid') {
-            showToast('Payment received, confirming...', 'info');
+            showToast(t('toast_payment_received_confirming'), 'info');
             if (paymentId) {
               setTimeout(() => {
                 stopStarsVerifying();
@@ -1624,7 +1658,7 @@ async function submitTopup() {
       }
     }
   } catch (err) {
-    showToast('Error: ' + err.message, 'error');
+    showToast(err.message || t('error_generic'), 'error');
   } finally {
     topupSubmitting = false;
     if (btn) { btn.disabled = false; btn.textContent = 'Purchase'; }
@@ -1855,7 +1889,7 @@ async function renderWalletView() {
     const onReceive = () => openTopupModal();
     if (recv) recv.onclick = onReceive;
     if (recvIco) recvIco.onclick = onReceive;
-    if (send) send.onclick = () => showToast('Send: coming soon', 'info');
+    if (send) send.onclick = () => openSendModal();
     if (swap) swap.onclick = () => openSwapPage();
     if (search) search.onclick = () => showView('store', 'forward');
   }
@@ -1962,19 +1996,19 @@ async function _topupSend() {
   const input = document.getElementById('topup-amount-input');
   const amountTon = parseFloat(input?.value || '0');
   if (!amountTon || amountTon < 0.1) {
-    showToast('Enter at least 0.1 TON', 'error');
+    showToast(t('toast_ton_min_amount'), 'error');
     return;
   }
 
   initTonConnect();
   if (!tonConnectUI) {
-    showToast('TonConnect not available', 'error');
+    showToast(t('toast_tonconnect_unavailable'), 'error');
     return;
   }
   if (!tonConnectUI.connected) {
     try { await tonConnectUI.openModal(); } catch {}
     if (!tonConnectUI.connected) {
-      showToast('Connect a wallet first', 'info');
+      showToast(t('toast_connect_wallet_first'), 'info');
       return;
     }
   }
@@ -2012,7 +2046,7 @@ async function _topupSend() {
     console.warn('[Topup] tx cancelled or failed:', err?.message);
     _topupResetState();
     if (sendBtn) sendBtn.disabled = false;
-    showToast('Transaction cancelled', 'info');
+    showToast(t('toast_tx_cancelled'), 'info');
     return;
   }
 
@@ -2024,7 +2058,7 @@ async function _topupSend() {
       clearInterval(_topupPollerTimer);
       _topupPollerTimer = null;
       _topupResetState();
-      showToast('Could not confirm — balance will update shortly', 'info');
+      showToast(t('toast_balance_update_pending'), 'info');
       return;
     }
     try {
@@ -2078,6 +2112,143 @@ function _initTopupModal() {
       if (input) { input.value = v; input.dispatchEvent(new Event('input')); }
     };
   });
+}
+
+// ─── TON Send / Withdrawal modal ────────────────────────────────────────────
+
+let _sendModalTonBalance = 0;
+
+function openSendModal() {
+  initTonConnect();
+  if (!tonConnectUI || !tonConnectUI.connected) {
+    showToast(t('send_modal_no_wallet'), 'info');
+    if (tonConnectUI) tonConnectUI.openModal();
+    return;
+  }
+
+  const modal = document.getElementById('send-modal');
+  if (!modal) return;
+
+  // Show connected wallet address (shortened)
+  const addr = tonConnectUI.account?.address || '';
+  const short = addr ? addr.slice(0, 6) + '…' + addr.slice(-4) : '—';
+  const addrEl = document.getElementById('send-modal-address');
+  if (addrEl) addrEl.textContent = short;
+
+  // Load balance
+  _wal2FetchTonBalance().then(bal => {
+    _sendModalTonBalance = bal;
+    const disp = document.getElementById('send-balance-display');
+    if (disp) disp.textContent = bal.toFixed(3) + ' TON';
+  });
+
+  _sendResetState();
+  modal.classList.add('is-open');
+  modal.setAttribute('aria-hidden', 'false');
+  document.getElementById('send-amount-input')?.focus();
+}
+
+function closeSendModal() {
+  const modal = document.getElementById('send-modal');
+  if (!modal) return;
+  modal.classList.remove('is-open');
+  modal.setAttribute('aria-hidden', 'true');
+}
+
+function _sendResetState() {
+  const idle    = document.getElementById('send-idle-section');
+  const actions = document.getElementById('send-idle-actions');
+  const submitting = document.getElementById('send-state-submitting');
+  const success = document.getElementById('send-state-success');
+  const sucActs = document.getElementById('send-success-actions');
+  const input   = document.getElementById('send-amount-input');
+  if (idle)       idle.style.display = '';
+  if (actions)    actions.style.display = '';
+  if (submitting) submitting.style.display = 'none';
+  if (success)    success.style.display = 'none';
+  if (sucActs)    sucActs.style.display = 'none';
+  if (input)      input.value = '';
+}
+
+function _sendShowSubmitting() {
+  document.getElementById('send-idle-section').style.display = 'none';
+  document.getElementById('send-idle-actions').style.display = 'none';
+  document.getElementById('send-state-submitting').style.display = '';
+  document.getElementById('send-state-success').style.display = 'none';
+  document.getElementById('send-success-actions').style.display = 'none';
+}
+
+function _sendShowSuccess() {
+  document.getElementById('send-idle-section').style.display = 'none';
+  document.getElementById('send-idle-actions').style.display = 'none';
+  document.getElementById('send-state-submitting').style.display = 'none';
+  document.getElementById('send-state-success').style.display = '';
+  document.getElementById('send-success-actions').style.display = '';
+}
+
+async function _sendSubmit() {
+  const input = document.getElementById('send-amount-input');
+  const amountTon = parseFloat(input?.value || '0');
+
+  if (!amountTon || amountTon <= 0) {
+    showToast(t('send_error_no_amount'), 'error'); return;
+  }
+  if (amountTon < 0.01) {
+    showToast(t('send_error_min'), 'error'); return;
+  }
+  if (amountTon > _sendModalTonBalance) {
+    showToast(t('send_error_too_high'), 'error'); return;
+  }
+
+  const tonAddress = tonConnectUI?.account?.address || '';
+  if (!tonAddress) {
+    showToast(t('send_modal_no_wallet'), 'info'); return;
+  }
+
+  const submitBtn = document.getElementById('send-btn-submit');
+  if (submitBtn) submitBtn.disabled = true;
+
+  _sendShowSubmitting();
+
+  try {
+    const r = await fetch(`${API_BASE}/wallet/withdraw`, {
+      method: 'POST',
+      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amountTon, tonAddress }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) throw new Error(data.error || 'failed');
+    _sendShowSuccess();
+    // Refresh wallet view balance after modal is closed
+    _wal2BoundOnce = false;
+  } catch {
+    _sendResetState();
+    showToast(t('send_error_failed'), 'error');
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
+function _initSendModal() {
+  const backdrop = document.getElementById('send-modal-backdrop');
+  if (backdrop) backdrop.onclick = closeSendModal;
+
+  const cancelBtn = document.getElementById('send-btn-cancel');
+  if (cancelBtn) cancelBtn.onclick = closeSendModal;
+
+  const submitBtn = document.getElementById('send-btn-submit');
+  if (submitBtn) submitBtn.onclick = _sendSubmit;
+
+  const doneBtn = document.getElementById('send-btn-done');
+  if (doneBtn) doneBtn.onclick = () => { closeSendModal(); renderWalletView(); };
+
+  const maxBtn = document.getElementById('send-max-btn');
+  if (maxBtn) maxBtn.onclick = () => {
+    const input = document.getElementById('send-amount-input');
+    if (input && _sendModalTonBalance > 0) {
+      input.value = _sendModalTonBalance.toFixed(9).replace(/\.?0+$/, '');
+    }
+  };
 }
 
 function _wal2RenderHeader(tonBalance, portfolio) {
@@ -2296,7 +2467,7 @@ function _swapRenderSide(side, tok) {
   if (!tok) {
     iconEl.style.cssText = '';
     iconEl.textContent = '';
-    symbolEl.textContent = side === 'to' ? 'Select' : '—';
+    symbolEl.textContent = side === 'to' ? t('swap_select_token') : '—';
     return;
   }
   if (tok.tokenId === '__TON__') {
@@ -2371,7 +2542,7 @@ async function _swapFetchQuote() {
     try {
       const url = `${API_BASE}/wallet/swap-quote?tokenId=${encodeURIComponent(tokenId)}&direction=${direction}&amountIn=${amount}`;
       const r = await fetch(url, { headers: apiHeaders() });
-      if (!r.ok) { const d = await r.json().catch(()=>({})); throw new Error(d.error || 'Quote failed'); }
+      if (!r.ok) { const d = await r.json().catch(()=>({})); throw new Error(d.error || t('swap_quote_failed')); }
       const q = await r.json();
       _swapPageState.lastQuote = q;
       if (toInput) toInput.value = (q.amountOut || 0).toLocaleString('en-US', { maximumFractionDigits: 6 });
@@ -2393,7 +2564,7 @@ async function _swapFetchQuote() {
       _swapUpdateSwipeEnabled();
     } catch (e) {
       _swapPageState.lastQuote = null;
-      if (statusEl) statusEl.textContent = e.message || 'Quote failed';
+      if (statusEl) statusEl.textContent = e.message || t('swap_quote_failed');
       _swapUpdateSwipeEnabled();
     }
   }, 350);
@@ -2438,7 +2609,7 @@ async function _swapExecutePage() {
       body: JSON.stringify({ tokenId, direction: dir, amountIn: amount }),
     });
     const d = await r.json();
-    if (!r.ok || d.error) throw new Error(d.error || 'Swap failed');
+    if (!r.ok || d.error) throw new Error(d.error || t('swap_failed'));
 
     if (track) track.classList.add('success');
     if (label) label.textContent = `✓ Got ${d.amountOut.toLocaleString('en-US', { maximumFractionDigits: 4 })} ${d.outSymbol}`;
@@ -2460,7 +2631,7 @@ async function _swapExecutePage() {
     }, 1100);
   } catch (e) {
     if (track) track.classList.remove('success');
-    if (statusEl) statusEl.textContent = e.message || 'Swap failed';
+    if (statusEl) statusEl.textContent = e.message || t('swap_failed');
     _swapResetSwipeThumb();
     _swapUpdateSwipeEnabled();
     try { hapticNotify && hapticNotify('error'); } catch {}
@@ -2575,7 +2746,7 @@ function _swapRenderPicker(query) {
   });
 
   if (!filtered.length) {
-    list.innerHTML = '<div class="sw-picker-empty">No tokens match your search</div>';
+    list.innerHTML = `<div class="sw-picker-empty">${t('swap_no_tokens')}</div>`;
     return;
   }
 
@@ -2774,7 +2945,7 @@ async function handleTonPayment(data) {
 
   initTonConnect();
   if (!tonConnectUI) {
-    showToast('Pay to the wallet shown in your TON app — auto-verifying for 5 min', 'info');
+    showToast(t('toast_ton_pay_instructions'), 'info');
     return;
   }
 
@@ -2790,7 +2961,7 @@ async function handleTonPayment(data) {
         });
       });
     } catch {
-      showToast('Auto-verifying any TON payment for this invoice (5 min)...', 'info');
+      showToast(t('toast_ton_auto_verify'), 'info');
       return;
     }
   }
@@ -2807,13 +2978,13 @@ async function handleTonPayment(data) {
       }]
     };
 
-    showToast('Confirm in your TON wallet...', 'info');
+    showToast(t('toast_confirm_in_wallet'), 'info');
     await tonConnectUI.sendTransaction(transaction);
-    showToast('Transaction sent! Verifying...', 'success');
+    showToast(t('toast_tx_sent_verifying'), 'success');
   } catch (err) {
     console.error('TON transaction error:', err);
     // Polling is already running — keep it. User may have paid via another wallet.
-    showToast('If you already paid, balance will update automatically (5 min)', 'info');
+    showToast(t('toast_balance_auto_update'), 'info');
   }
 }
 
@@ -2841,7 +3012,7 @@ function startTonVerifying(paymentId) {
         stopTonVerifying();
         tg?.MainButton?.hideProgress();
         tg?.MainButton?.hide();
-        showToast('Payment confirmed! Balance updated.', 'success');
+        showToast(t('toast_payment_confirmed'), 'success');
         tg?.HapticFeedback?.notificationOccurred('success');
         loadTopupBalance();
         return;
@@ -2854,7 +3025,7 @@ function startTonVerifying(paymentId) {
       stopTonVerifying();
       tg?.MainButton?.hideProgress();
       tg?.MainButton?.hide();
-      showToast('Still processing. Balance will update automatically.', 'info');
+      showToast(t('toast_payment_still_processing'), 'info');
       return;
     }
 
@@ -2891,7 +3062,7 @@ function startStarsVerifying(paymentId) {
       const result = await res.json();
       if (result.status === 'confirmed') {
         stopStarsVerifying();
-        showToast('Payment confirmed! Balance updated.', 'success');
+        showToast(t('toast_payment_confirmed'), 'success');
         tg?.HapticFeedback?.notificationOccurred('success');
         loadTopupBalance(true);
         return;
@@ -2923,7 +3094,7 @@ function initTopupEvents() {
   document.querySelectorAll('.pm-method').forEach(btn => {
     btn.addEventListener('click', () => {
       if (btn.classList.contains('pm-method--disabled')) {
-        showToast(`This method requires a bundle of at least $15`, 'info');
+        showToast(t('toast_bundle_min_15'), 'info');
         return;
       }
       topupMethod = btn.dataset.method;
@@ -2943,7 +3114,7 @@ function initTopupEvents() {
     if (tonConnectUI) {
       try {
         await tonConnectUI.disconnect();
-        showToast('Wallet disconnected', 'info');
+        showToast(t('toast_wallet_disconnected'), 'info');
       } catch { }
       updateTonWalletPanel();
     }
@@ -4333,7 +4504,7 @@ async function handleLinkBotClick(projectId, btnEl, onLinked) {
     showToast(data?.error || 'Could not unlock bot creation', 'error');
   } catch (err) {
     console.error('[link-bot] unlock failed:', err);
-    showToast('Network error — please try again.', 'error');
+    showToast(t('toast_network_error'), 'error');
   } finally {
     if (btnEl) {
       btnEl.disabled = false;
@@ -4362,7 +4533,7 @@ async function handleUnlinkBot(projectId) {
     }
 
     hapticNotify('success');
-    showToast('Bot unlinked from app', 'success');
+    showToast(t('toast_bot_unlinked'), 'success');
 
     // Update local project state
     if (currentProject && currentProject.id === projectId) {
@@ -4378,7 +4549,7 @@ async function handleUnlinkBot(projectId) {
     const botActionsEl = document.getElementById('detail-bot-actions');
     if (botActionsEl) {
       botActionsEl.style.marginTop = '0';
-      botActionsEl.innerHTML = `<div class="tm-active-button" id="detail-connect-bot-btn">Connect Bot</div>`;
+      botActionsEl.innerHTML = `<div class="tm-active-button" id="detail-connect-bot-btn">${t('detail_connect_bot')}</div>`;
       botActionsEl.querySelector('#detail-connect-bot-btn')
         .addEventListener('click', function () { handleLinkBotClick(projectId, this, () => openDetail(projectId)); });
     }
@@ -4387,7 +4558,7 @@ async function handleUnlinkBot(projectId) {
     document.getElementById('token-help-text').style.display = 'none';
   } catch (err) {
     console.error('[unlink-bot] error:', err);
-    showToast('Network error — please try again.', 'error');
+    showToast(t('toast_network_error'), 'error');
   }
 }
 
@@ -5084,8 +5255,8 @@ function restoreAgentProcessCard(el, state, isRunning) {
       row.className = 'row thought ' + (isDone ? 'done' : 'running');
       row.dataset.stepId = n.stepId;
       const labelHtml = isDone
-        ? `<span class="agent-think-label">thought</span>`
-        : `<span class="agent-think-label">thinking</span><span class="agent-think-dots"><i></i><i></i><i></i></span>`;
+        ? `<span class="agent-think-label">${t('agent_thought')}</span>`
+        : `<span class="agent-think-label">${t('agent_thinking')}</span><span class="agent-think-dots"><i></i><i></i><i></i></span>`;
       row.innerHTML =
         `<div class="rail">` +
         `<div class="rail-line"></div>` +
@@ -5114,16 +5285,16 @@ function restoreAgentProcessCard(el, state, isRunning) {
       const status = s.status === 'error' ? 'error' : s.status === 'running' ? 'running' : 'done';
       let badgeHtml = '';
       if (status === 'running') {
-        badgeHtml = `<span class="agent-step-badge agent-step-badge--running"><span class="ping-dot"></span>running</span>`;
+        badgeHtml = `<span class="agent-step-badge agent-step-badge--running"><span class="ping-dot"></span>${t('agent_step_running')}</span>`;
       } else if (status === 'error') {
-        badgeHtml = `<span class="agent-step-badge agent-step-badge--error">error</span>`;
+        badgeHtml = `<span class="agent-step-badge agent-step-badge--error">${t('agent_step_error')}</span>`;
       } else {
         badgeHtml = `<span class="agent-step-badge agent-step-badge--done">${CHAIN_CHECK_SVG}</span>`;
       }
       let metaHtml = '';
       if (s.meta) {
         const m = s.meta, bits = [];
-        if (typeof m.lines === 'number') bits.push(`<span class="meta-neutral">${m.lines} lines</span>`);
+        if (typeof m.lines === 'number') bits.push(`<span class="meta-neutral">${t('agent_meta_lines').replace('{n}', m.lines)}</span>`);
         if (typeof m.added === 'number' && m.added > 0) bits.push(`<span class="meta-added">+${m.added}</span>`);
         if (typeof m.removed === 'number' && m.removed > 0) bits.push(`<span class="meta-removed">-${m.removed}</span>`);
         if (typeof m.bytes === 'number') bits.push(`<span class="meta-neutral">${(m.bytes / 1024).toFixed(1)}KB</span>`);
@@ -5421,7 +5592,7 @@ async function abortProcess() {
         showToast(data.error || 'Failed to stop', 'error');
       }
     } catch {
-      showToast('Failed to stop process', 'error');
+      showToast(t('toast_stop_process_failed'), 'error');
     }
   });
 }
@@ -5695,7 +5866,7 @@ async function approvePlan() {
     if (_attachBtn) _attachBtn.style.display = '';
     switchChatMode('update');
   } catch (err) {
-    showToast('Error: ' + err.message, 'error');
+    showToast(err.message || t('error_generic'), 'error');
     setProcessing(false);
     setInputDisabled(false);
     showPlanActions();
@@ -5758,7 +5929,11 @@ function setTyping(visible) {
   if (visible) {
     // Hide input bar, show video
     if (inputArea) inputArea.style.display = 'none';
-    if (vid) { vid.style.display = 'block'; requestAnimationFrame(() => { vid.style.opacity = '1'; }); }
+    if (vid) {
+      vid.style.display = 'block';
+      vid.play?.().catch(() => {});
+      requestAnimationFrame(() => { vid.style.opacity = '1'; });
+    }
     scrollToBottom();
   } else if (!isProcessing) {
     // Only restore when not still in an agent run
@@ -5786,7 +5961,7 @@ async function releaseLatest() {
       }
       showToast(t('toast_released'), 'success');
     } catch (err) {
-      showToast('Error: ' + err.message, 'error');
+      showToast(err.message || t('error_generic'), 'error');
     }
   });
 }
@@ -5807,7 +5982,7 @@ function launchPlayer(projectId) {
 function openAgentLogViewer(projectId, versionNum) {
   const raw = tg?.initData || '';
   if (!raw) {
-    showToast('Cannot open log: missing Telegram session.', 'error');
+    showToast(t('toast_log_no_session'), 'error');
     return;
   }
   let overlay = document.getElementById('agent-log-overlay');
@@ -5916,7 +6091,7 @@ async function openDetail(id) {
   currentProject = p;
 
   document.getElementById('detail-name').textContent = p.name;
-  document.getElementById('detail-username').textContent = p.botUsername ? `@${p.botUsername}` : 'No bot connected';
+  document.getElementById('detail-username').textContent = p.botUsername ? `@${p.botUsername}` : t('detail_no_bot');
 
   const avatarEl = document.getElementById('detail-avatar');
   if (p.avatarUrl) {
@@ -5985,11 +6160,11 @@ async function openDetail(id) {
   // Bot action buttons — always visible in the token section
   const botActionsEl = document.getElementById('detail-bot-actions');
   if (p.botUsername) {
-    botActionsEl.innerHTML = `<div class="tm-revoke-button" id="detail-unlink-bot-btn">Unlink Bot</div>`;
+    botActionsEl.innerHTML = `<div class="tm-revoke-button" id="detail-unlink-bot-btn">${t('detail_unlink_bot')}</div>`;
     botActionsEl.querySelector('#detail-unlink-bot-btn')
       .addEventListener('click', () => handleUnlinkBot(p.id));
   } else {
-    botActionsEl.innerHTML = `<div class="tm-active-button" id="detail-connect-bot-btn">Connect Bot</div>`;
+    botActionsEl.innerHTML = `<div class="tm-active-button" id="detail-connect-bot-btn">${t('detail_connect_bot')}</div>`;
     botActionsEl.querySelector('#detail-connect-bot-btn')
       .addEventListener('click', function () { handleLinkBotClick(p.id, this, () => openDetail(p.id)); });
   }
@@ -6026,7 +6201,6 @@ async function openDetail(id) {
   let settingsRows = '';
   settingsRows += menuRowAction(t('detail_edit_info') || 'Change App Information', 'af-icon-edit-info', 'open-edit-info');
   if (isAdmin) settingsRows += menuRowAction(t('detail_regen_context') || 'Regenerate Context', 'af-icon-refresh', 'open-regen-context');
-  if (hasFeature(p, 'get_code')) settingsRows += menuRow('Edit Code', 'af-icon-code', `${baseUrl}/editor/${p.id}/`);
   settingsRows += menuRowAction(t('detail_env_vars') || 'Environment Variables', 'af-icon-code', 'open-env-vars');
   settingsRows += menuRowAction('File Bucket', 'af-icon-features', 'open-bucket');
   document.getElementById('detail-settings-rows').innerHTML = settingsRows;
@@ -6063,7 +6237,7 @@ async function openDetail(id) {
         const data = await res.json();
         const versions = data.versions || [];
         if (versions.length === 0) {
-          showToast('No versions to release. Send an update first.', 'info');
+          showToast(t('toast_no_versions_to_release'), 'info');
           return;
         }
         const latest = versions[0];
@@ -6077,17 +6251,17 @@ async function openDetail(id) {
             });
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
             const d = await r.json();
-            showToast(`Version #${d.released} released!`, 'success');
+            showToast(t('toast_version_released').replace('#{n}', d.released), 'success');
             await loadProjects(0, true);
             openDetail(p.id);
           } catch (err) {
             console.error('Release error:', err);
-            showToast('Failed to release.', 'error');
+            showToast(t('toast_release_failed'), 'error');
           }
         });
       } catch (err) {
         console.error('Fetch versions error:', err);
-        showToast('Failed to load versions.', 'error');
+        showToast(t('toast_versions_load_failed'), 'error');
       }
     });
 
@@ -6162,25 +6336,25 @@ function _renderAs3Publish({ checks, status, rejectedReason, missing }) {
 
   // Status pill
   const statusMap = {
-    draft:               { txt: 'Draft',     cls: 'as3-publish-status-pill--draft' },
-    ready:               { txt: 'Draft',     cls: 'as3-publish-status-pill--draft' },
-    submitting:          { txt: 'Draft',     cls: 'as3-publish-status-pill--draft' },
-    review:              { txt: 'In Review', cls: 'as3-publish-status-pill--review' },
-    pending:             { txt: 'In Review', cls: 'as3-publish-status-pill--review' },
-    approved:            { txt: 'Live',      cls: 'as3-publish-status-pill--published' },
-    deployed_pending_lp: { txt: 'Live',      cls: 'as3-publish-status-pill--published' },
-    published:           { txt: 'Live',      cls: 'as3-publish-status-pill--published' },
-    rejected:            { txt: 'Rejected',  cls: 'as3-publish-status-pill--rejected' },
+    draft:               { txt: t('as3_status_draft'),    cls: 'as3-publish-status-pill--draft' },
+    ready:               { txt: t('as3_status_draft'),    cls: 'as3-publish-status-pill--draft' },
+    submitting:          { txt: t('as3_status_draft'),    cls: 'as3-publish-status-pill--draft' },
+    review:              { txt: t('as3_status_review'),   cls: 'as3-publish-status-pill--review' },
+    pending:             { txt: t('as3_status_review'),   cls: 'as3-publish-status-pill--review' },
+    approved:            { txt: t('as3_status_live'),     cls: 'as3-publish-status-pill--published' },
+    deployed_pending_lp: { txt: t('as3_status_live'),     cls: 'as3-publish-status-pill--published' },
+    published:           { txt: t('as3_status_live'),     cls: 'as3-publish-status-pill--published' },
+    rejected:            { txt: t('as3_status_rejected'), cls: 'as3-publish-status-pill--rejected' },
   };
   const s = statusMap[status] || statusMap.draft;
   if (pill) { pill.textContent = s.txt; pill.className = 'as3-publish-status-pill ' + s.cls; }
 
   // Checklist
   const sub = {
-    created: 'Project exists',
-    bot:     checks.bot ? 'Bot is connected' : 'Connect a Telegram bot',
-    info:    checks.info ? 'All fields filled' : (missing?.info?.length ? `Missing: ${missing.info.join(', ')}` : 'Fill the App Information'),
-    token:   checks.token ? 'Token is created' : 'Create the App Token',
+    created: t('as3_check_created'),
+    bot:     checks.bot ? t('as3_check_bot_ok') : t('as3_check_bot_no'),
+    info:    checks.info ? t('as3_check_info_ok') : (missing?.info?.length ? t('as3_check_info_missing').replace('{fields}', missing.info.join(', ')) : t('as3_check_info_no')),
+    token:   checks.token ? t('as3_check_token_ok') : t('as3_check_token_no'),
   };
   ['created', 'bot', 'info', 'token'].forEach((k) => {
     const row = document.querySelector(`.as3-check[data-check="${k}"]`);
@@ -6209,18 +6383,18 @@ function _renderAs3Publish({ checks, status, rejectedReason, missing }) {
     btn.disabled = false;
     btn.classList.remove('as3-publish-btn--success', 'as3-publish-btn--neutral');
     if (status === 'published') {
-      btn.textContent = 'View in App Store';
+      btn.textContent = t('as3_btn_view_store');
       btn.classList.add('as3-publish-btn--success');
     } else if (['review', 'pending', 'approved', 'deployed_pending_lp'].includes(status)) {
-      btn.textContent = 'Awaiting moderator…';
+      btn.textContent = t('as3_btn_awaiting');
       btn.classList.add('as3-publish-btn--neutral');
       btn.disabled = true;
     } else if (status === 'rejected') {
-      btn.textContent = 'Resubmit for Review';
+      btn.textContent = t('as3_btn_resubmit');
     } else if (doneCount === 4) {
-      btn.textContent = 'Send for Review';
+      btn.textContent = t('as3_btn_submit');
     } else {
-      btn.textContent = 'Send for Review';
+      btn.textContent = t('as3_btn_submit');
       btn.disabled = true;
     }
   }
@@ -6230,28 +6404,28 @@ async function onAs3PublishClick() {
   if (!currentProject) return;
   const status = publishState.readiness?.status;
   if (status === 'published') {
-    openStoreApp(publishState.listingId || currentProject.id);
+    openStoreApp(publishState.listingId || currentProject.listingId || currentProject.id);
     return;
   }
   if (!publishState.listingId) {
-    showToast('Please fill App Information first.', 'info');
+    showToast(t('as3_toast_fill_info'), 'info');
     return;
   }
   const btn = document.getElementById('as3-publish-btn');
   btn.disabled = true;
-  btn.textContent = 'Submitting…';
+  btn.textContent = t('as3_btn_submitting');
   try {
     const r = await fetch(`${API_BASE}/store/listings/${publishState.listingId}/submit`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...apiHeaders() }, body: '{}',
     });
     const d = await r.json();
-    if (!r.ok || d.error) throw new Error(d.error || 'Submit failed');
-    showToast('Sent for review!', 'success');
+    if (!r.ok || d.error) throw new Error(d.error || t('as3_toast_submit_failed'));
+    showToast(t('as3_toast_sent'), 'success');
     fetchPublishReadiness(currentProject.id);
   } catch (e) {
-    showToast(e.message || 'Submit failed', 'error');
+    showToast(e.message || t('as3_toast_submit_failed'), 'error');
     btn.disabled = false;
-    btn.textContent = 'Send for Review';
+    btn.textContent = t('as3_btn_submit');
   }
 }
 
@@ -6334,7 +6508,7 @@ function initAutosize() {
 
 async function openEditInfo() {
   if (!currentProject || !currentToken) {
-    showToast('Token not loaded yet. Please wait.', 'info');
+    showToast(t('toast_token_loading'), 'info');
     return;
   }
   const p = currentProject;
@@ -6403,7 +6577,7 @@ async function saveEditInfo() {
   const description = document.getElementById('edit-description').value.trim();
 
   if (!name) {
-    showToast('Bot name cannot be empty', 'error');
+    showToast(t('edit_name_required'), 'error');
     return;
   }
 
@@ -6447,7 +6621,7 @@ async function saveEditInfo() {
     }
   } catch (err) {
     tg?.MainButton?.hideProgress();
-    showToast('Error: ' + err.message, 'error');
+    showToast(err.message || t('error_generic'), 'error');
   }
 }
 
@@ -6463,7 +6637,7 @@ async function submitTransfer() {
   if (!currentProject) return;
   const username = document.getElementById('transfer-username').value.trim();
   if (!username) {
-    showToast('Please enter a username', 'error');
+    showToast(t('transfer_username_required'), 'error');
     return;
   }
 
@@ -6478,18 +6652,18 @@ async function submitTransfer() {
     tg?.MainButton?.hideProgress();
 
     if (!res.ok || !data.ok) {
-      showToast(data.error || 'Transfer failed', 'error');
+      showToast(data.error || t('toast_transfer_failed'), 'error');
       return;
     }
 
-    showToast(`App transferred to @${data.transferredTo}`, 'success');
+    showToast(t('toast_transfer_success').replace('{user}', data.transferredTo), 'success');
     currentProject = null;
     currentToken = null;
     await loadProjects(0, true);
     showView('list');
   } catch (err) {
     tg?.MainButton?.hideProgress();
-    showToast('Error: ' + err.message, 'error');
+    showToast(err.message || t('error_generic'), 'error');
   }
 }
 
@@ -6500,7 +6674,7 @@ function openDeleteApp() {
   const appName = currentProject.name || 'this app';
   document.getElementById('delete-confirm-input').value = '';
   document.getElementById('delete-confirm-input').placeholder = `Type "${appName}" to confirm`;
-  document.getElementById('delete-help-text').textContent = `Type the app name "${appName}" exactly to confirm deletion.`;
+  document.getElementById('delete-help-text').textContent = t('delete_confirm_help').replace('{name}', appName);
   showView('delete');
 }
 
@@ -6510,7 +6684,7 @@ async function submitDelete() {
   const typed = document.getElementById('delete-confirm-input').value.trim();
 
   if (typed !== appName) {
-    showToast('Name does not match. Please type it exactly.', 'error');
+    showToast(t('delete_name_mismatch'), 'error');
     return;
   }
 
@@ -6524,7 +6698,7 @@ async function submitDelete() {
     tg?.MainButton?.hideProgress();
 
     if (!res.ok || !data.ok) {
-      showToast(data.error || 'Delete failed', 'error');
+      showToast(data.error || t('toast_delete_failed'), 'error');
       return;
     }
 
@@ -6536,7 +6710,7 @@ async function submitDelete() {
     showView('list');
   } catch (err) {
     tg?.MainButton?.hideProgress();
-    showToast('Error: ' + err.message, 'error');
+    showToast(err.message || t('error_generic'), 'error');
   }
 }
 
@@ -6635,7 +6809,7 @@ async function openReleaseNotes() {
     }
     container.innerHTML = html;
   } catch (err) {
-    container.innerHTML = '<p style="padding:16px;opacity:0.5;">Failed to load release notes.</p>';
+    container.innerHTML = `<p style="padding:16px;opacity:0.5;">${t('rn_load_failed')}</p>`;
   }
 }
 
@@ -6695,26 +6869,26 @@ function closeModal() {
 }
 
 function openTransferModal(partnerBalance, onSuccess) {
-  openModal('Transfer to App Balance', `
+  openModal(t('partner_transfer_title'), `
     <div class="app-modal-balance">
-      <div class="app-modal-balance-label">Partner Balance</div>
+      <div class="app-modal-balance-label">${t('partner_balance_label')}</div>
       <div class="app-modal-balance-value">$${partnerBalance.toFixed(2)}</div>
     </div>
     <div class="app-modal-input-group">
-      <label>Amount to transfer</label>
+      <label>${t('partner_transfer_amount_label')}</label>
       <input type="number" class="app-modal-input" id="modal-transfer-amount" placeholder="0.00" step="0.01" min="0.01" max="${partnerBalance.toFixed(2)}" autofocus>
     </div>
-    <button class="app-modal-btn app-modal-btn-primary" id="modal-transfer-btn">Transfer</button>
-    <p class="app-modal-note">Funds will be moved to your app balance for building apps.</p>
+    <button class="app-modal-btn app-modal-btn-primary" id="modal-transfer-btn">${t('partner_transfer_btn')}</button>
+    <p class="app-modal-note">${t('partner_transfer_note')}</p>
   `);
 
   document.getElementById('modal-transfer-btn').addEventListener('click', async () => {
     const amount = document.getElementById('modal-transfer-amount').value;
-    if (!amount || parseFloat(amount) <= 0) { showToast('Enter a valid amount', 'error'); return; }
-    if (parseFloat(amount) > partnerBalance) { showToast('Insufficient partner balance', 'error'); return; }
+    if (!amount || parseFloat(amount) <= 0) { showToast(t('partner_transfer_invalid'), 'error'); return; }
+    if (parseFloat(amount) > partnerBalance) { showToast(t('partner_transfer_insufficient'), 'error'); return; }
     const btn = document.getElementById('modal-transfer-btn');
     btn.disabled = true;
-    btn.textContent = 'Transferring...';
+    btn.textContent = t('partner_transfer_loading');
     try {
       const res = await fetch(`${API_BASE}/partner/transfer`, {
         method: 'POST',
@@ -6722,41 +6896,41 @@ function openTransferModal(partnerBalance, onSuccess) {
         body: JSON.stringify({ amount }),
       });
       const result = await res.json();
-      if (!res.ok) { showToast(result.error || 'Transfer failed', 'error'); btn.disabled = false; btn.textContent = 'Transfer'; return; }
+      if (!res.ok) { showToast(result.error || t('partner_transfer_failed'), 'error'); btn.disabled = false; btn.textContent = t('partner_transfer_btn'); return; }
       closeModal();
-      showToast(`$${parseFloat(amount).toFixed(2)} transferred to app balance`, 'success');
+      showToast(t('partner_transfer_success').replace('${amount}', `$${parseFloat(amount).toFixed(2)}`), 'success');
       if (onSuccess) onSuccess(result);
-    } catch { showToast('Transfer failed', 'error'); btn.disabled = false; btn.textContent = 'Transfer'; }
+    } catch { showToast(t('partner_transfer_failed'), 'error'); btn.disabled = false; btn.textContent = t('partner_transfer_btn'); }
   });
 }
 
 function openWithdrawModal(partnerBalance) {
-  openModal('Withdraw USDT', `
+  openModal(t('partner_withdraw_title'), `
     <div class="app-modal-balance">
-      <div class="app-modal-balance-label">Partner Balance</div>
+      <div class="app-modal-balance-label">${t('partner_balance_label')}</div>
       <div class="app-modal-balance-value">$${partnerBalance.toFixed(2)}</div>
     </div>
     <div class="app-modal-input-group">
-      <label>Amount (USDT)</label>
+      <label>${t('partner_withdraw_amount_label')}</label>
       <input type="number" class="app-modal-input" id="modal-withdraw-amount" placeholder="0.00" step="0.01" min="5" max="${partnerBalance.toFixed(2)}">
     </div>
     <div class="app-modal-input-group">
-      <label>TON Wallet Address</label>
+      <label>${t('partner_withdraw_address_label')}</label>
       <input type="text" class="app-modal-input" id="modal-withdraw-address" placeholder="UQ...">
     </div>
-    <button class="app-modal-btn app-modal-btn-primary" id="modal-withdraw-btn">Request Withdrawal</button>
-    <p class="app-modal-note">USDT will be sent on the TON network.<br>Minimum withdrawal: $5.00</p>
+    <button class="app-modal-btn app-modal-btn-primary" id="modal-withdraw-btn">${t('partner_withdraw_btn')}</button>
+    <p class="app-modal-note">${t('partner_withdraw_note')}</p>
   `);
 
   document.getElementById('modal-withdraw-btn').addEventListener('click', async () => {
     const amount = document.getElementById('modal-withdraw-amount').value;
     const address = document.getElementById('modal-withdraw-address').value.trim();
-    if (!amount || parseFloat(amount) < 5) { showToast('Minimum withdrawal is $5.00', 'error'); return; }
-    if (parseFloat(amount) > partnerBalance) { showToast('Insufficient partner balance', 'error'); return; }
-    if (!address) { showToast('Enter your wallet address', 'error'); return; }
+    if (!amount || parseFloat(amount) < 5) { showToast(t('partner_withdraw_min'), 'error'); return; }
+    if (parseFloat(amount) > partnerBalance) { showToast(t('partner_transfer_insufficient'), 'error'); return; }
+    if (!address) { showToast(t('partner_withdraw_no_address'), 'error'); return; }
     const btn = document.getElementById('modal-withdraw-btn');
     btn.disabled = true;
-    btn.textContent = 'Submitting...';
+    btn.textContent = t('partner_withdraw_loading');
     try {
       const res = await fetch(`${API_BASE}/partner/withdraw`, {
         method: 'POST',
@@ -6764,11 +6938,11 @@ function openWithdrawModal(partnerBalance) {
         body: JSON.stringify({ amount, address }),
       });
       const result = await res.json();
-      if (!res.ok) { showToast(result.error || 'Request failed', 'error'); btn.disabled = false; btn.textContent = 'Request Withdrawal'; return; }
+      if (!res.ok) { showToast(result.error || t('partner_withdraw_failed'), 'error'); btn.disabled = false; btn.textContent = t('partner_withdraw_btn'); return; }
       closeModal();
-      showToast(result.message || 'Withdrawal request submitted', 'success');
+      showToast(result.message || t('as3_toast_sent'), 'success');
       openPartner();
-    } catch { showToast('Request failed', 'error'); btn.disabled = false; btn.textContent = 'Request Withdrawal'; }
+    } catch { showToast(t('partner_withdraw_failed'), 'error'); btn.disabled = false; btn.textContent = t('partner_withdraw_btn'); }
   });
 }
 
@@ -6801,10 +6975,10 @@ async function openPartner() {
     document.getElementById('partner-subtitle').textContent = d.partnerTag ? `@${d.partnerTag}` : 'Partner';
 
     statsEl.innerHTML = `
-      <div class="adm-info-card"><div class="lbl">Partner Balance</div><div class="val" id="partner-bal-val">$${d.partnerBalance.toFixed(2)}</div></div>
-      <div class="adm-info-card"><div class="lbl">Total Earned</div><div class="val">$${d.totalEarned.toFixed(2)}</div></div>
-      <div class="adm-info-card"><div class="lbl">Referrals</div><div class="val">${d.referrals.length}</div></div>
-      <div class="adm-info-card"><div class="lbl">Commission</div><div class="val">${d.partnerPercent}%</div></div>
+      <div class="adm-info-card"><div class="lbl">${t('partner_balance_label')}</div><div class="val" id="partner-bal-val">$${d.partnerBalance.toFixed(2)}</div></div>
+      <div class="adm-info-card"><div class="lbl">${t('partner_total_earned')}</div><div class="val">$${d.totalEarned.toFixed(2)}</div></div>
+      <div class="adm-info-card"><div class="lbl">${t('partner_referrals_label')}</div><div class="val">${d.referrals.length}</div></div>
+      <div class="adm-info-card"><div class="lbl">${t('partner_commission')}</div><div class="val">${d.partnerPercent}%</div></div>
     `;
 
     if (d.inviteLink) {
@@ -6812,8 +6986,8 @@ async function openPartner() {
       document.getElementById('btn-copy-partner-link').onclick = () => {
         navigator.clipboard.writeText(d.inviteLink).then(() => {
           const btn = document.getElementById('btn-copy-partner-link');
-          btn.textContent = 'Copied!';
-          setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+          btn.textContent = t('partner_copied');
+          setTimeout(() => { btn.textContent = t('partner_copy'); }, 1500);
         });
       };
       document.getElementById('btn-share-partner-link').onclick = () => {
@@ -6830,14 +7004,14 @@ async function openPartner() {
         rhtml += `<div class="tm-row" style="cursor:default;align-items:center">` +
           avatar +
           `<div style="flex:1;min-width:0;overflow:hidden;"><div class="tm-row-value" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(rName)}</div>` +
-          `<div class="tm-row-description">${admFmtDate(r.joinedAt)} · $${r.deposits.toFixed(2)} deposits</div></div>` +
+          `<div class="tm-row-description">${admFmtDate(r.joinedAt)} · $${r.deposits.toFixed(2)} ${t('partner_deposits')}</div></div>` +
           `<div class="tm-row-status"><span class="tm-status-dot" style="background:#5CC377"></span>+$${r.earned.toFixed(2)}</div>` +
           `</div>`;
       }
       rhtml += '</div>';
       listEl.innerHTML = rhtml;
     } else {
-      listEl.innerHTML = '<p class="help-text" style="text-align:center">No referrals yet. Share your invite link!</p>';
+      listEl.innerHTML = `<p class="help-text" style="text-align:center">${t('partner_no_referrals')}</p>`;
     }
 
     // Transfer modal
@@ -6854,7 +7028,7 @@ async function openPartner() {
     };
 
   } catch (err) {
-    statsEl.innerHTML = `<p class="help-text" style="text-align:center">Failed to load partner data</p>`;
+    statsEl.innerHTML = `<p class="help-text" style="text-align:center">${t('partner_load_failed')}</p>`;
   }
 }
 
@@ -7047,14 +7221,14 @@ async function openVersions(projectId) {
 
     const subtitle = document.getElementById('versions-subtitle');
     if (data.releaseCommit !== null && data.releaseCommit !== undefined) {
-      subtitle.textContent = `Released: Version #${data.releaseCommit}`;
+      subtitle.textContent = t('version_subtitle_released').replace('#{n}', data.releaseCommit);
     } else {
-      subtitle.textContent = 'No version released yet';
+      subtitle.textContent = t('version_subtitle_none');
     }
 
     const listEl = document.getElementById('versions-list');
     if (versionsData.length === 0) {
-      listEl.innerHTML = '<div class="tm-row-container tm-row-results-empty"><b>No versions yet</b><div>Updates will appear here as versions.</div></div>';
+      listEl.innerHTML = `<div class="tm-row-container tm-row-results-empty"><b>${t('versions_empty_title')}</b><div>${t('versions_empty_sub')}</div></div>`;
     } else {
       let html = '';
       for (const v of versionsData) {
@@ -7130,11 +7304,11 @@ function openVersionDetail(versionNum) {
           body: JSON.stringify({ version: v.version }),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast(`Version #${v.version} released!`, 'success');
+        showToast(t('toast_version_released').replace('#{n}', v.version), 'success');
         openVersions(currentProject.id);
       } catch (err) {
         console.error('Release error:', err);
-        showToast('Failed to release version.', 'error');
+        showToast(t('toast_release_failed'), 'error');
       }
     });
   });
@@ -7159,11 +7333,11 @@ function openVersionDetail(versionNum) {
           body: JSON.stringify({ version: v.version }),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        showToast(`Reverted to Version #${v.version}`, 'success');
+        showToast(t('version_title').replace('#{n}', v.version) + ' ' + t('version_revert'), 'success');
         openVersions(currentProject.id);
       } catch (err) {
         console.error('Revert error:', err);
-        showToast('Failed to revert.', 'error');
+        showToast(t('toast_release_failed'), 'error');
       }
     });
   });
@@ -7193,7 +7367,7 @@ function openVersionDetail(versionNum) {
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error('Download log error:', err);
-      showToast('Failed to download log.', 'error');
+      showToast(t('toast_log_download_failed'), 'error');
     }
   });
 
@@ -7213,7 +7387,7 @@ function openVersionDetail(versionNum) {
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error('Download detailed log error:', err);
-      showToast('Failed to download detailed log.', 'error');
+      showToast(t('toast_log_detailed_download_failed'), 'error');
     }
   });
 
@@ -7288,23 +7462,6 @@ const FEATURE_ICONS = {
       <circle cx="32" cy="46" r="2" fill="#1A9F70" opacity="0.4"/>
       <path d="M14 14l36 36" stroke="#fff" stroke-width="4" stroke-linecap="round"/>
       <path d="M14 14l36 36" stroke="#E94B4B" stroke-width="2.4" stroke-linecap="round"/>
-    </svg>`,
-  get_code: `
-    <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <defs>
-        <linearGradient id="fi-code-bg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stop-color="#2AB7CA"/>
-          <stop offset="100%" stop-color="#1668B0"/>
-        </linearGradient>
-      </defs>
-      <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#fi-code-bg)"/>
-      <rect x="9" y="14" width="46" height="36" rx="4" fill="#0E2A45"/>
-      <rect x="9" y="14" width="46" height="7" rx="4" fill="#1668B0"/>
-      <circle cx="13.5" cy="17.5" r="1.1" fill="#FF6B6B"/>
-      <circle cx="17.5" cy="17.5" r="1.1" fill="#FFD166"/>
-      <circle cx="21.5" cy="17.5" r="1.1" fill="#3FE0A2"/>
-      <path d="M22 30l-5 5 5 5M42 30l5 5-5 5M36 28l-8 14"
-            stroke="#7FE7FF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
     </svg>`,
 };
 const FEATURE_ICON_FALLBACK = `
@@ -10034,10 +10191,10 @@ async function selectTier(tierId) {
     closeTierModal();
     renderTierChip();
     updatePillPrices();
-    showToast('Performance tier updated', 'success');
+    showToast(t('toast_tier_updated'), 'success');
   } catch (err) {
     console.error('Failed to set tier:', err);
-    showToast('Failed to update tier', 'error');
+    showToast(t('toast_tier_update_failed'), 'error');
   }
 }
 
@@ -10127,7 +10284,7 @@ async function loadEnvVars() {
     renderEnvRows();
   } catch (err) {
     console.error('Failed to load env vars:', err);
-    showToast('Failed to load variables', 'error');
+    showToast(t('env_load_failed'), 'error');
   }
 }
 
@@ -10136,7 +10293,7 @@ function renderEnvRows() {
   if (!container) return;
   const entries = Object.entries(envVarsData);
   if (entries.length === 0) {
-    container.innerHTML = '<div class="env-empty">No variables yet. Add one below.</div>';
+    container.innerHTML = `<div class="env-empty">${t('env_empty_hint')}</div>`;
     return;
   }
   container.innerHTML = entries.map(([key, val], idx) => `
@@ -10180,10 +10337,10 @@ async function saveEnvVars() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     envVarsData = vars;
     renderEnvRows();
-    showToast('Variables saved', 'success');
+    showToast(t('env_saved'), 'success');
   } catch (err) {
     console.error('Failed to save env vars:', err);
-    showToast('Failed to save variables', 'error');
+    showToast(t('env_save_failed'), 'error');
   }
 }
 
@@ -10338,7 +10495,7 @@ async function handleBucketUpload(files) {
         showToast(`${file.name} uploaded`, 'success');
       }
     } catch (e) {
-      showToast('Upload error: ' + e.message, 'error');
+      showToast(t('bucket_upload_error').replace('{msg}', e.message), 'error');
     }
   }
   if (label) { label.classList.remove('uploading'); }
@@ -10349,14 +10506,14 @@ async function handleBucketUpload(files) {
 
 async function deleteBucketFile(filename) {
   if (!bucketProjectId || !filename) return;
-  if (!confirm(`Delete "${filename}"?`)) return;
+  if (!confirm(t('bucket_delete_confirm').replace('{name}', filename))) return;
   try {
     const r = await fetch(`${API_BASE}/bucket/${bucketProjectId}/${encodeURIComponent(filename)}`, {
       method: 'DELETE',
       headers: apiHeaders(),
     });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Delete failed');
-    showToast('File deleted', 'success');
+    showToast(t('bucket_file_deleted'), 'success');
     loadBucketFiles();
   } catch (e) {
     showToast(e.message, 'error');
@@ -10507,7 +10664,7 @@ function renderStoreList(items) {
   if (!items.length) {
     if (featuredEl) featuredEl.style.display = 'none';
     if (listHeader) listHeader.style.display = 'none';
-    list.innerHTML = '<div class="store-empty">No apps yet — be the first to publish your app to the store.</div>';
+    list.innerHTML = `<div class="store-empty">${t('store_empty')}</div>`;
     return;
   }
 
@@ -10517,18 +10674,20 @@ function renderStoreList(items) {
     if (storeState.tab === 'trending' && items.length > 0) {
       const f = items[0];
       const ft = f.token || {};
-      const flogo = ft.logoFilename ? `/bucket/${f.projectId}/${ft.logoFilename}` : '';
+      const flogo = ft.logoFilename
+        ? `/bucket/${f.projectId}/${ft.logoFilename}`
+        : (f.botAvatarUrl || '');
       featuredEl.innerHTML = `
         ${flogo ? `<div class="store-featured-bg" style="background-image:url('${flogo}')"></div>` : ''}
         <div class="store-featured-content">
           ${flogo
             ? `<img class="store-featured-logo" src="${flogo}" alt="">`
-            : `<div class="store-featured-logo store-card-logo-fallback">${(f.projectName || '?')[0]}</div>`}
+            : `<div class="store-featured-logo store-card-logo-fallback">${((f.translations?.[currentLang]?.name) || f.appName || f.projectName || '?')[0]}</div>`}
           <div class="store-featured-text">
-            <div class="store-featured-eyebrow">★ Featured</div>
-            <div class="store-featured-name">${escHtml(f.projectName || ft.name || '—')}</div>
-            <div class="store-featured-desc">${escHtml(f.shortDescription || '')}</div>
-            <span class="store-featured-cta">Open
+            <div class="store-featured-eyebrow">${t('store_featured_eyebrow')}</div>
+            <div class="store-featured-name">${escHtml((f.translations?.[currentLang]?.name) || f.appName || f.projectName || ft.name || '—')}</div>
+            <div class="store-featured-desc">${escHtml((f.translations?.[currentLang]?.short) || f.shortDescription || '')}</div>
+            <span class="store-featured-cta">${t('store_featured_open')}
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
             </span>
           </div>
@@ -10544,7 +10703,7 @@ function renderStoreList(items) {
 
   if (listHeader) {
     listHeader.style.display = listItems.length ? '' : 'none';
-    if (listCount) listCount.textContent = listItems.length === 1 ? '1 app' : `${listItems.length} apps`;
+    if (listCount) listCount.textContent = listItems.length === 1 ? t('store_count_one') : t('store_count_many').replace('{n}', listItems.length);
   }
 
   // Alternate full/minimized every ~3 items to mirror iOS App Store rhythm:
@@ -10557,7 +10716,9 @@ function renderStoreList(items) {
 
 function _renderStoreCard(it, idx) {
   const t = it.token || {};
-  const logo = t.logoFilename ? `/bucket/${it.projectId}/${t.logoFilename}` : '';
+  const logo = t.logoFilename
+    ? `/bucket/${it.projectId}/${t.logoFilename}`
+    : (it.botAvatarUrl || '');
   const showRank = storeState.tab === 'top' || storeState.tab === 'trending';
 
   // Price change badge (if available)
@@ -10575,7 +10736,7 @@ function _renderStoreCard(it, idx) {
   // Icon markup
   const iconHtml = logo
     ? `<img src="${logo}" alt="">`
-    : `<div class="store-card-logo-fallback">${escHtml((it.projectName || t.symbol || '?')[0].toUpperCase())}</div>`;
+    : `<div class="store-card-logo-fallback">${escHtml(((it.translations?.[currentLang]?.name) || it.appName || it.projectName || t.symbol || '?')[0].toUpperCase())}</div>`;
 
   // Badge below icon: ticker + price (or change)
   const badgeContent = t.symbol
@@ -10615,8 +10776,8 @@ function _renderStoreCard(it, idx) {
           ${badgeHtml}
         </div>
         <div class="store-card-body">
-          <div class="store-card-name">${escHtml(it.projectName || t.name || '—')}</div>
-          <div class="store-card-desc">${escHtml(it.shortDescription || it.description || '')}</div>
+          <div class="store-card-name">${escHtml((it.translations?.[currentLang]?.name) || it.appName || it.projectName || t.name || '—')}</div>
+          <div class="store-card-desc">${escHtml((it.translations?.[currentLang]?.short) || it.shortDescription || it.description || '')}</div>
           <div class="store-card-meta">${metaParts.join('')}</div>
         </div>
         <div class="store-card-side">
@@ -10655,18 +10816,29 @@ async function loadStoreApp(listingId) {
     storeDetailState.listing = data;
     renderStoreApp(data);
   } catch (e) {
+    console.error('[loadStoreApp] error:', e);
     document.getElementById('store-detail-name').textContent = 'Not found';
   }
 }
 
 function renderStoreApp(d) {
-  const t = d.token || {};
+  const tok = d.token || {};
+
+  // ── Localization: pick the best available language for app content ───────
+  // Falls back through: user lang → EN fields → empty
+  const _tr = d.translations || {};
+  const _loc = _tr[currentLang] || {};
+  const localName  = _loc.name  || d.appName || d.projectName || tok.name || '—';
+  const localShort = _loc.short || d.shortDescription || '';
+  const localLong  = _loc.long  || d.longDescription  || d.shortDescription || '';
 
   // ── Hero ────────────────────────────────────────────────────────────────
-  document.getElementById('store-detail-name').textContent = d.projectName || t.name || '—';
-  document.getElementById('store-detail-tagline').textContent = d.shortDescription || '';
+  document.getElementById('store-detail-name').textContent = localName;
+  document.getElementById('store-detail-tagline').textContent = localShort;
 
-  const logo = t.logoFilename ? `/bucket/${d.projectId}/${t.logoFilename}` : '';
+  const logo = tok.logoFilename
+    ? `/bucket/${d.projectId}/${tok.logoFilename}`
+    : (d.botAvatarUrl || '');
   const logoEl = document.getElementById('store-detail-logo');
   if (logo) {
     logoEl.src = logo; logoEl.style.display = '';
@@ -10686,8 +10858,8 @@ function renderStoreApp(d) {
   }
 
   const tickerPill = document.getElementById('store-detail-ticker-pill');
-  if (t.symbol) {
-    tickerPill.textContent = `$${t.symbol}`;
+  if (tok.symbol) {
+    tickerPill.textContent = `$${tok.symbol}`;
     tickerPill.style.display = '';
   } else {
     tickerPill.style.display = 'none';
@@ -10702,11 +10874,11 @@ function renderStoreApp(d) {
   }
 
   // ── Quick stats bar ─────────────────────────────────────────────────────
-  const _sdPriceUsd = (t.priceTon || 0) * (WAL2_TON_USD || 0);
+  const _sdPriceUsd = (tok.priceTon || 0) * (WAL2_TON_USD || 0);
   document.getElementById('store-d-stat-price').textContent = _sdPriceUsd > 0
     ? fmtCryptoPrice(_sdPriceUsd)
-    : `${fmtTon(t.priceTon)} TON`;
-  document.getElementById('store-d-stat-mcap').textContent = `${fmtCompact(t.marketCapTon || 0)} TON`;
+    : `${fmtTon(tok.priceTon)} TON`;
+  document.getElementById('store-d-stat-mcap').textContent = `${fmtCompact(tok.marketCapTon || 0)} TON`;
   document.getElementById('store-d-stat-holders').textContent = String(d.holdersCount || 0);
 
   // 24h price-change (computed from earliest vs latest trade in window).
@@ -10720,7 +10892,7 @@ function renderStoreApp(d) {
     priceSubEl.textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
     priceSubEl.className = `store-d-quickbar-sub ${cls}`;
   } else {
-    priceSubEl.textContent = 'New';
+    priceSubEl.textContent = t('store_d_price_new');
     priceSubEl.className = 'store-d-quickbar-sub';
   }
 
@@ -10770,24 +10942,23 @@ function renderStoreApp(d) {
   // ── About ───────────────────────────────────────────────────────────────
   const descEl = document.getElementById('store-detail-desc');
   const descToggle = document.getElementById('store-d-desc-toggle');
-  const longDesc = d.longDescription || d.shortDescription || 'No description.';
-  descEl.textContent = longDesc;
+  descEl.textContent = localLong || t('store_d_no_description');
   descEl.classList.remove('expanded');
   // Show "Read more" if content is taller than collapsed max-height.
   requestAnimationFrame(() => {
     const overflows = descEl.scrollHeight > descEl.clientHeight + 2;
     descToggle.style.display = overflows ? '' : 'none';
-    descToggle.textContent = 'Read more';
+    descToggle.textContent = t('store_d_read_more');
     descToggle.onclick = () => {
       const isExpanded = descEl.classList.toggle('expanded');
-      descToggle.textContent = isExpanded ? 'Show less' : 'Read more';
+      descToggle.textContent = isExpanded ? t('store_d_show_less') : t('store_d_read_more');
     };
   });
 
   // ── Token chart ─────────────────────────────────────────────────────────
   storeDetailState.chartMode = '1h';
   storeDetailState.tradesCache = trades;
-  storeDetailState.totalSupply = t.totalSupply ? Number(t.totalSupply) / 1e9 : 1e9;
+  storeDetailState.totalSupply = tok.totalSupply ? Number(tok.totalSupply) / 1e9 : 1e9;
   document.querySelectorAll('#view-store-app .store-d-chart-mode').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.tf === '1h');
     btn.onclick = () => {
@@ -10800,16 +10971,16 @@ function renderStoreApp(d) {
   drawTokenChart();
 
   // ── Token info card ─────────────────────────────────────────────────────
-  document.getElementById('store-d-token-symbol').textContent = t.symbol ? `$${t.symbol}` : '—';
-  document.getElementById('store-d-token-supply').textContent = t.totalSupply
-    ? fmtCompact(Number(t.totalSupply) / 1e9) : '—';
-  document.getElementById('store-d-token-sold').textContent = t.soldSupply
-    ? fmtCompact(Number(t.soldSupply) / 1e9) : '0';
-  document.getElementById('store-d-token-vol').textContent = `${fmtCompact(t.volume24hTon || 0)} TON`;
+  document.getElementById('store-d-token-symbol').textContent = tok.symbol ? `$${tok.symbol}` : '—';
+  document.getElementById('store-d-token-supply').textContent = tok.totalSupply
+    ? fmtCompact(Number(tok.totalSupply) / 1e9) : '—';
+  document.getElementById('store-d-token-sold').textContent = tok.soldSupply
+    ? fmtCompact(Number(tok.soldSupply) / 1e9) : '0';
+  document.getElementById('store-d-token-vol').textContent = `${fmtCompact(tok.volume24hTon || 0)} TON`;
   const addrRow = document.getElementById('store-d-token-addr-row');
   const addrLink = document.getElementById('store-d-token-addr');
-  if (t.jettonMasterAddress && !t.jettonMasterAddress.startsWith('SIM_')) {
-    const addr = t.jettonMasterAddress;
+  if (tok.jettonMasterAddress && !tok.jettonMasterAddress.startsWith('SIM_')) {
+    const addr = tok.jettonMasterAddress;
     addrLink.textContent = addr.slice(0, 6) + '…' + addr.slice(-4);
     addrLink.href = `https://tonviewer.com/${addr}`;
     addrRow.style.display = '';
@@ -10837,17 +11008,17 @@ function renderStoreApp(d) {
   if (tg?.MainButton) tg.MainButton.hide();
 
   // ── Buy / Sell via Telegram Main + Secondary buttons ──────────────────
-  _setupStoreAppTradeButtons(d, t);
+  _setupStoreAppTradeButtons(d, tok);
 
   // ── Liquidity card (pool reserves + LP owner + your position) ─────────
-  renderLiquidityCard(d.listingId, t);
+  renderLiquidityCard(d.listingId, tok);
 
   // Owner row — link to Tonviewer.
-  if (t.ownerWalletAddress) {
+  if (tok.ownerWalletAddress) {
     const row = document.getElementById('store-d-token-owner-row');
     const link = document.getElementById('store-d-token-owner');
     if (row && link) {
-      const a = t.ownerWalletAddress;
+      const a = tok.ownerWalletAddress;
       link.textContent = a.slice(0, 6) + '…' + a.slice(-4);
       link.href = `https://tonviewer.com/${a}`;
       row.style.display = '';
@@ -11538,7 +11709,7 @@ async function _tkBind() {
 
   if (createBtn) createBtn.onclick = async () => {
     _showMsg('');
-    if (!publishState.listingId) { _showMsg('Please fill App Information first.'); return; }
+    if (!publishState.listingId) { _showMsg(t('tk_msg_fill_app_info_first')); return; }
     const ticker = (tickerEl?.value || '').toUpperCase().trim();
     const liquidityTon = parseFloat(liqEl?.value || '0');
     createBtn.disabled = true;
@@ -11550,8 +11721,8 @@ async function _tkBind() {
         body: JSON.stringify({ ticker, liquidityTon }),
       });
       const d = await r.json();
-      if (!r.ok || d.error) throw new Error(d.error || 'Failed to create token');
-      _showMsg('Token created!', true);
+      if (!r.ok || d.error) throw new Error(d.error || t('tk_msg_create_token_failed'));
+      _showMsg(t('tk_msg_token_created'), true);
       // Re-fetch listing → re-render in locked state
       const lr = await fetch(`${API_BASE}/store/projects/${publishState.projectId}/listing`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...apiHeaders() }, body: '{}',
@@ -11560,7 +11731,7 @@ async function _tkBind() {
       if (ld.listing) { publishState.listing = ld.listing; publishState.listingId = ld.listing.id; }
       await _tkBind();
     } catch (err) {
-      _showMsg(err.message || 'Failed to create token');
+      _showMsg(err.message || t('tk_msg_create_token_failed'));
       createBtn.disabled = false;
       _updateTkButton();
     }
@@ -11821,7 +11992,7 @@ async function _pf2Bind() {
       submitBtn.textContent = 'Save Changes';
       submitBtn.disabled = false;
       if (publishState.projectId) fetchPublishReadiness(publishState.projectId);
-      showToast('App Information saved!', 'success');
+      showToast(t('pf2_save_success'), 'success');
       setTimeout(() => showView('detail', 'back'), 300);
     } catch (err) {
       showMsg(err.message || 'Something went wrong.');
@@ -11865,8 +12036,8 @@ function _initAiGenModal() {
 
   if (execBtn) execBtn.onclick = async () => {
     const items = Array.from(document.querySelectorAll('#pf2-ai-checklist input:checked')).map(i => i.value);
-    if (!items.length) { showToast('Select at least one item.', 'info'); return; }
-    if (!publishState.listingId) { showToast('Save the form first to create a listing.', 'info'); return; }
+    if (!items.length) { showToast(t('pf2_ai_select_items'), 'info'); return; }
+    if (!publishState.listingId) { showToast(t('as3_toast_fill_info'), 'info'); return; }
     await _runAiGeneration(items);
   };
 
@@ -11970,9 +12141,9 @@ async function _runAiGeneration(items) {
           const m = STEP_META[evt.step] || { icon: '⚡', label: evt.step };
           doneResults.push({ step: evt.step, icon: m.icon, label: m.label.replace('…', ''), data: evt.data });
         } else if (evt.type === 'error') {
-          throw new Error(evt.message || 'Generation failed');
+          throw new Error(evt.message || t('pf2_ai_generation_failed'));
         } else if (evt.type === 'done') {
-          setProgress(100, 'All done!');
+          setProgress(100, t('pf2_ai_all_done'));
         }
       }
     }
@@ -11985,13 +12156,13 @@ async function _runAiGeneration(items) {
         <div class="pf2-ai-done-row">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
           <span>${r.icon} ${r.label || r.step}</span>
-        </div>`).join('') || '<div class="pf2-ai-done-row">Nothing was generated.</div>';
+        </div>`).join('') || `<div class="pf2-ai-done-row">${t('pf2_ai_nothing_generated')}</div>`;
     }
 
   } catch (err) {
     genEl.style.display = 'none';
     idleEl.style.display = '';
-    showToast(err.message || 'Generation failed', 'error');
+    showToast(err.message || t('pf2_ai_generation_failed'), 'error');
   }
 }
 
@@ -12100,7 +12271,7 @@ function bindPubflowStep2() {
       connectBtn.textContent = 'Reconnect bot';
       continueBtn.disabled = false;
     } else {
-      titleEl.textContent = 'No bot connected';
+      titleEl.textContent = t('detail_no_bot');
       subEl.textContent = 'Connect a bot from @BotFather to continue.';
       connectBtn.textContent = 'Connect bot';
       continueBtn.disabled = true;
@@ -12169,7 +12340,7 @@ async function bindPubflowStep3() {
           avatarLabel.classList.add('has-image');
         }
       }
-    } catch (err) { showToast('Avatar upload failed: ' + err.message, 'error'); }
+    } catch (err) { showToast(t('pubflow_avatar_upload_failed').replace('{msg}', err.message), 'error'); }
     e.target.value = '';
   };
 
@@ -12205,7 +12376,7 @@ async function bindPubflowStep3() {
       }
       onPubflowBack();
     } catch (e) {
-      showToast('Save failed: ' + e.message, 'error');
+      showToast(t('pubflow_save_failed').replace('{msg}', e.message), 'error');
     } finally {
       continueBtn.disabled = false;
     }
@@ -12215,7 +12386,7 @@ async function bindPubflowStep3() {
 // ── STEP 4 · App Store page (category, tags, banner, screenshots) ───────
 async function bindPubflowStep4() {
   const listingId = publishState.listingId;
-  if (!listingId) { showToast('Listing not ready yet', 'error'); return; }
+  if (!listingId) { showToast(t('pubflow_listing_not_ready'), 'error'); return; }
 
   // Always re-fetch listing so we have the latest tags/banner/screenshots.
   const r = await fetch(`${API_BASE}/store/listings/${listingId}`, { headers: apiHeaders() });
@@ -12290,7 +12461,7 @@ async function bindPubflowStep4() {
       if (d.error) throw new Error(d.error);
       bannerImg.src = `/bucket/${listing.projectId}/${d.filename}?t=${Date.now()}`;
       bannerLabel.classList.add('has-image');
-    } catch (err) { showToast('Banner upload failed: ' + err.message, 'error'); }
+    } catch (err) { showToast(t('pubflow_banner_upload_failed').replace('{msg}', err.message), 'error'); }
     e.target.value = '';
   };
 
@@ -12337,7 +12508,7 @@ async function bindPubflowStep4() {
       const refreshed = await refresh.json();
       publishState.listing = refreshed.listing;
       renderShots(refreshed.listing.screenshots || []);
-    } catch (err) { showToast('Upload failed: ' + err.message, 'error'); }
+    } catch (err) { showToast(t('pubflow_shot_upload_failed').replace('{msg}', err.message), 'error'); }
     e.target.value = '';
   };
 
@@ -12361,7 +12532,7 @@ async function bindPubflowStep4() {
       publishState.listing = d.listing;
       onPubflowBack();
     } catch (e) {
-      showToast('Save failed: ' + e.message, 'error');
+      showToast(t('pubflow_save_failed').replace('{msg}', e.message), 'error');
     } finally {
       continueBtn.disabled = false;
     }
@@ -12371,7 +12542,7 @@ async function bindPubflowStep4() {
 // ── STEP 5 · App token (icon + name + ticker + description + LP + deploy)
 async function bindPubflowStep5() {
   const listingId = publishState.listingId;
-  if (!listingId) { showToast('Listing not ready yet', 'error'); return; }
+  if (!listingId) { showToast(t('pubflow_listing_not_ready'), 'error'); return; }
   const r = await fetch(`${API_BASE}/store/listings/${listingId}`, { headers: apiHeaders() });
   const data = await r.json();
   publishState.listing = data.listing;
@@ -12412,7 +12583,7 @@ async function bindPubflowStep5() {
       if (d.error) throw new Error(d.error);
       iconImg.src = `/bucket/${listing.projectId}/${d.filename}?t=${Date.now()}`;
       iconLabel.classList.add('has-image');
-    } catch (err) { showToast('Icon upload failed: ' + err.message, 'error'); }
+    } catch (err) { showToast(t('pubflow_icon_upload_failed').replace('{msg}', err.message), 'error'); }
     e.target.value = '';
   };
 
@@ -12511,11 +12682,11 @@ async function bindPubflowStep5() {
     if (tokenAlreadyLive) { onPubflowBack(); return; }
 
     // Step 1 — validate locally so we don't surprise the user mid-flow.
-    if (!nameEl.value.trim()) { showToast('Token name required', 'error'); return; }
-    if (!tickerEl.value.trim()) { showToast('Ticker required', 'error'); return; }
-    if (!token?.logoFilename) { showToast('Token logo required', 'error'); return; }
+    if (!nameEl.value.trim()) { showToast(t('token_name_required'), 'error'); return; }
+    if (!tickerEl.value.trim()) { showToast(t('token_ticker_required'), 'error'); return; }
+    if (!token?.logoFilename) { showToast(t('token_logo_required'), 'error'); return; }
     const lpTonAmt = Number(lpTon.value) || 0;
-    if (lpTonAmt < 1) { showToast('Initial liquidity must be ≥ 1 TON', 'error'); return; }
+    if (lpTonAmt < 1) { showToast(t('token_liquidity_min'), 'error'); return; }
 
     continueBtn.disabled = true;
     statusEl.textContent = 'Saving token info…';

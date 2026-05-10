@@ -22,6 +22,7 @@ import express, { Router, Request, Response } from "express";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+import { config } from "../../config";
 
 const router = Router();
 
@@ -96,7 +97,7 @@ router.post(
   express.raw({ type: (req) => (req.headers["content-type"] || "").split(";")[0].trim() !== "application/json", limit: "500mb" }),
   (req: Request, res: Response) => {
     try {
-      const isInternal = req.headers["x-af-internal"] === process.env.AF_INTERNAL_SECRET;
+      const isInternal = req.headers["x-af-internal"] === config.internalSecret;
       if (!isInternal) {
         res.status(403).json({ error: "Use /telegram-mini-app/api/bucket/:projectId/upload for owner uploads" });
         return;

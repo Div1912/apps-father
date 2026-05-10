@@ -252,9 +252,17 @@ if ($checked["admin"]) {
 }
 
 # ---- .env ----
-if ($checked["env"] -and $ENV_NAME -eq "DEV") {
-  Step-Header "Syncing dev.env"
-  scp dev.env ($SERVER + ":" + $APP_DIR + "/.env")
+if ($checked["env"]) {
+  if ($ENV_NAME -eq "DEV") {
+    $envSource = "dev.env"
+  } else {
+    $envSource = ".env"
+  }
+  if (-not (Test-Path $envSource)) {
+    Step-Err ("Env file not found: " + $envSource)
+  }
+  Step-Header ("Syncing " + $envSource)
+  scp $envSource ($SERVER + ":" + $APP_DIR + "/.env")
   if ($LASTEXITCODE -ne 0) { Step-Err "Env sync failed" }
   Step-OK ".env synced"
 }
@@ -316,6 +324,9 @@ if ($checked["migrations"]) {
   $sqlLines.Add("ALTER TABLE vouchers ADD COLUMN IF NOT EXISTS credits INTEGER NOT NULL DEFAULT 0;")
   $sqlLines.Add("CREATE TABLE IF NOT EXISTS voucher_redemptions (id SERIAL PRIMARY KEY, voucher_id INT NOT NULL REFERENCES vouchers(id), user_id INT NOT NULL REFERENCES users(id), created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(voucher_id, user_id));")
   $sqlLines.Add("CREATE TABLE IF NOT EXISTS withdrawals (id SERIAL PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id), amount_usd DECIMAL(12,4) NOT NULL, ton_address TEXT NOT NULL, status TEXT DEFAULT 'pending', tx_hash TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), processed_at TIMESTAMPTZ);")
+  $sqlLines.Add("CREATE TABLE IF NOT EXISTS ton_withdrawals (id SERIAL PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id), amount_ton DECIMAL(18,9) NOT NULL, ton_address TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', tx_hash TEXT, admin_note TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), processed_at TIMESTAMPTZ);")
+  $sqlLines.Add("CREATE INDEX IF NOT EXISTS ton_withdrawals_user_id_idx ON ton_withdrawals(user_id);")
+  $sqlLines.Add("CREATE INDEX IF NOT EXISTS ton_withdrawals_status_idx ON ton_withdrawals(status);")
   $sqlLines.Add("CREATE TABLE IF NOT EXISTS retention_pushes (id SERIAL PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, scenario TEXT NOT NULL, sent_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(user_id, scenario));")
   $sqlLines.Add("CREATE INDEX IF NOT EXISTS retention_pushes_user_id_idx ON retention_pushes(user_id);")
   $sqlLines.Add("CREATE TABLE IF NOT EXISTS agent_sessions (id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id) ON DELETE SET NULL, user_id INT REFERENCES users(id) ON DELETE SET NULL, type TEXT NOT NULL, model TEXT NOT NULL, input TEXT NOT NULL, output TEXT, credits_charged INT NOT NULL DEFAULT 0, cost_usd DECIMAL(12,6) NOT NULL DEFAULT 0, input_tokens INT NOT NULL DEFAULT 0, output_tokens INT NOT NULL DEFAULT 0, duration_ms INT, success BOOLEAN NOT NULL DEFAULT true, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());")
@@ -371,6 +382,16 @@ if ($checked["migrations"]) {
   $sqlLines.Add("CREATE INDEX IF NOT EXISTS liquidity_events_token_created_idx ON liquidity_events(token_id, created_at);")
   $sqlLines.Add("CREATE INDEX IF NOT EXISTS liquidity_events_owner_idx ON liquidity_events(owner_wallet_address);")
 
+  # ── Balance Ledger ─────────────────────────────────────────────────────────
+  $sqlLines.Add("CREATE TABLE IF NOT EXISTS balance_ledger (id BIGSERIAL PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, currency TEXT NOT NULL, amount DECIMAL(18,9) NOT NULL, source TEXT NOT NULL, meta JSONB, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());")
+  $sqlLines.Add("CREATE INDEX IF NOT EXISTS balance_ledger_user_created_idx ON balance_ledger(user_id, created_at DESC);")
+  $sqlLines.Add("CREATE INDEX IF NOT EXISTS balance_ledger_created_idx ON balance_ledger(created_at DESC);")
+
+  # ── TON Top-ups ────────────────────────────────────────────────────────────
+  $sqlLines.Add("CREATE TABLE IF NOT EXISTS ton_topups (id TEXT PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id), amount_ton DECIMAL(18,9) NOT NULL, amount_nano TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', tx_hash TEXT, confirmed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());")
+  $sqlLines.Add("CREATE INDEX IF NOT EXISTS ton_topups_user_id_idx ON ton_topups(user_id);")
+  $sqlLines.Add("CREATE INDEX IF NOT EXISTS ton_topups_status_idx ON ton_topups(status);")
+
   # Append external SQL files
   $sqlFiles = @(
     "deploy/sql/tasks_system.sql"
@@ -380,6 +401,11 @@ if ($checked["migrations"]) {
     "deploy/sql/agent_feedback.sql"
     "deploy/sql/usage_log_task_id.sql"
     "deploy/sql/last_task_id.sql"
+    "deploy/sql/credits_tiers_prisma.sql"
+    "deploy/sql/bundles_system.sql"
+    "deploy/sql/user_ton_balance.sql"
+    "deploy/sql/app_listing_v2_fields.sql"
+    "deploy/sql/agent_sessions.sql"
   )
   foreach ($f in $sqlFiles) {
     if (Test-Path $f) { $sqlLines.Add((Get-Content $f -Raw)) }
@@ -415,7 +441,7 @@ if ($checked["agent_knowledge"]) {
 # ---- Restart PM2 ----
 if ($checked["restart"]) {
   Step-Header "Restarting PM2"
-  ssh $SERVER ("cd " + $APP_DIR + " && (pm2 restart " + $PM2 + " --update-env --kill-timeout 300000 2>/dev/null || pm2 start dist/index.js --name " + $PM2 + " --max-memory-restart 1G && pm2 save)")
+  ssh $SERVER ("cd " + $APP_DIR + " && (pm2 restart " + $PM2 + " --update-env --kill-timeout 300000 2>/dev/null || pm2 start dist/index.js --name " + $PM2 + " --max-memory-restart 16G && pm2 save)")
   if ($LASTEXITCODE -ne 0) { Step-Err "PM2 restart failed" }
   Step-OK "PM2 restarted"
 }

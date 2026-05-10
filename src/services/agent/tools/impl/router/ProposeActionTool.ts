@@ -41,7 +41,7 @@ export class ProposeActionTool implements RouterTool {
         " - 'update'       : user wants one focused change. Put a self-contained prompt in `prefilledPrompt`.\n" +
         " - 'update-plan'  : user wants multiple changes. List them in `plan` (array of strings). Also set `prefilledPrompt` with all items as context.\n" +
         " - 'bug-fix'      : user reported a bug. Diagnose in `description`, pass fix prompt in `prefilledPrompt`.\n" +
-        " - 'paid-feature' : user is asking for a capability that is GATED behind a locked paid feature (Stars Payment, TON Payment, Disable Splash, Get Code, Admin Panel). Set `featureId` to one of: stars_payment | ton_payment | disable_splash | get_code | admin_panel. Description tells the user the feature is locked and points them to the Paid Features page. No agent run.\n" +
+        " - 'paid-feature' : user is asking for a capability that is GATED behind a locked paid feature (Stars Payment, TON Payment, Disable Splash, Admin Panel). Set `featureId` to one of: stars_payment | ton_payment | disable_splash | admin_panel. Description tells the user the feature is locked and points them to the Paid Features page. No agent run.\n" +
         "\n" +
         "Rule: if the user lists MORE THAN ONE distinct change/feature, always use 'update-plan'.\n" +
         "\n" +

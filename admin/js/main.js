@@ -31,6 +31,10 @@
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>` },
     { key: "logs",      label: "Logs",
       icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>` },
+    { key: "ledger",    label: "Ledger",
+      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>` },
+    { key: "withdrawals", label: "Withdrawals",
+      icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.4 19.4q-.5.2-.95-.09T3 18.5V14l8-2-8-2V5.5q0-.55.45-.84t.95-.09l15.4 6.5q.625.275.625.925t-.625.925z"/></svg>` },
   ];
 
   const SWITCH_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>`;
@@ -90,6 +94,10 @@
           <span class="env-pill ${sw.currentClass}"><span class="dot"></span>${sw.currentLabel}</span>
           <a class="env-switch" href="${sw.url}" title="Switch environment">${SWITCH_ICON}<span>${sw.label}</span></a>
           <span class="spacer"></span>
+          <span class="uptime-badge" id="uptime-badge" title="Server uptime since last restart">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;flex-shrink:0"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            <span id="uptime-value">—</span>
+          </span>
           <button class="icon-btn" id="theme-toggle-btn" title="Toggle theme">${themeIcon}</button>
           <button class="header-btn" id="logout-btn" title="Sign out">Sign out</button>
         </div>
@@ -158,6 +166,41 @@
       try { localStorage.removeItem("af_admin_tabs_v1"); } catch (_) {}
       boot();
     });
+
+    // ── Uptime timer ─────────────────────────────────────────────────────
+    (function startUptimeTimer() {
+      let serverUptime = 0; // seconds, from API
+      let localTick = 0;    // increments every second client-side between fetches
+
+      function fmt(secs) {
+        const d = Math.floor(secs / 86400);
+        const h = Math.floor((secs % 86400) / 3600);
+        const m = Math.floor((secs % 3600) / 60);
+        const s = secs % 60;
+        if (d > 0) return d + 'd ' + String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+        return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+      }
+
+      function tick() {
+        localTick++;
+        const el = document.getElementById('uptime-value');
+        if (el) el.textContent = fmt(serverUptime + localTick);
+      }
+
+      async function fetchUptime() {
+        try {
+          const data = await Api.request('/uptime');
+          serverUptime = data.uptimeSeconds || 0;
+          localTick = 0;
+          const el = document.getElementById('uptime-value');
+          if (el) el.textContent = fmt(serverUptime);
+        } catch (_) {}
+      }
+
+      fetchUptime();
+      setInterval(tick, 1000);
+      setInterval(fetchUptime, 30000); // resync every 30 s
+    })();
 
     // Init the tab manager.
     TabBar.init({

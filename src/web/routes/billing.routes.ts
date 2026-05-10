@@ -111,7 +111,7 @@ router.post("/cryptobot", async (req: Request, res: Response) => {
           `<b><tg-emoji emoji-id="5377544696656599429">✅</tg-emoji> Payment confirmed!</b>\n\n` +
           `<b>+${creditsToGrant.toLocaleString()} credits</b> added to your balance.` +
           (bonus > 0 ? ` (includes ${(bonus * (isFirstPurchase ? 2 : 1)).toLocaleString()} bonus!)` : "") +
-          (isFirstPurchase ? "\n🎉 <b>×2 first-purchase bonus applied!</b>" : "") +
+          (isFirstPurchase ? "\n🎉 <b>×1.5 first-purchase bonus applied!</b>" : "") +
           `\n\n<blockquote>New balance: <b>${(await billingService.getUserCredits(user.id)).toLocaleString()} credits</b></blockquote>`;
 
         await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {

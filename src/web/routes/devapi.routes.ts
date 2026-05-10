@@ -117,7 +117,7 @@ async function loadProjectEntry(
   const envVars = fs.existsSync(envPath) ? dotenv.parse(fs.readFileSync(envPath)) : {};
 
   // Inject platform vars so routes.js can use the AF Bucket API
-  envVars.AF_INTERNAL_SECRET = process.env.AF_INTERNAL_SECRET || "";
+  envVars.AF_INTERNAL_SECRET = config.internalSecret;
   envVars.BASE_URL = config.baseUrl;
   envVars.PROJECT_ID = projectId;
   // INTERNAL_BASE_URL bypasses nginx/Cloudflare — use this for server-side bucket calls

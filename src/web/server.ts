@@ -13,7 +13,6 @@ import bucketRoutes, { listProjectFiles, uploadProjectFile, uploadProjectFileFro
 import devApiRoutes from "./routes/devapi.routes";
 import webhookRoutes from "./routes/webhook.routes";
 import adminRoutes from "./routes/admin.routes";
-import editorRoutes from "./routes/editor.routes";
 import logsRoutes from "./routes/logs.routes";
 import billingRoutes from "./routes/billing.routes";
 import appStoreRoutes from "./routes/app-store.routes";
@@ -28,6 +27,7 @@ import { projectService } from "../services/project.service";
 import { parseAgentLog } from "../services/agent-logger";
 import { decryptToken } from "../services/crypto.service";
 import { billingService } from "../services/billing.service";
+import { avatarCache } from "../services/avatar-cache";
 import { chatService, ChatMessage } from "../services/chat.service";
 import { AgentProgress, AgentAbortedError } from "../services/agent.service";
 import { agentSessionService } from "../services/agent-session.service";
@@ -43,10 +43,46 @@ import { Decimal } from "@prisma/client/runtime/library";
 import { t, Lang } from "../bot/i18n";
 import { notifyProcessDone } from "../services/notify.service";
 import { sendBotWelcome } from "../services/welcome.service";
+import { writeLedger } from "../services/ledger.service";
+import { sendTon } from "../services/wallet.service";
+
+// ── Security: scrub platform master secrets from process.env ─────────────────
+// All imports above have already read what they need from process.env (config.ts
+// captures every value into a frozen object at import time). We now permanently
+// delete the sensitive keys so that any user-supplied routes.js loaded later via
+// require() cannot read them — even indirectly via process.env or
+// /proc/self/environ on Linux.
+//
+// Platform code must use the `config` import (captured before this scrub) and
+// must NEVER re-read process.env for secrets after this point.
+(function scrubPlatformSecrets() {
+  const SENSITIVE = [
+    "APPS_FATHER_TOKEN",
+    "ENCRYPTION_KEY",
+    // DATABASE_URL must stay in process.env — Prisma reads it at $connect() time.
+    "ANTHROPIC_API_KEY",
+    "OPENROUTER_API_KEY",
+    "ADMIN_PASSWORD",
+    "WALLET_MNEMONIC",
+    "NOWPAYMENTS_API_KEY",
+    "NOWPAYMENTS_IPN_SECRET",
+    "CRYPTO_BOT_TOKEN",
+    "TONCENTER_API_KEY",
+    "WEBHOOK_SECRET",
+    "OPENPANEL_CLIENT_SECRET",
+    "ELEVENLABS_API_KEY",
+    "APIPASS_KEY",
+    // AF_INTERNAL_SECRET is intentionally passed to user routes via envVars — do not scrub.
+  ];
+  for (const key of SENSITIVE) {
+    delete process.env[key];
+  }
+  console.log("[Security] Platform secrets scrubbed from process.env");
+})();
+// ─────────────────────────────────────────────────────────────────────────────
 
 let expressApp: express.Application | null = null;
 let httpServer: http.Server | null = null;
-const avatarCache = new Map<string, string>();
 
 /**
  * Forward an AgentProgress to the mini-app over the project WebSocket.
@@ -972,6 +1008,9 @@ export function createWebServer() {
           balance: { increment: new Decimal(SUB_BONUS_USD.toFixed(4)) },
         },
       });
+      if (claim.count > 0) {
+        writeLedger(user.id, "USD", SUB_BONUS_USD, "sub_bonus");
+      }
 
       const fresh = await prisma.user.findUnique({
         where: { id: user.id },
@@ -2246,9 +2285,17 @@ export function createWebServer() {
           );
 
           if (!result.proposed) {
+            // Router didn't end with propose_action. This is a model behaviour bug.
+            // Log it loudly so we can monitor and tighten the prompt over time.
+            console.warn(
+              "[Router] No proposal emitted. firstMessage=%s textLen=%d preview=%s",
+              result.isFirstMessage,
+              (result.text || "").length,
+              (result.text || "").slice(0, 200).replace(/\s+/g, " "),
+            );
+
             if (result.isFirstMessage) {
-              // First message MUST produce a build proposal. If it didn't,
-              // hide the internal error text and ask the user to retry.
+              // First message MUST produce a build proposal.
               const retryMsg = chatService.addMessage(projectId, {
                 role: "assistant", type: "text",
                 content: "Не удалось сформировать предложение. Пожалуйста, опишите, что вы хотите создать, и я начну сборку.",
@@ -2256,13 +2303,33 @@ export function createWebServer() {
               });
               broadcastToProject(projectId, { type: "message", message: retryMsg });
             } else if (result.text.trim()) {
-              // Normal router fallback — model answered in free-text (no proposal).
-              const fallbackMsg = chatService.addMessage(projectId, {
-                role: "assistant", type: "text",
-                content: result.text.trim(),
-                costUsd: usage.costUsd, balance: usage.newBalance,
-              });
-              broadcastToProject(projectId, { type: "message", message: fallbackMsg });
+              // Heuristic: detect "wall of questions" output (model emitted clarification
+              // questions as free text instead of using questionnaire). Patterns:
+              //   - 2+ question marks
+              //   - bullet list (•/-/*) or numbered list with question marks
+              const txt = result.text.trim();
+              const qCount = (txt.match(/[?？]/g) || []).length;
+              const isQuestionWall = qCount >= 2 && /[•\-*]|\b\d+[.)]/.test(txt);
+
+              if (isQuestionWall) {
+                // Replace the dead text wall with a clear retry hint. The model
+                // should have used questionnaire — until prompts catch every
+                // case, give the user a clean signal instead of a hideable wall.
+                const retryMsg = chatService.addMessage(projectId, {
+                  role: "assistant", type: "text",
+                  content: "Мне нужно уточнить детали. Пришлите сообщение ещё раз — я задам вопросы по одному с кнопками для ответа.",
+                  costUsd: usage.costUsd, balance: usage.newBalance,
+                });
+                broadcastToProject(projectId, { type: "message", message: retryMsg });
+              } else {
+                // Plain free-text answer (e.g. small chitchat) — render as-is.
+                const fallbackMsg = chatService.addMessage(projectId, {
+                  role: "assistant", type: "text",
+                  content: txt,
+                  costUsd: usage.costUsd, balance: usage.newBalance,
+                });
+                broadcastToProject(projectId, { type: "message", message: fallbackMsg });
+              }
             } else {
               broadcastToProject(projectId, { type: "balance_update", newCredits: usage.newBalance });
             }
@@ -2765,6 +2832,8 @@ export function createWebServer() {
         return u.credits;
       });
 
+      writeLedger(user.id, "credits", -LINK_BOT_FEE_CREDITS, "feature_purchase",
+        { featureId: "bot_create_unlock", projectId });
       void trackEvent(auth.telegramId!, "bot_create_unlocked", { project_id: projectId });
       res.json({ ok: true, newCredits, fee: LINK_BOT_FEE_CREDITS });
     } catch (err) {
@@ -2866,6 +2935,7 @@ export function createWebServer() {
         });
         return updated.credits;
       });
+      writeLedger(user.id, "credits", task.reward, "task", { taskId });
 
       res.json({ ok: true, reward: task.reward, newCredits: result });
     } catch (err) {
@@ -2930,10 +3000,9 @@ export function createWebServer() {
         return;
       }
 
-      // When user marks NOT correct we require a description (anti-gaming —
-      // forces them to actually explain what went wrong before refund).
-      if (!isCorrect && description.length < 100) {
-        res.status(400).json({ error: "description_too_short", minLength: 100 });
+      // When user marks NOT correct we require a description (anti-gaming).
+      if (!isCorrect && !description) {
+        res.status(400).json({ error: "description_required" });
         return;
       }
 
@@ -3014,7 +3083,7 @@ export function createWebServer() {
           });
           newBalance = updated.credits;
         }
-        return { feedback: fb, newBalance };
+        return { feedback: fb, newBalance, didCashback: cashbackCredits > 0 };
       });
 
       // Mark the result bubble as claimed so re-entry shows a "Rated ✓" pill.
@@ -3027,6 +3096,11 @@ export function createWebServer() {
           chatService.updateMessage(projectId, resultMsg.id, { cashbackClaimed: true });
         }
       } catch {}
+
+      if (result.didCashback) {
+        writeLedger(user.id, "credits", cashbackCredits, "cashback",
+          { feedbackId: result.feedback.id, creditsCharged, cashbackPercent });
+      }
 
       res.json({
         ok: true,
@@ -3988,7 +4062,7 @@ Rules:
           });
 
           // Record the trade so the chart has data points
-          await tx.tokenTrade.create({
+          const sellTrade = await tx.tokenTrade.create({
             data: {
               tokenId,
               userId: user.id,
@@ -4003,6 +4077,7 @@ Rules:
 
           return {
             direction: "sell",
+            _ledger: { symbol: t.symbol, tokensInAtomic: Number(tokensInAtomic), tonOutFloat, tradeId: sellTrade.id },
             amountOut: tonOutFloat,
             feePercent,
             priceImpactBps: quote.priceImpactBps,
@@ -4050,7 +4125,7 @@ Rules:
         });
 
         // Record the trade so the chart has data points
-        await tx.tokenTrade.create({
+        const buyTrade = await tx.tokenTrade.create({
           data: {
             tokenId,
             userId: user.id,
@@ -4063,18 +4138,37 @@ Rules:
           },
         });
 
+        const tokensOutFloat = Number(quote.tokensOut) / 1e9;
         return {
           direction: "buy",
-          amountOut: Number(quote.tokensOut) / 1e9,
-          tokensOut: Number(quote.tokensOut) / 1e9,
+          amountOut: tokensOutFloat,
+          tokensOut: tokensOutFloat,
           feePercent,
           priceImpactBps: quote.priceImpactBps,
           newPriceTon: Number(ammSpot({ realTonReserve: quote.newTonReserve, realTokenReserve: quote.newTokenReserve, lpTotalShares: t.lpTotalShares })) / 1e9,
           outSymbol: t.symbol,
+          _ledger: { symbol: t.symbol, tokensOutFloat, tradeId: buyTrade.id },
         };
       });
 
-      res.json({ ok: true, ...result });
+      // Ledger writes happen after the transaction commits (never inside tx)
+      if (result._ledger) {
+        const L = result._ledger as any;
+        if (result.direction === "sell") {
+          writeLedger(user.id, L.symbol, -L.tokensInAtomic / 1e9, "swap_sell",
+            { tradeId: L.tradeId, tokenId, tonOutNet: L.tonOutFloat });
+          writeLedger(user.id, "TON", L.tonOutFloat, "swap_sell",
+            { tradeId: L.tradeId, tokenId, tokenSymbol: L.symbol });
+        } else {
+          writeLedger(user.id, "TON", -amountIn, "swap_buy",
+            { tradeId: L.tradeId, tokenId, tokenSymbol: L.symbol, tokensOut: L.tokensOutFloat });
+          writeLedger(user.id, L.symbol, L.tokensOutFloat, "swap_buy",
+            { tradeId: L.tradeId, tokenId, tonIn: amountIn });
+        }
+      }
+
+      const { _ledger: _l, ...publicResult } = result as any;
+      res.json({ ok: true, ...publicResult });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -4088,6 +4182,117 @@ Rules:
       const { user } = await getOrCreateUserFromReq(req, auth);
       const tonBalance = await appStoreService.getUserTonBalance(user.id);
       res.json({ tonBalance });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── TON Withdrawal (auto-sends from hot wallet to user's connected address) ──
+
+  app.post("/telegram-mini-app/api/wallet/withdraw", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+
+      const amountTon = Number(req.body?.amountTon);
+      const tonAddress = String(req.body?.tonAddress || "").trim();
+
+      if (!amountTon || amountTon <= 0) {
+        res.status(400).json({ error: "invalid_amount" }); return;
+      }
+      if (amountTon < 0.01) {
+        res.status(400).json({ error: "min_amount" }); return;
+      }
+      if (!tonAddress) {
+        res.status(400).json({ error: "wallet_not_connected" }); return;
+      }
+
+      const currentBalance = await prisma.user.findUnique({
+        where: { id: user.id },
+        select: { tonBalance: true },
+      });
+      if (!currentBalance) { res.status(404).json({ error: "user_not_found" }); return; }
+
+      const bal = Number(currentBalance.tonBalance);
+      if (amountTon > bal) {
+        res.status(400).json({ error: "insufficient_balance", balance: bal }); return;
+      }
+
+      // Deduct balance and create withdrawal record atomically
+      const [withdrawal] = await prisma.$transaction([
+        prisma.tonWithdrawal.create({
+          data: {
+            userId: user.id,
+            amountTon: amountTon,
+            tonAddress,
+            status: "pending",
+          },
+        }),
+        prisma.user.update({
+          where: { id: user.id },
+          data: { tonBalance: { decrement: amountTon } },
+        }),
+      ]);
+
+      // Respond immediately so the user doesn't wait for blockchain confirmation
+      res.json({ ok: true, withdrawalId: withdrawal.id });
+
+      // Auto-send TON from hot wallet in the background
+      setImmediate(async () => {
+        try {
+          const txHash = await sendTon(tonAddress, amountTon);
+
+          await prisma.tonWithdrawal.update({
+            where: { id: withdrawal.id },
+            data: { status: "approved", txHash, processedAt: new Date() },
+          });
+
+          void writeLedger(user.id, "TON", -amountTon, "ton_withdrawal", {
+            withdrawalId: withdrawal.id,
+            tonAddress,
+            txHash,
+          });
+
+          console.log(`[Wallet] Auto-withdrawal #${withdrawal.id} sent: ${amountTon} TON → ${tonAddress} | tx: ${txHash}`);
+        } catch (err: any) {
+          console.error(`[Wallet] Auto-withdrawal #${withdrawal.id} FAILED, refunding user:`, err.message);
+
+          // Refund the user's balance and mark as failed
+          await prisma.tonWithdrawal.update({
+            where: { id: withdrawal.id },
+            data: { status: "failed", adminNote: err.message, processedAt: new Date() },
+          }).catch(() => {});
+
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { tonBalance: { increment: amountTon } },
+          }).catch(() => {});
+
+          void writeLedger(user.id, "TON", amountTon, "ton_withdrawal_refund", {
+            withdrawalId: withdrawal.id,
+            reason: err.message,
+          });
+        }
+      });
+    } catch (err: any) {
+      console.error("[Wallet] withdraw error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/telegram-mini-app/api/wallet/withdrawals", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+
+      const withdrawals = await prisma.tonWithdrawal.findMany({
+        where: { userId: user.id },
+        orderBy: { createdAt: "desc" },
+        take: 20,
+      });
+      res.json({ withdrawals });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -5520,7 +5725,6 @@ Rules:
   app.use("/devapi", devApiRoutes);
   app.use("/webhook", webhookRoutes);
   app.use("/admin", adminRoutes);
-  app.use("/editor", editorRoutes);
   app.use("/logs", logsRoutes);
   app.use("/billing", billingRoutes);
 

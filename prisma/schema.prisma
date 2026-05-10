@@ -50,6 +50,8 @@ model User {
   taskCompletions TaskCompletion[]
   agentFeedback   AgentFeedback[]
   tonTopups       TonTopup[]
+  balanceLedger   BalanceLedger[]
+  tonWithdrawals  TonWithdrawal[]
 
   @@map("users")
 }
@@ -458,6 +460,23 @@ model Withdrawal {
   @@map("withdrawals")
 }
 
+/** TON balance withdrawal requests — auto-sent from hot wallet on submit */
+model TonWithdrawal {
+  id          Int       @id @default(autoincrement())
+  userId      Int       @map("user_id")
+  amountTon   Decimal   @map("amount_ton") @db.Decimal(18, 9)
+  tonAddress  String    @map("ton_address")
+  status      String    @default("pending")  // pending | approved | failed
+  txHash      String?   @map("tx_hash")
+  adminNote   String?   @map("admin_note")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  processedAt DateTime? @map("processed_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("ton_withdrawals")
+}
+
 model UsageLog {
   id              Int      @id @default(autoincrement())
   userId          Int      @map("user_id")
@@ -678,6 +697,28 @@ model AgentCodePatch {
 
   @@index([status])
   @@map("agent_code_patches")
+}
+
+/** Unified ledger of every balance change (credits, TON, tokens) per user.
+ *  amount > 0 = credited to user, amount < 0 = debited from user.
+ *  source vocabulary: payment | agent_usage | refund | admin_grant |
+ *    referral_bonus | first_deposit_bonus | sub_bonus | task | cashback |
+ *    ton_topup | swap_buy | swap_sell
+ */
+model BalanceLedger {
+  id        BigInt   @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  currency  String   // "credits" | "TON" | token symbol e.g. "EST"
+  amount    Decimal  @db.Decimal(18, 9)  // positive = in, negative = out
+  source    String
+  meta      Json?    // { paymentId?, taskId?, projectId?, tokenSymbol?, note? }
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@map("balance_ledger")
 }
 
 /** Tracks TON top-up requests initiated from the Wallet page. */

@@ -28,8 +28,40 @@ interface ManagedBotInstance {
   webhookHandler: (req: Request, res: Response, next: NextFunction) => void;
 }
 
+interface WebhookProjectEntry {
+  mtime: number;
+  sqlite: Database.Database;
+  db: any;
+  router: any;
+  lastUsed: number;
+}
+
+/** Max number of project webhook contexts kept in memory simultaneously. */
+const WEBHOOK_CACHE_MAX = 80;
+
 export class BotRunnerService {
   private bots = new Map<string, ManagedBotInstance>();
+  /** Persistent per-project webhook state — keeps sqlite open between webhook calls */
+  private webhookCache = new Map<string, WebhookProjectEntry>();
+
+  private evictWebhookEntry(projectId: string): void {
+    const entry = this.webhookCache.get(projectId);
+    if (entry) {
+      try { entry.sqlite.close(); } catch {}
+      this.webhookCache.delete(projectId);
+    }
+  }
+
+  /** Evict the least-recently-used entry when the cache exceeds WEBHOOK_CACHE_MAX. */
+  private evictLruIfNeeded(): void {
+    if (this.webhookCache.size < WEBHOOK_CACHE_MAX) return;
+    let oldestId = "";
+    let oldestTime = Infinity;
+    for (const [id, entry] of this.webhookCache) {
+      if (entry.lastUsed < oldestTime) { oldestTime = entry.lastUsed; oldestId = id; }
+    }
+    if (oldestId) this.evictWebhookEntry(oldestId);
+  }
 
   /**
    * Start (or re-start) the user's bot and register its webhook.
@@ -443,39 +475,71 @@ export class BotRunnerService {
     // Tag console output produced by the project's webhook handler with
     // `[app:<projectId>]` so the log viewer can filter by project.
     return runWithProject(projectId, async () => {
-    let db: any = null;
     try {
-      delete require.cache[require.resolve(routesFile)];
-      const routeModule = require(routesFile);
-      if (typeof routeModule !== "function") return;
+      const mtime = fs.statSync(routesFile).mtimeMs;
+      const cached = this.webhookCache.get(projectId);
 
-      const runtimeDir = path.join(projectDir, deployment);
-      const backendDir = path.join(projectDir, deployment, "backend");
-      const envFilePath = path.join(backendDir, ".env");
-      const envVars = fs.existsSync(envFilePath)
-        ? dotenv.parse(fs.readFileSync(envFilePath))
-        : {};
+      let db: any;
+      let projectRouter: any;
 
-      const dataDir = path.join(runtimeDir, "data");
-      fs.mkdirSync(dataDir, { recursive: true });
-      const sqlite = new Database(path.join(dataDir, "app.db"));
-      sqlite.pragma("journal_mode = WAL");
-      sqlite.exec("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)");
+      if (cached && cached.mtime === mtime) {
+        // Reuse the existing sqlite connection and router — timers keep working
+        cached.lastUsed = Date.now();
+        db = cached.db;
+        projectRouter = cached.router;
+      } else {
+        // New deploy or first load — evict old entry, create fresh connection
+        this.evictWebhookEntry(projectId);
+        // Also clear require cache so updated routes.js is picked up
+        try { delete require.cache[require.resolve(routesFile)]; } catch {}
 
-      db = {
-        get(key: string) { const r = sqlite.prepare("SELECT value FROM kv WHERE key = ?").get(key) as any; return r ? JSON.parse(r.value) : null; },
-        set(key: string, value: any) { sqlite.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)").run(key, JSON.stringify(value)); },
-        getAll() { const rows = sqlite.prepare("SELECT key, value FROM kv").all() as any[]; const res: Record<string, any> = {}; for (const row of rows) res[row.key] = JSON.parse(row.value); return res; },
-        delete(key: string) { sqlite.prepare("DELETE FROM kv WHERE key = ?").run(key); },
-        keys() { return (sqlite.prepare("SELECT key FROM kv").all() as any[]).map((r: any) => r.key); },
-        close() { try { sqlite.close(); } catch {} },
-        botToken: token,
-        botUsername,
-        projectId,
-      };
+        const routeModule = require(routesFile);
+        if (typeof routeModule !== "function") return;
 
-      const projectRouter = Router();
-      routeModule(projectRouter, db, projectId, envVars);
+        const runtimeDir = path.join(projectDir, deployment);
+        const backendDir = path.join(projectDir, deployment, "backend");
+        const envFilePath = path.join(backendDir, ".env");
+        const envVars = fs.existsSync(envFilePath)
+          ? dotenv.parse(fs.readFileSync(envFilePath))
+          : {};
+        // Inject platform vars so routes.js can use the AF Bucket API
+        envVars.AF_INTERNAL_SECRET = config.internalSecret;
+        envVars.BASE_URL = config.baseUrl;
+        envVars.PROJECT_ID = projectId;
+        envVars.INTERNAL_BASE_URL = `http://localhost:${config.port}`;
+
+        const dataDir = path.join(runtimeDir, "data");
+        fs.mkdirSync(dataDir, { recursive: true });
+        const sqlite = new Database(path.join(dataDir, "app.db"));
+        sqlite.pragma("journal_mode = WAL");
+        sqlite.exec("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)");
+
+        db = {
+          get(key: string) { try { const r = sqlite.prepare("SELECT value FROM kv WHERE key = ?").get(key) as any; return r ? JSON.parse(r.value) : null; } catch { return null; } },
+          set(key: string, value: any) { try { sqlite.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)").run(key, JSON.stringify(value)); } catch { } },
+          getAll() { try { const rows = sqlite.prepare("SELECT key, value FROM kv").all() as any[]; const res: Record<string, any> = {}; for (const row of rows) res[row.key] = JSON.parse(row.value); return res; } catch { return {}; } },
+          delete(key: string) { try { sqlite.prepare("DELETE FROM kv WHERE key = ?").run(key); } catch { } },
+          keys() { try { return (sqlite.prepare("SELECT key FROM kv").all() as any[]).map((r: any) => r.key); } catch { return []; } },
+          close() { try { sqlite.close(); } catch {} },
+          botToken: token,
+          botUsername,
+          projectId,
+        };
+
+        projectRouter = Router();
+        routeModule(projectRouter, db, projectId, envVars);
+
+        // Notify any live db-update hooks registered by routes.js (e.g. _arenaSchedulerSetDb)
+        const g = global as any;
+        for (const key of Object.keys(g)) {
+          if (key.startsWith("_") && key.endsWith("SetDb") && typeof g[key] === "function") {
+            try { g[key](db); } catch {}
+          }
+        }
+
+        this.evictLruIfNeeded();
+        this.webhookCache.set(projectId, { mtime, sqlite, db, router: projectRouter, lastUsed: Date.now() });
+      }
 
       const fakeReq = {
         method: "POST",
@@ -558,9 +622,9 @@ export class BotRunnerService {
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
 
-      db.close();
+      // Do NOT close the sqlite here — the connection is kept alive in webhookCache
+      // so that timers registered by routes.js can keep using the db without errors.
     } catch (err: any) {
-      if (db) try { db.close(); } catch {}
       throw err;
     }
     });

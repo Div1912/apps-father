@@ -49,7 +49,6 @@ const translations: Record<Lang, Record<string, string>> = {
     btn_settings: "Settings",
     btn_remove: "Remove",
     btn_admin_panel: "Admin Panel",
-    btn_edit_code: "Edit Code",
     btn_describe_app: "Describe Your App",
     btn_transfer: "Transfer Ownership",
 
@@ -77,9 +76,6 @@ const translations: Record<Lang, Record<string, string>> = {
     feature_admin_panel_desc: "Unlock the Admin Panel for your app",
     feature_disable_splash: "Disable Splash",
     feature_disable_splash_desc: "Remove the 'Made by Apps Father' splash screen",
-    feature_get_code: "Get Code",
-    feature_get_code_desc: "Access and edit the source code of your app",
-
     // Help
     help_title: "Apps Father Help",
     help_body: "I create Telegram Mini Apps for you using AI.\n\n<b>How it works:</b>\n1. Create a new project\n2. A new bot will be created for your app\n3. Describe what your app should do\n4. I'll generate a plan for you to review\n5. Approve the plan and I'll build the app\n6. Test your app via the bot's Launch button\n7. Request updates and improvements anytime\n\n<b>Features:</b>\n• AI-generated Mini Apps with database &amp; backend\n• Send images to use as design references\n• AI-powered improvement suggestions\n• Version management &amp; releases\n• Admin analytics panel for each project",
@@ -284,11 +280,6 @@ const translations: Record<Lang, Record<string, string>> = {
     wallet_saved_detail: "<b>Address:</b>\n<code>{address}</code>\n\nYour app will receive TON payments to this wallet.",
     wallet_error: "Failed to save wallet. Please try again.",
 
-    // Code editor
-    code_editor: "Code Editor",
-    code_editor_body: "Open the editor to view and modify your project files:",
-    btn_open_editor: "Open Editor",
-
     // Admin
     open_admin: "Open admin panel:",
 
@@ -339,7 +330,7 @@ const translations: Record<Lang, Record<string, string>> = {
     retention_bot_body: "Your bot is ready — now it just needs an idea!\n\nOpen the app and describe what you want to build. One sentence is enough — the AI takes care of the rest: backend, payments, UI, deploy.\n\n<i>It really takes a couple of minutes.</i>",
     retention_plan_title: "<b>{name}</b> is ready to be built 🔥",
     retention_plan_body: "We've prepared a plan for <b>{name}</b> — it's a great idea and you're literally one tap away from a live Telegram app.\n\nJust hit the <b>Build</b> button and the AI will assemble it for you.",
-    retention_plan_bonus: "🎁 First deposit bonus: get +100% credits on your first top-up — double the credits to launch your app. Don't miss it.",
+    retention_plan_bonus: "🎁 First deposit bonus: get +50% credits on your first top-up — 1.5× the credits to launch your app. Don't miss it.",
     sys_fixing_error: "Fixing error...",
     sys_autofix_failed: "Auto-fix failed",
     sys_build_failed: "Build failed",
@@ -396,7 +387,6 @@ const translations: Record<Lang, Record<string, string>> = {
     btn_settings: "Настройки",
     btn_remove: "Удалить",
     btn_admin_panel: "Админ панель",
-    btn_edit_code: "Редактор кода",
     btn_describe_app: "Описать приложение",
     btn_transfer: "Передать владение",
 
@@ -421,9 +411,6 @@ const translations: Record<Lang, Record<string, string>> = {
     feature_admin_panel_desc: "Открыть админ-панель для приложения",
     feature_disable_splash: "Убрать заставку",
     feature_disable_splash_desc: "Удалить экран 'Made by Apps Father'",
-    feature_get_code: "Получить код",
-    feature_get_code_desc: "Доступ к исходному коду приложения",
-
     help_title: "Помощь Apps Father",
     help_body: "Я создаю Telegram мини-приложения с помощью ИИ.\n\n<b>Как это работает:</b>\n1. Создайте новый проект\n2. Будет создан бот для вашего приложения\n3. Опишите, что должно делать приложение\n4. Я сгенерирую план на проверку\n5. Одобрите план, и я соберу приложение\n6. Протестируйте через кнопку Launch бота\n7. Запрашивайте обновления в любое время\n\n<b>Возможности:</b>\n• ИИ-приложения с базой данных и бэкендом\n• Отправляйте изображения как образцы дизайна\n• ИИ-предложения по улучшению\n• Управление версиями и релизами\n• Админ-панель аналитики для каждого проекта",
     btn_guide: "Руководство",
@@ -610,10 +597,6 @@ const translations: Record<Lang, Record<string, string>> = {
     wallet_saved_detail: "<b>Адрес:</b>\n<code>{address}</code>\n\nВаше приложение будет получать TON-платежи на этот кошелёк.",
     wallet_error: "Не удалось сохранить. Попробуйте снова.",
 
-    code_editor: "Редактор кода",
-    code_editor_body: "Откройте редактор для просмотра и изменения файлов проекта:",
-    btn_open_editor: "Открыть редактор",
-
     open_admin: "Открыть админ панель:",
 
     ai_question: "Вопрос от ИИ:",
@@ -712,7 +695,6 @@ const translations: Record<Lang, Record<string, string>> = {
     btn_settings: "Налаштування",
     btn_remove: "Видалити",
     btn_admin_panel: "Адмін панель",
-    btn_edit_code: "Редактор коду",
     btn_describe_app: "Описати додаток",
     btn_transfer: "Передати власність",
 
@@ -737,9 +719,6 @@ const translations: Record<Lang, Record<string, string>> = {
     feature_admin_panel_desc: "Відкрити адмін-панель для додатка",
     feature_disable_splash: "Прибрати заставку",
     feature_disable_splash_desc: "Видалити екран 'Made by Apps Father'",
-    feature_get_code: "Отримати код",
-    feature_get_code_desc: "Доступ до вихідного коду додатка",
-
     help_title: "Допомога Apps Father",
     help_body: "Я створюю Telegram міні-додатки за допомогою ШІ.\n\n<b>Як це працює:</b>\n1. Створіть новий проєкт\n2. Буде створено бота для вашого додатка\n3. Опишіть, що має робити додаток\n4. Я згенерую план на перевірку\n5. Затвердіть план, і я зберу додаток\n6. Протестуйте через кнопку Launch бота\n7. Запитуйте оновлення у будь-який час\n\n<b>Можливості:</b>\n• ШІ-додатки з базою даних та бекендом\n• Надсилайте зображення як зразки дизайну\n• ШІ-пропозиції покращення\n• Управління версіями та релізами\n• Адмін-панель аналітики для кожного проєкту",
     btn_guide: "Інструкція",
@@ -926,10 +905,6 @@ const translations: Record<Lang, Record<string, string>> = {
     wallet_saved_detail: "<b>Адреса:</b>\n<code>{address}</code>\n\nВаш додаток буде отримувати TON-платежі на цей гаманець.",
     wallet_error: "Не вдалося зберегти. Спробуйте ще раз.",
 
-    code_editor: "Редактор коду",
-    code_editor_body: "Відкрийте редактор для перегляду та зміни файлів проєкту:",
-    btn_open_editor: "Відкрити редактор",
-
     open_admin: "Відкрити адмін панель:",
 
     ai_question: "Запитання від ШІ:",
@@ -1020,7 +995,6 @@ const FEATURE_KEYS: Record<string, { label: string; desc: string }> = {
   ton_payment: { label: "feature_ton_payment", desc: "feature_ton_payment_desc" },
   admin_panel: { label: "feature_admin_panel", desc: "feature_admin_panel_desc" },
   disable_splash: { label: "feature_disable_splash", desc: "feature_disable_splash_desc" },
-  get_code: { label: "feature_get_code", desc: "feature_get_code_desc" },
 };
 
 export function translateFeatureLabel(lang: Lang, featureId: string): string | null {

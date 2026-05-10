@@ -7,6 +7,7 @@ import Database from "better-sqlite3";
 import { projectService } from "../services/project.service";
 import { decryptToken } from "../services/crypto.service";
 import { runWithProject } from "../services/console-tagger.service";
+import { config } from "../config";
 
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
 
@@ -108,6 +109,11 @@ async function initProjectWs(projectId: string, isDev: boolean): Promise<Project
   const envVars = fs.existsSync(envFilePath)
     ? dotenv.parse(fs.readFileSync(envFilePath))
     : {};
+  // Inject platform vars so routes.js can use the AF Bucket API
+  envVars.AF_INTERNAL_SECRET = config.internalSecret;
+  envVars.BASE_URL = config.baseUrl;
+  envVars.PROJECT_ID = projectId;
+  envVars.INTERNAL_BASE_URL = `http://localhost:${config.port}`;
   const state: ProjectWsState = {
     clients: new Set(),
     connectionHandler: null,

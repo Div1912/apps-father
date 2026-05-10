@@ -104,9 +104,6 @@ export function projectActionsKeyboard(projectId: string, status: string, featur
     if (features.includes("admin_panel")) {
       extraRow.push({ text: t(lang, "btn_admin_panel"), callback_data: `admin:${projectId}`, icon_custom_emoji_id: EMOJI.setting });
     }
-    if (features.includes("get_code")) {
-      extraRow.push({ text: t(lang, "btn_edit_code"), callback_data: `edit_code:${projectId}`, icon_custom_emoji_id: EMOJI.setting });
-    }
     if (extraRow.length > 0) rows.push(extraRow);
 
     rows.push([

@@ -10,6 +10,6 @@
     "env":  true,
     "deps":  true,
     "playwright":  true,
-    "env_idx":  0,
+    "env_idx":  1,
     "admin":  true
 }

@@ -57,7 +57,6 @@
             </div>
           </div>
           <div class="actions">
-            <a class="btn btn-sm" href="/editor/${encodeURIComponent(p.id)}/" target="_blank">Open editor</a>
             <a class="btn btn-sm" href="/app/${encodeURIComponent(p.id)}/" target="_blank">Open app</a>
             <button class="btn btn-sm btn-ghost" id="copy-id">Copy ID</button>
           </div>

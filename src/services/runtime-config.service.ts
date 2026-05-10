@@ -308,7 +308,7 @@ const DEFAULTS: RuntimeConfig = {
   minTopup: 2,
   maxAgentIterations: 60,
 
-  firstTopupBonusPercent: 100,
+  firstTopupBonusPercent: 50,
   referralBonusPercent: 15,
   referralBonusUsd: 0,
   partnerDefaultPercent: 10,
@@ -385,7 +385,7 @@ class RuntimeConfigService {
 
         // Migrate legacy bonus field
         if (raw && raw.firstTopupBonusUsd !== undefined && raw.firstTopupBonusPercent === undefined) {
-          raw.firstTopupBonusPercent = Number(raw.firstTopupBonusUsd) > 0 ? 100 : 0;
+          raw.firstTopupBonusPercent = Number(raw.firstTopupBonusUsd) > 0 ? 50 : 0;
           delete raw.firstTopupBonusUsd;
         }
 

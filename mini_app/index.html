@@ -17,7 +17,7 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <link href="bootstrap.min.css" rel="stylesheet">
   <link href="bootstrap-extra.css" rel="stylesheet">
-  <link href="styles.css?r=360" rel="stylesheet">
+  <link href="styles.css?r=400" rel="stylesheet">
   <script>
     window.op = window.op || function () { var n = []; return new Proxy(function () { arguments.length && n.push([].slice.call(arguments)) }, { get: function (t, r) { return "q" === r ? n : function () { n.push([r].concat([].slice.call(arguments))) } }, has: function (t, r) { return "q" === r } }) }();
     window.op('init', {
@@ -177,7 +177,7 @@
 
         <section class="tm-section">
           <div class="tm-section-header">
-            <h2 class="tm-section-header-text" id="apps-header-count">My Apps</h2>
+            <h2 class="tm-section-header-text" id="apps-header-count" data-i18n="my_apps">My Apps</h2>
           </div>
           <div class="tm-table-wrap" id="app-list">
             <div class="loading-spinner"></div>
@@ -345,10 +345,10 @@
         <div class="rating-desc-wrap hidden" id="rating-desc-wrap">
           <div class="rating-field-group">
             <div class="rating-field-label" data-i18n="rating_desc_label">What went wrong?</div>
-            <textarea class="rating-desc" id="rating-desc" rows="4" minlength="100" maxlength="2000"
+            <textarea class="rating-desc" id="rating-desc" rows="4" maxlength="2000"
               data-i18n-placeholder="rating_desc_placeholder"
-              placeholder="Minimum 100 characters. Be specific so we can improve the agent."></textarea>
-            <div class="rating-desc-counter" id="rating-desc-counter">0 / 100</div>
+              placeholder="Be specific so we can fix it."></textarea>
+            <div class="rating-desc-counter" id="rating-desc-counter"></div>
           </div>
         </div>
 
@@ -406,20 +406,20 @@
                 d="M20.42 4.58a5.4 5.4 0 0 0-7.65 0l-.77.78-.77-.78a5.4 5.4 0 0 0-7.65 0C1.46 6.7 1.33 10.28 4 13l8 8 8-8c2.67-2.72 2.54-6.3.42-8.42z" />
             </svg>
           </div>
-          <h1 class="tm-main-intro-header">Partnership Program</h1>
+          <h1 class="tm-main-intro-header" data-i18n="partner_title">Partnership Program</h1>
           <p class="tm-main-intro-text" style="max-width:312px;" id="partner-subtitle"></p>
         </section>
         <section class="tm-section tm-menu-items" id="partner-link-section">
           <div class="tm-section-header">
-            <h2 class="tm-section-header-text">Invite Link</h2>
+            <h2 class="tm-section-header-text" data-i18n="partner_invite_link_label">Invite Link</h2>
           </div>
           <div class="tm-api-token-wrap">
             <div class="tm-api-token" style="overflow:hidden; margin-bottom:8px">
               <div id="partner-link-text"></div>
             </div>
             <div class="tm-api-token-actions" style="gap:8px; margin-top:8px">
-              <div class="tm-active-button" id="btn-copy-partner-link">Copy</div>
-              <div class="tm-active-button" id="btn-share-partner-link">Share</div>
+              <div class="tm-active-button" id="btn-copy-partner-link" data-i18n="partner_copy">Copy</div>
+              <div class="tm-active-button" id="btn-share-partner-link" data-i18n="partner_share">Share</div>
             </div>
           </div>
         </section>
@@ -428,22 +428,22 @@
         </section>
         <section class="tm-section tm-menu-items" id="partner-actions-section">
           <div class="tm-section-header">
-            <h2 class="tm-section-header-text">Actions</h2>
+            <h2 class="tm-section-header-text" data-i18n="partner_actions_label">Actions</h2>
           </div>
           <div class="tm-table-wrap">
             <a class="tm-row tm-row-link" id="btn-partner-transfer">
               <span class="tm-icon af-icon-wallet"></span>
-              <span>Transfer to App Balance</span>
+              <span data-i18n="partner_transfer_title">Transfer to App Balance</span>
             </a>
             <a class="tm-row tm-row-link" id="btn-partner-withdraw">
               <span class="tm-icon af-icon-send"></span>
-              <span>Withdraw</span>
+              <span data-i18n="partner_withdraw_title">Withdraw</span>
             </a>
           </div>
         </section>
         <section class="tm-section tm-menu-items" id="partner-referrals-section">
           <div class="tm-section-header">
-            <h2 class="tm-section-header-text">Referrals</h2>
+            <h2 class="tm-section-header-text" data-i18n="partner_referrals_label">Referrals</h2>
           </div>
           <div id="partner-referrals-list" style="width: 100%;"></div>
         </section>
@@ -877,20 +877,20 @@
       </div>
 
       <!-- ── Bot connection block (FIRST on the page) ──────────────── -->
-      <div class="as3-section-label">Connection</div>
+      <div class="as3-section-label" data-i18n="as3_connection_label">Connection</div>
       <div class="as3-bot-block" id="section-token">
         <div id="token-wrap" class="as3-bot-wrap" style="display:none">
           <div class="as3-bot-row" id="webapp-url-row" style="display:none">
-            <span class="as3-bot-label">Web App URL</span>
+            <span class="as3-bot-label" data-i18n="as3_webapp_url_label">Web App URL</span>
             <div class="js-spoiler spoiler-active" id="webapp-url-spoiler"><span id="webapp-url-text"></span></div>
           </div>
           <div class="as3-bot-row">
-            <span class="as3-bot-label">Bot Token</span>
+            <span class="as3-bot-label" data-i18n="as3_bot_token_label">Bot Token</span>
             <div class="js-spoiler spoiler-active" id="token-spoiler"><span id="token-text"></span></div>
           </div>
         </div>
         <div id="detail-bot-actions" class="as3-bot-actions"></div>
-        <p class="as3-bot-hint" id="token-help-text" style="display:none">Keep this token secure — it grants full bot control.</p>
+        <p class="as3-bot-hint" id="token-help-text" data-i18n="as3_bot_hint" style="display:none">Keep this token secure — it grants full bot control.</p>
       </div>
 
       <!-- ── Publishing in App Store (fancy status panel) ──────────── -->
@@ -898,8 +898,8 @@
         <div class="as3-publish-glow"></div>
         <div class="as3-publish-head">
           <div class="as3-publish-title">
-            <span>Publishing in App Store</span>
-            <div class="as3-publish-status-pill" id="as3-publish-status-pill">Draft</div>
+            <span data-i18n="as3_publish_title">Publishing in App Store</span>
+            <div class="as3-publish-status-pill" id="as3-publish-status-pill" data-i18n="as3_status_draft">Draft</div>
           </div>
           <div class="as3-publish-progress">
             <div class="as3-publish-progress-track">
@@ -914,28 +914,28 @@
           <div class="as3-check" data-check="created">
             <div class="as3-check-mark"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
             <div class="as3-check-body">
-              <div class="as3-check-title">App Created</div>
-              <div class="as3-check-sub" id="as3-check-created-sub">Project exists</div>
+              <div class="as3-check-title" data-i18n="as3_check_created_title">App Created</div>
+              <div class="as3-check-sub" id="as3-check-created-sub" data-i18n="as3_check_created">Project exists</div>
             </div>
           </div>
           <div class="as3-check" data-check="bot">
             <div class="as3-check-mark"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
             <div class="as3-check-body">
-              <div class="as3-check-title">Bot Connected</div>
+              <div class="as3-check-title" data-i18n="as3_check_bot_title">Bot Connected</div>
               <div class="as3-check-sub" id="as3-check-bot-sub">—</div>
             </div>
           </div>
           <div class="as3-check" data-check="info">
             <div class="as3-check-mark"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
             <div class="as3-check-body">
-              <div class="as3-check-title">App Information</div>
+              <div class="as3-check-title" data-i18n="as3_check_info_title">App Information</div>
               <div class="as3-check-sub" id="as3-check-info-sub">—</div>
             </div>
           </div>
           <div class="as3-check" data-check="token">
             <div class="as3-check-mark"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
             <div class="as3-check-body">
-              <div class="as3-check-title">App Token</div>
+              <div class="as3-check-title" data-i18n="as3_check_token_title">App Token</div>
               <div class="as3-check-sub" id="as3-check-token-sub">—</div>
             </div>
           </div>
@@ -945,30 +945,30 @@
         <div class="as3-rejection" id="as3-rejection" style="display:none">
           <div class="as3-rejection-head">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            Submission rejected
+            <span data-i18n="as3_rejected_head">Submission rejected</span>
           </div>
           <div class="as3-rejection-reason" id="as3-rejection-reason"></div>
         </div>
 
         <!-- Submit / Resubmit / View button -->
-        <button class="as3-publish-btn" id="as3-publish-btn">Send for Review</button>
+        <button class="as3-publish-btn" id="as3-publish-btn" data-i18n="as3_btn_submit">Send for Review</button>
       </div>
 
       <!-- ── Main menu (clean button list) ─────────────────────────── -->
-      <div class="as3-section-label">Settings</div>
+      <div class="as3-section-label" data-i18n="as3_settings_label">Settings</div>
       <div class="as3-menu" id="as3-menu-main">
         <button class="as3-row" id="as3-row-info">
           <span class="as3-row-icon as3-row-icon--blue">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
           </span>
-          <span class="as3-row-label">App Information</span>
+          <span class="as3-row-label" data-i18n="as3_row_info_label">App Information</span>
           <span class="as3-row-chev"></span>
         </button>
         <button class="as3-row" id="as3-row-token">
           <span class="as3-row-icon as3-row-icon--gold">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9 9h4.5a2.5 2.5 0 0 1 0 5H9"/><path d="M9 14h5.5a2.5 2.5 0 0 1 0 5H9"/><path d="M9 5v14"/></svg>
           </span>
-          <span class="as3-row-label">App Token</span>
+          <span class="as3-row-label" data-i18n="as3_row_token_label">App Token</span>
           <span class="as3-row-meta" id="as3-row-token-meta"></span>
           <span class="as3-row-chev"></span>
         </button>
@@ -976,47 +976,47 @@
           <span class="as3-row-icon as3-row-icon--purple">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           </span>
-          <span class="as3-row-label">Versions</span>
+          <span class="as3-row-label" data-i18n="as3_row_versions_label">Versions</span>
           <span class="as3-row-chev"></span>
         </button>
         <button class="as3-row" id="as3-row-paid">
           <span class="as3-row-icon as3-row-icon--green">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
           </span>
-          <span class="as3-row-label">Paid Functions</span>
+          <span class="as3-row-label" data-i18n="as3_row_paid_label">Paid Functions</span>
           <span class="as3-row-chev"></span>
         </button>
         <button class="as3-row" id="as3-row-env">
           <span class="as3-row-icon as3-row-icon--teal">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
           </span>
-          <span class="as3-row-label">Environment Variables</span>
+          <span class="as3-row-label" data-i18n="as3_row_env_label">Environment Variables</span>
           <span class="as3-row-chev"></span>
         </button>
         <button class="as3-row" id="as3-row-bucket">
           <span class="as3-row-icon as3-row-icon--orange">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
           </span>
-          <span class="as3-row-label">File Bucket</span>
+          <span class="as3-row-label" data-i18n="as3_row_bucket_label">File Bucket</span>
           <span class="as3-row-chev"></span>
         </button>
       </div>
 
       <!-- ── Danger zone ────────────────────────────────────────────── -->
-      <div class="as3-section-label">Danger zone</div>
+      <div class="as3-section-label" data-i18n="as3_danger_label">Danger zone</div>
       <div class="as3-menu as3-menu--danger">
         <button class="as3-row" id="as3-row-transfer">
           <span class="as3-row-icon as3-row-icon--warn">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
           </span>
-          <span class="as3-row-label">Transfer Ownership</span>
+          <span class="as3-row-label" data-i18n="as3_row_transfer_label">Transfer Ownership</span>
           <span class="as3-row-chev"></span>
         </button>
         <button class="as3-row as3-row--destructive" id="as3-row-delete">
           <span class="as3-row-icon as3-row-icon--danger">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
           </span>
-          <span class="as3-row-label">Delete App</span>
+          <span class="as3-row-label" data-i18n="as3_row_delete_label">Delete App</span>
           <span class="as3-row-chev"></span>
         </button>
       </div>
@@ -1265,7 +1265,7 @@
         </div>
       </div>
     </div>
-    <video class="processing-video" id="processing-video" autoplay loop muted playsinline>
+    <video class="processing-video" id="processing-video" autoplay loop muted playsinline preload="auto">
       <source src="/telegram-mini-app/processing.mp4" type="video/mp4">
     </video>
     <div class="chat-input-area" id="chat-input-area">
@@ -1386,8 +1386,8 @@
     </div>
   </div>
 
-  <script src="i18n.js?r=350" defer></script>
-  <script src="app.js?r=350" defer></script>
+  <script src="i18n.js?r=400" defer></script>
+  <script src="app.js?r=400" defer></script>
   <script>
     function initAnalytics() {
       window.telegramAnalytics.init({
@@ -1495,23 +1495,23 @@
   <div id="view-store" class="view-container hidden">
     <main class="tm-main store-main">
       <section class="store-hero-v2">
-        <div class="store-hero-eyebrow">App Store</div>
-        <h1 class="store-hero-title-v2">Discover apps</h1>
-        <p class="store-hero-sub-v2">Built by creators, owned by you. Open and trade their tokens.</p>
+        <div class="store-hero-eyebrow" data-i18n="store_eyebrow">App Store</div>
+        <h1 class="store-hero-title-v2" data-i18n="store_hero_title">Discover apps</h1>
+        <p class="store-hero-sub-v2" data-i18n="store_hero_sub">Built by creators, owned by you. Open and trade their tokens.</p>
       </section>
 
       <section class="store-tabs-row">
         <button class="store-tab active" data-tab="trending">
           <span class="store-tab-icon"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24"><path fill="currentColor" d="m16.85 6.85l1.44 1.44l-4.88 4.88l-3.29-3.29a.996.996 0 0 0-1.41 0l-6 6.01a.996.996 0 1 0 1.41 1.41L9.41 12l3.29 3.29c.39.39 1.02.39 1.41 0l5.59-5.58l1.44 1.44a.5.5 0 0 0 .85-.35V6.5a.48.48 0 0 0-.49-.5h-4.29a.5.5 0 0 0-.36.85"/></svg></span>
-          <span>Trending</span>
+          <span data-i18n="store_tab_trending">Trending</span>
         </button>
         <button class="store-tab" data-tab="new">
           <span class="store-tab-icon"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 16 16"><path fill="currentColor" d="M3.75 10.999h4.5a.75.75 0 0 1 .102 1.493l-.102.007h-4.5a.75.75 0 0 1-.102-1.493zh4.5zm1.47-5.78a.75.75 0 0 1 .976-.072l.084.073l3.5 3.5a.75.75 0 0 1-.976 1.133L8.72 9.78l-3.5-3.5a.75.75 0 0 1 0-1.06M11.75 3a.75.75 0 0 1 .743.648l.007.102v4.5a.75.75 0 0 1-1.493.102L11 8.25v-4.5a.75.75 0 0 1 .75-.75"/></svg></span>
-          <span>New</span>
+          <span data-i18n="store_tab_new">New</span>
         </button>
         <button class="store-tab" data-tab="top">
           <span class="store-tab-icon"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24"><path fill="currentColor" d="M3 21q-.425 0-.712-.288T2 20V10q0-.425.288-.712T3 9h3.5q.425 0 .713.288T7.5 10v10q0 .425-.288.713T6.5 21zm7.25 0q-.425 0-.712-.288T9.25 20V4q0-.425.288-.712T10.25 3h3.5q.425 0 .713.288T14.75 4v16q0 .425-.288.713T13.75 21zm7.25 0q-.425 0-.712-.288T16.5 20v-8q0-.425.288-.712T17.5 11H21q.425 0 .713.288T22 12v8q0 .425-.288.713T21 21z"/></svg></span>
-          <span>Top</span>
+          <span data-i18n="store_tab_top">Top</span>
         </button>
       </section>
 
@@ -1519,17 +1519,17 @@
         <span class="store-search-icon">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         </span>
-        <input type="search" id="store-search" class="store-search-input" placeholder="Search apps, tickers..." autocomplete="off" spellcheck="false">
+        <input type="search" id="store-search" class="store-search-input" data-i18n="store_search_placeholder" placeholder="Search apps, tickers..." autocomplete="off" spellcheck="false">
       </section>
 
       <section class="store-list-section">
         <div id="store-featured" class="store-featured" style="display:none"></div>
         <div class="store-list-header" id="store-list-header" style="display:none">
-          <span class="store-list-header-title">All apps</span>
+          <span class="store-list-header-title" data-i18n="store_all_apps">All apps</span>
           <span class="store-list-header-count" id="store-list-count"></span>
         </div>
         <div id="store-list" class="store-list">
-          <div class="store-loading">Loading…</div>
+          <div class="store-loading" data-i18n="store_loading">Loading…</div>
         </div>
       </section>
     </main>
@@ -1553,7 +1553,7 @@
           <div id="store-detail-tagline" class="store-d-tagline">—</div>
           <div class="store-d-hero-row">
             <button id="store-d-open-app" class="store-d-open-btn">
-              <span>Open App</span>
+              <span data-i18n="store_d_open_app">Open App</span>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
             </button>
             <div id="store-detail-ticker-pill" class="store-d-ticker-pill">$—</div>
@@ -1564,32 +1564,32 @@
       <!-- Quick stats bar -->
       <section class="store-d-quickbar">
         <div class="store-d-quickbar-item">
-          <div class="store-d-quickbar-label">Price</div>
+          <div class="store-d-quickbar-label" data-i18n="store_d_price">Price</div>
           <div class="store-d-quickbar-val" id="store-d-stat-price">—</div>
           <div class="store-d-quickbar-sub" id="store-d-stat-price-sub"></div>
         </div>
         <div class="store-d-quickbar-divider"></div>
         <div class="store-d-quickbar-item">
-          <div class="store-d-quickbar-label">Market Cap</div>
+          <div class="store-d-quickbar-label" data-i18n="store_d_mcap">Market Cap</div>
           <div class="store-d-quickbar-val" id="store-d-stat-mcap">—</div>
         </div>
         <div class="store-d-quickbar-divider"></div>
         <div class="store-d-quickbar-item">
-          <div class="store-d-quickbar-label">Holders</div>
+          <div class="store-d-quickbar-label" data-i18n="store_d_holders">Holders</div>
           <div class="store-d-quickbar-val" id="store-d-stat-holders">—</div>
         </div>
       </section>
 
       <!-- About / description — now above screenshots -->
       <section class="store-d-section">
-        <div class="store-d-section-title">About this app</div>
+        <div class="store-d-section-title" data-i18n="store_d_about_title">About this app</div>
         <div id="store-detail-desc" class="store-d-desc"></div>
-        <button id="store-d-desc-toggle" class="store-d-desc-toggle" style="display:none">Read more</button>
+        <button id="store-d-desc-toggle" class="store-d-desc-toggle" data-i18n="store_d_read_more" style="display:none">Read more</button>
       </section>
 
       <!-- Screenshots — full-width swipeable carousel -->
       <section class="store-d-section store-d-section-screens" id="store-detail-screens-section">
-        <div class="store-d-section-title">Preview</div>
+        <div class="store-d-section-title" data-i18n="store_d_preview">Preview</div>
         <div class="store-d-screens-wrap">
           <div id="store-detail-screens" class="store-d-screens"></div>
           <div id="store-detail-screens-dots" class="store-d-screens-dots"></div>
@@ -1599,7 +1599,7 @@
       <!-- Token chart with timeframe tabs -->
       <section class="store-d-section">
         <div class="store-d-chart-header">
-          <div class="store-d-section-title" style="margin:0">Token chart</div>
+          <div class="store-d-section-title" style="margin:0" data-i18n="store_d_chart_title">Token chart</div>
           <div class="store-d-chart-modes">
             <button class="store-d-chart-mode active" data-tf="1h">1h</button>
             <button class="store-d-chart-mode" data-tf="4h">4h</button>
@@ -1615,61 +1615,61 @@
           <div id="store-d-chart-ohlc" class="store-d-chart-ohlc" style="display:none"></div>
           <div class="store-d-chart-canvas-wrap">
             <canvas id="store-detail-chart"></canvas>
-            <div id="store-d-chart-empty" class="store-d-chart-empty" style="display:none">No trades yet — be the first!</div>
+            <div id="store-d-chart-empty" class="store-d-chart-empty" data-i18n="store_d_no_trades" style="display:none">No trades yet — be the first!</div>
           </div>
         </div>
       </section>
 
       <!-- Token info card -->
       <section class="store-d-section">
-        <div class="store-d-section-title">Token info</div>
+        <div class="store-d-section-title" data-i18n="store_d_token_info">Token info</div>
         <div class="store-d-token-card">
-          <div class="store-d-token-row"><span>Symbol</span><b id="store-d-token-symbol">—</b></div>
-          <div class="store-d-token-row"><span>Total supply</span><b id="store-d-token-supply">—</b></div>
-          <div class="store-d-token-row"><span>In circulation</span><b id="store-d-token-sold">—</b></div>
-          <div class="store-d-token-row"><span>24h volume</span><b id="store-d-token-vol">—</b></div>
-          <div class="store-d-token-row" id="store-d-token-owner-row" style="display:none"><span>Token owner</span><a id="store-d-token-owner" target="_blank" class="store-d-token-link">—</a></div>
-          <div class="store-d-token-row" id="store-d-token-addr-row" style="display:none"><span>Contract</span><a id="store-d-token-addr" target="_blank" class="store-d-token-link">—</a></div>
+          <div class="store-d-token-row"><span data-i18n="store_d_symbol">Symbol</span><b id="store-d-token-symbol">—</b></div>
+          <div class="store-d-token-row"><span data-i18n="store_d_supply">Total supply</span><b id="store-d-token-supply">—</b></div>
+          <div class="store-d-token-row"><span data-i18n="store_d_circulation">In circulation</span><b id="store-d-token-sold">—</b></div>
+          <div class="store-d-token-row"><span data-i18n="store_d_volume">24h volume</span><b id="store-d-token-vol">—</b></div>
+          <div class="store-d-token-row" id="store-d-token-owner-row" style="display:none"><span data-i18n="store_d_token_owner">Token owner</span><a id="store-d-token-owner" target="_blank" class="store-d-token-link">—</a></div>
+          <div class="store-d-token-row" id="store-d-token-addr-row" style="display:none"><span data-i18n="store_d_contract">Contract</span><a id="store-d-token-addr" target="_blank" class="store-d-token-link">—</a></div>
         </div>
       </section>
 
       <!-- Liquidity Pool card -->
       <section class="store-d-section" id="store-d-liquidity-section" style="display:none">
-        <div class="store-d-section-title">Liquidity pool</div>
+        <div class="store-d-section-title" data-i18n="store_d_liq_title">Liquidity pool</div>
         <div class="store-d-liquidity-card">
           <div class="store-d-liq-stats">
             <div class="store-d-liq-stat">
-              <div class="store-d-liq-stat-label">TON in pool</div>
+              <div class="store-d-liq-stat-label" data-i18n="store_d_ton_pool">TON in pool</div>
               <div class="store-d-liq-stat-val" id="store-d-liq-ton">—</div>
             </div>
             <div class="store-d-liq-stat">
-              <div class="store-d-liq-stat-label">Tokens in pool</div>
+              <div class="store-d-liq-stat-label" data-i18n="store_d_tokens_pool">Tokens in pool</div>
               <div class="store-d-liq-stat-val" id="store-d-liq-tokens">—</div>
             </div>
             <div class="store-d-liq-stat">
-              <div class="store-d-liq-stat-label">LP owners</div>
+              <div class="store-d-liq-stat-label" data-i18n="store_d_lp_owners">LP owners</div>
               <div class="store-d-liq-stat-val" id="store-d-liq-providers">—</div>
             </div>
           </div>
           <div class="store-d-liq-mine" id="store-d-liq-mine" style="display:none">
-            <div class="store-d-liq-mine-header">Your position</div>
+            <div class="store-d-liq-mine-header" data-i18n="store_d_your_position">Your position</div>
             <div class="store-d-liq-mine-body">
-              <div><span>Share</span><b id="store-d-liq-mine-pct">—</b></div>
-              <div><span>Worth</span><b id="store-d-liq-mine-worth">—</b></div>
+              <div><span data-i18n="store_d_share">Share</span><b id="store-d-liq-mine-pct">—</b></div>
+              <div><span data-i18n="store_d_worth">Worth</span><b id="store-d-liq-mine-worth">—</b></div>
             </div>
             <div class="store-d-liq-mine-actions">
-              <button id="store-d-liq-add" class="store-d-liq-btn add">＋ Add liquidity</button>
-              <button id="store-d-liq-remove" class="store-d-liq-btn remove">－ Remove</button>
+              <button id="store-d-liq-add" class="store-d-liq-btn add" data-i18n="store_d_add_liq">＋ Add liquidity</button>
+              <button id="store-d-liq-remove" class="store-d-liq-btn remove" data-i18n="store_d_remove_liq">－ Remove</button>
             </div>
           </div>
-          <div class="store-d-liq-cta" id="store-d-liq-connect-cta">
+          <div class="store-d-liq-cta" id="store-d-liq-connect-cta" data-i18n="store_d_connect_wallet_liq">
             Connect your wallet to see your liquidity position.
           </div>
         </div>
       </section>
 
       <section class="store-d-section" id="store-detail-socials-section" style="display:none">
-        <div class="store-d-section-title">Links</div>
+        <div class="store-d-section-title" data-i18n="store_d_links">Links</div>
         <div id="store-detail-socials" class="store-d-socials"></div>
       </section>
 
@@ -1685,13 +1685,13 @@
         <button class="pf2-back-btn" id="pf2-info-back-btn">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
-        <div class="pf2-topbar-title">App Information</div>
-        <button class="pf2-save-btn" id="pf2-info-save-btn">Save</button>
+        <div class="pf2-topbar-title" data-i18n="pf2_topbar_title">App Information</div>
+        <button class="pf2-save-btn" id="pf2-info-save-btn" data-i18n="pf2_save_btn">Save</button>
       </div>
 
       <div class="pf2-section">
         <div class="pf2-section-head">
-          <div class="pf2-section-title">Main Information</div>
+          <div class="pf2-section-title" data-i18n="pf2_main_info_title">Main Information</div>
           <div class="pf2-lang-tabs">
             <button class="pf2-lang-tab pf2-lang-tab--active" data-lang="en">EN</button>
             <button class="pf2-lang-tab" data-lang="ru">RU</button>
@@ -1708,92 +1708,92 @@
             <input type="file" id="pf2-avatar-input" accept="image/*" style="display:none">
           </label>
           <div class="pf2-avatar-info">
-            <div class="pf2-field-label">App Avatar</div>
-            <div class="pf2-field-hint">Tap to upload or replace.</div>
+            <div class="pf2-field-label" data-i18n="pf2_avatar_label">App Avatar</div>
+            <div class="pf2-field-hint" data-i18n="pf2_avatar_hint">Tap to upload or replace.</div>
           </div>
         </div>
 
         <div class="pf2-field">
           <div class="pf2-field-label-row">
-            <span class="pf2-field-label">Name</span>
+              <span class="pf2-field-label" data-i18n="pf2_name_label">Name</span>
             <span class="pf2-field-counter" id="pf2-name-counter">32</span>
           </div>
-          <input type="text" id="pf2-name" class="pf2-input" placeholder="App name" maxlength="32" autocomplete="off">
+          <input type="text" id="pf2-name" class="pf2-input" placeholder="App name" data-i18n="pf2_name_placeholder" maxlength="32" autocomplete="off">
         </div>
 
         <div class="pf2-field">
           <div class="pf2-field-label-row">
-            <span class="pf2-field-label">Short Description</span>
+              <span class="pf2-field-label" data-i18n="pf2_short_label">Short Description</span>
             <span class="pf2-field-counter" id="pf2-short-counter">120</span>
           </div>
-          <input type="text" id="pf2-short" class="pf2-input" placeholder="One-line summary of your app" maxlength="120" autocomplete="off">
+          <input type="text" id="pf2-short" class="pf2-input" placeholder="One-line summary of your app" data-i18n="pf2_short_placeholder" maxlength="120" autocomplete="off">
         </div>
 
         <div class="pf2-field">
           <div class="pf2-field-label-row">
-            <span class="pf2-field-label">Long Description</span>
+              <span class="pf2-field-label" data-i18n="pf2_long_label">Long Description</span>
             <span class="pf2-field-counter" id="pf2-long-counter">2000</span>
           </div>
-          <textarea id="pf2-long" class="pf2-input pf2-textarea" placeholder="What does your app do?" maxlength="2000" rows="5"></textarea>
+          <textarea id="pf2-long" class="pf2-input pf2-textarea" placeholder="What does your app do?" data-i18n="pf2_long_placeholder" maxlength="2000" rows="5"></textarea>
         </div>
 
         <div class="pf2-field">
           <div class="pf2-field-label-row">
-            <span class="pf2-field-label">Banner</span>
-            <span class="pf2-field-hint-inline">1600×900 px recommended</span>
+              <span class="pf2-field-label" data-i18n="pf2_banner_label_field">Banner</span>
+            <span class="pf2-field-hint-inline" data-i18n="pf2_banner_hint_size">1600×900 px recommended</span>
           </div>
           <label class="pf2-banner-wrap" id="pf2-banner-label">
             <img id="pf2-banner-img" alt="">
             <div class="pf2-banner-empty" id="pf2-banner-empty">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 16l5-5 4 4 3-3 6 6"/></svg>
-              <span>Upload banner</span>
+              <span data-i18n="pf2_banner_upload">Upload banner</span>
             </div>
             <input type="file" id="pf2-banner-input" accept="image/*" style="display:none">
           </label>
-          <button class="pf2-remove-btn" id="pf2-banner-remove" style="display:none">Remove banner</button>
+          <button class="pf2-remove-btn" id="pf2-banner-remove" data-i18n="pf2_banner_remove" style="display:none">Remove banner</button>
         </div>
 
         <div class="pf2-field">
           <div class="pf2-field-label-row">
-            <span class="pf2-field-label">Screenshots</span>
+              <span class="pf2-field-label" data-i18n="pf2_shots_label">Screenshots</span>
             <span class="pf2-field-counter" id="pf2-shots-counter">0 / 6</span>
           </div>
           <div class="pf2-shots-grid" id="pf2-shots-grid"></div>
           <label class="pf2-add-media-btn">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            Add screenshot
+            <span data-i18n="pf2_add_screenshot">Add screenshot</span>
             <input type="file" id="pf2-shots-input" accept="image/*" multiple style="display:none">
           </label>
         </div>
       </div>
 
       <div class="pf2-section">
-        <div class="pf2-section-title">Additional Information</div>
+        <div class="pf2-section-title" data-i18n="pf2_additional_title">Additional Information</div>
 
         <div class="pf2-field">
-          <div class="pf2-field-label">Category</div>
+          <div class="pf2-field-label" data-i18n="pf2_category_label">Category</div>
           <div class="pf2-chips" id="pf2-categories"></div>
         </div>
 
         <div class="pf2-field">
           <div class="pf2-field-label-row">
-            <span class="pf2-field-label">Tags</span>
+              <span class="pf2-field-label" data-i18n="pf2_tags_label">Tags</span>
             <span class="pf2-field-counter" id="pf2-tags-counter">0 / 10</span>
           </div>
           <div class="pf2-tag-row">
-            <input type="text" id="pf2-tag-input" class="pf2-input" placeholder="Add a tag" maxlength="24" autocomplete="off">
-            <button class="pf2-tag-add-btn" id="pf2-tag-add">Add</button>
+            <input type="text" id="pf2-tag-input" class="pf2-input" placeholder="Add a tag" data-i18n="pf2_tag_placeholder" maxlength="24" autocomplete="off">
+            <button class="pf2-tag-add-btn" id="pf2-tag-add" data-i18n="pf2_tag_add_btn">Add</button>
           </div>
           <div class="pf2-tag-list" id="pf2-tag-list"></div>
-          <div class="pf2-field-hint">At least 3 tags help users find your app</div>
+          <div class="pf2-field-hint" data-i18n="pf2_tags_hint">At least 3 tags help users find your app</div>
         </div>
       </div>
 
       <div class="pf2-section">
-        <div class="pf2-section-title">Socials</div>
+        <div class="pf2-section-title" data-i18n="pf2_socials_title">Socials</div>
 
         <div class="pf2-field">
-          <div class="pf2-field-label">Telegram Channel / Group</div>
+          <div class="pf2-field-label" data-i18n="pf2_tg_label">Telegram Channel / Group</div>
           <div class="pf2-input-icon-wrap">
             <span class="pf2-input-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.562 8.248-1.97 9.289c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.833.932z"/></svg>
@@ -1803,7 +1803,7 @@
         </div>
 
         <div class="pf2-field">
-          <div class="pf2-field-label">X / Twitter</div>
+          <div class="pf2-field-label" data-i18n="pf2_twitter_label">X / Twitter</div>
           <div class="pf2-input-icon-wrap">
             <span class="pf2-input-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.747l7.73-8.835L1.254 2.25H8.08l4.253 5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
@@ -1813,7 +1813,7 @@
         </div>
 
         <div class="pf2-field">
-          <div class="pf2-field-label">Website</div>
+          <div class="pf2-field-label" data-i18n="pf2_website_label">Website</div>
           <div class="pf2-input-icon-wrap">
             <span class="pf2-input-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
@@ -1825,7 +1825,7 @@
 
       <div class="pf2-submit-area">
         <div class="pf2-submit-msg" id="pf2-info-msg" style="display:none"></div>
-        <button class="pf2-submit-btn" id="pf2-info-submit-btn">Save Changes</button>
+        <button class="pf2-submit-btn" id="pf2-info-submit-btn" data-i18n="pf2_save_changes_btn">Save Changes</button>
       </div>
 
     </main>
@@ -1833,7 +1833,7 @@
     <!-- Generate by AI floating button -->
     <button class="pf2-ai-fab" id="pf2-ai-fab-btn">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/></svg>
-      Generate by AI
+      <span data-i18n="pf2_ai_fab">Generate by AI</span>
     </button>
   </div>
 
@@ -1846,50 +1846,50 @@
         <div class="pf2-ai-header">
           <div class="pf2-ai-title">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/></svg>
-            Generate by AI
+            <span data-i18n="pf2_ai_title">Generate by AI</span>
           </div>
           <button class="pf2-ai-close" id="pf2-ai-close">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
-        <div class="pf2-ai-desc">Select what to generate. Existing content will be replaced.</div>
+        <div class="pf2-ai-desc" data-i18n="pf2_ai_desc">Select what to generate. Existing content will be replaced.</div>
         <div class="pf2-ai-checklist" id="pf2-ai-checklist">
           <label class="pf2-ai-item">
             <input type="checkbox" value="texts" checked>
             <span class="pf2-ai-item-icon">✍️</span>
             <div class="pf2-ai-item-text">
-              <div class="pf2-ai-item-label">Texts (all languages)</div>
-              <div class="pf2-ai-item-hint">Name, descriptions, tags, category · EN / RU / UA</div>
+              <div class="pf2-ai-item-label" data-i18n="pf2_ai_texts_label">Texts (all languages)</div>
+              <div class="pf2-ai-item-hint" data-i18n="pf2_ai_texts_hint">Name, descriptions, tags, category · EN / RU / UA</div>
             </div>
           </label>
           <label class="pf2-ai-item">
             <input type="checkbox" value="avatar" checked>
             <span class="pf2-ai-item-icon">🎨</span>
             <div class="pf2-ai-item-text">
-              <div class="pf2-ai-item-label">App Avatar</div>
-              <div class="pf2-ai-item-hint">AI-generated icon image</div>
+              <div class="pf2-ai-item-label" data-i18n="pf2_ai_avatar_label">App Avatar</div>
+              <div class="pf2-ai-item-hint" data-i18n="pf2_ai_avatar_hint">AI-generated icon image</div>
             </div>
           </label>
           <label class="pf2-ai-item">
             <input type="checkbox" value="banner" checked>
             <span class="pf2-ai-item-icon">🖼️</span>
             <div class="pf2-ai-item-text">
-              <div class="pf2-ai-item-label">Banner</div>
-              <div class="pf2-ai-item-hint">AI-generated wide banner image</div>
+              <div class="pf2-ai-item-label" data-i18n="pf2_ai_banner_label">Banner</div>
+              <div class="pf2-ai-item-hint" data-i18n="pf2_ai_banner_hint">AI-generated wide banner image</div>
             </div>
           </label>
           <label class="pf2-ai-item">
             <input type="checkbox" value="screenshots" checked>
             <span class="pf2-ai-item-icon">📸</span>
             <div class="pf2-ai-item-text">
-              <div class="pf2-ai-item-label">Screenshots (×4)</div>
-              <div class="pf2-ai-item-hint">Visual test of your live app</div>
+              <div class="pf2-ai-item-label" data-i18n="pf2_ai_shots_label">Screenshots (×4)</div>
+              <div class="pf2-ai-item-hint" data-i18n="pf2_ai_shots_hint">Visual test of your live app</div>
             </div>
           </label>
         </div>
         <button class="pf2-ai-execute-btn" id="pf2-ai-execute-btn">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-          Generate
+          <span data-i18n="pf2_ai_generate_btn">Generate</span>
         </button>
       </div>
 
@@ -1898,18 +1898,18 @@
         <div class="pf2-ai-header">
           <div class="pf2-ai-title">
             <span class="pf2-ai-spinner"></span>
-            Generating…
+            <span data-i18n="pf2_ai_generating">Generating…</span>
           </div>
         </div>
         <div class="pf2-ai-warn">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-          Please don't close the app until generation is complete
+          <span data-i18n="pf2_ai_warn">Please don't close the app until generation is complete</span>
         </div>
         <div class="pf2-ai-steps" id="pf2-ai-steps"></div>
         <div class="pf2-ai-progress-wrap">
           <div class="pf2-ai-progress-bar" id="pf2-ai-progress-bar"></div>
         </div>
-        <div class="pf2-ai-progress-msg" id="pf2-ai-progress-msg">Starting…</div>
+        <div class="pf2-ai-progress-msg" id="pf2-ai-progress-msg" data-i18n="pf2_ai_progress_start">Starting…</div>
       </div>
 
       <!-- Done state -->
@@ -1917,11 +1917,11 @@
         <div class="pf2-ai-header">
           <div class="pf2-ai-title pf2-ai-title--done">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-            Generation complete!
+            <span data-i18n="pf2_ai_done_title">Generation complete!</span>
           </div>
         </div>
         <div class="pf2-ai-done-list" id="pf2-ai-done-list"></div>
-        <button class="pf2-ai-execute-btn pf2-ai-execute-btn--ok" id="pf2-ai-done-btn">View Results</button>
+        <button class="pf2-ai-execute-btn pf2-ai-execute-btn--ok" id="pf2-ai-done-btn" data-i18n="pf2_ai_view_results">View Results</button>
       </div>
     </div>
   </div>
@@ -1934,8 +1934,8 @@
         <button class="pf2-back-btn" id="pf2-token-back-btn">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
-        <div class="pf2-topbar-title">App Token</div>
-        <div class="pf2-status-badge" id="pf2-token-status-badge">New</div>
+        <div class="pf2-topbar-title" data-i18n="tk_topbar_title">App Token</div>
+        <div class="pf2-status-badge" id="pf2-token-status-badge" data-i18n="tk_new_badge">New</div>
       </div>
 
       <!-- Token created (read-only) view -->
@@ -1949,30 +1949,30 @@
           <div class="tk-created-ticker" id="tk-created-ticker">$—</div>
           <div class="tk-created-pill">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-            Token created &amp; locked
+            <span data-i18n="tk_locked_pill">Token created &amp; locked</span>
           </div>
         </div>
         <div class="tk-stat-grid">
           <div class="tk-stat-cell">
-            <div class="tk-stat-label">Emission</div>
+            <div class="tk-stat-label" data-i18n="tk_emission_label">Emission</div>
             <div class="tk-stat-val">1,000,000</div>
           </div>
           <div class="tk-stat-cell">
-            <div class="tk-stat-label">Locked</div>
+            <div class="tk-stat-label" data-i18n="tk_locked_label">Locked</div>
             <div class="tk-stat-val">100,000</div>
           </div>
           <div class="tk-stat-cell">
-            <div class="tk-stat-label">Initial Liquidity</div>
+            <div class="tk-stat-label" data-i18n="tk_initial_liq_label">Initial Liquidity</div>
             <div class="tk-stat-val" id="tk-stat-liquidity">— TON</div>
           </div>
           <div class="tk-stat-cell">
-            <div class="tk-stat-label">Status</div>
-            <div class="tk-stat-val tk-stat-val--green">Live</div>
+            <div class="tk-stat-label" data-i18n="tk_status_label">Status</div>
+            <div class="tk-stat-val tk-stat-val--green" data-i18n="tk_status_live">Live</div>
           </div>
         </div>
         <div class="tk-info-box">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-          <span>Token settings are locked. You can buy your own token to add liquidity from the App Store page.</span>
+          <span data-i18n="tk_info_box">Token settings are locked. You can buy your own token to add liquidity from the App Store page.</span>
         </div>
       </div>
 
@@ -1980,7 +1980,7 @@
       <div class="tk-create" id="tk-create">
 
         <div class="pf2-section">
-          <div class="pf2-section-title">Token Details</div>
+          <div class="pf2-section-title" data-i18n="tk_details_title">Token Details</div>
 
           <div class="pf2-token-hero">
             <div class="pf2-token-icon" id="tk-icon">
@@ -1989,34 +1989,34 @@
             </div>
             <div class="pf2-token-hero-body">
               <div class="pf2-field-label" id="tk-name-display">—</div>
-              <div class="pf2-field-hint">Icon copied from App Avatar automatically</div>
+              <div class="pf2-field-hint" data-i18n="tk_icon_hint">Icon copied from App Avatar automatically</div>
             </div>
           </div>
 
           <div class="pf2-field">
             <div class="pf2-field-label-row">
-              <span class="pf2-field-label">Ticker</span>
+              <span class="pf2-field-label" data-i18n="tk_ticker_label">Ticker</span>
               <span class="pf2-field-counter" id="tk-ticker-counter">10</span>
             </div>
             <div class="pf2-ticker-wrap">
               <span class="pf2-ticker-dollar">$</span>
               <input type="text" id="tk-ticker" class="pf2-input pf2-input--ticker" placeholder="MYAPP" maxlength="10" autocomplete="off" spellcheck="false">
             </div>
-            <div class="pf2-field-hint">3–10 letters. Cannot be changed after creation.</div>
+            <div class="pf2-field-hint" data-i18n="tk_ticker_hint">3–10 letters. Cannot be changed after creation.</div>
           </div>
 
           <div class="pf2-locked-row">
             <div class="pf2-locked-cell">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
               <div class="pf2-locked-body">
-                <div class="pf2-locked-label">Emission</div>
+                <div class="pf2-locked-label" data-i18n="tk_emission_label">Emission</div>
                 <div class="pf2-locked-val">1,000,000</div>
               </div>
             </div>
             <div class="pf2-locked-cell">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
               <div class="pf2-locked-body">
-                <div class="pf2-locked-label">Tokens to lock</div>
+                <div class="pf2-locked-label" data-i18n="tk_tokens_to_lock">Tokens to lock</div>
                 <div class="pf2-locked-val">10% <span class="pf2-locked-sub">= 100k</span></div>
               </div>
             </div>
@@ -2024,8 +2024,8 @@
 
           <div class="pf2-field">
             <div class="pf2-field-label-row">
-              <span class="pf2-field-label">Initial Liquidity</span>
-              <span class="pf2-field-hint-inline">min 5 TON</span>
+              <span class="pf2-field-label" data-i18n="tk_initial_liq_label">Initial Liquidity</span>
+              <span class="pf2-field-hint-inline" data-i18n="tk_liq_min">min 5 TON</span>
             </div>
             <div class="pf2-liq-wrap">
               <input type="number" id="tk-liquidity" class="pf2-input" min="5" step="0.5" value="5">
@@ -2034,16 +2034,16 @@
           </div>
 
           <div class="tk-balance-card">
-            <div class="tk-balance-label">Your TON Balance</div>
+            <div class="tk-balance-label" data-i18n="tk_balance_label">Your TON Balance</div>
             <div class="tk-balance-value" id="tk-balance">— TON</div>
-            <button class="tk-balance-topup" id="tk-balance-topup">Top up</button>
+            <button class="tk-balance-topup" id="tk-balance-topup" data-i18n="tk_topup_btn">Top up</button>
           </div>
         </div>
 
         <div class="pf2-submit-area">
           <div class="pf2-submit-msg" id="tk-msg" style="display:none"></div>
           <button class="pf2-submit-btn" id="tk-create-btn">Create Token (5 TON)</button>
-          <div class="pf2-submit-hint">The liquidity amount will be deducted from your TON balance and locked in the pool. This cannot be undone.</div>
+          <div class="pf2-submit-hint" data-i18n="tk_liq_hint">The liquidity amount will be deducted from your TON balance and locked in the pool. This cannot be undone.</div>
         </div>
 
       </div>
@@ -2123,7 +2123,7 @@
   <div id="view-portfolio" class="view-container hidden">
     <main class="tm-main portfolio-main">
       <section class="tm-main-intro">
-        <h1 class="tm-main-intro-header">My Portfolio</h1>
+          <h1 class="tm-main-intro-header" data-i18n="portfolio_title">My Portfolio</h1>
         <p class="tm-main-intro-text" id="portfolio-summary">—</p>
       </section>
       <section class="store-list-section">
@@ -2152,7 +2152,7 @@
           </button>
           <button class="wal2-topbar-pill" id="wal2-connect-pill">
             <span class="wal2-topbar-pill-dot" id="wal2-connect-dot"></span>
-            <span class="wal2-topbar-pill-text" id="wal2-connect-pill-text">Connect Wallet</span>
+            <span class="wal2-topbar-pill-text" id="wal2-connect-pill-text" data-i18n="wal2_connect">Connect Wallet</span>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
           <button class="wal2-topbar-btn" id="wal2-search-btn" title="Search">
@@ -2172,26 +2172,26 @@
             <span class="wal2-action-icon">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24"><g fill="#fff" fill-rule="evenodd" clip-rule="evenodd"><path d="M5 14.997a.75.75 0 0 1 .75.75V18c0 .138.112.25.25.25h12a.25.25 0 0 0 .25-.25v-2.253a.75.75 0 0 1 1.5 0V18A1.75 1.75 0 0 1 18 19.75H6A1.75 1.75 0 0 1 4.25 18v-2.253a.75.75 0 0 1 .75-.75M12.202 4.25a.75.75 0 0 1 .75.75v8.086a.75.75 0 0 1-1.5 0V5a.75.75 0 0 1 .75-.75"/><path d="M8.322 10.626a.75.75 0 0 1 1.06-.013l2.82 2.755l2.82-2.755a.75.75 0 1 1 1.048 1.073l-3.344 3.267a.75.75 0 0 1-1.048 0l-3.344-3.267a.75.75 0 0 1-.012-1.06"/></g></svg>
             </span>
-            <span>Receive</span>
+            <span data-i18n="wal2_receive">Receive</span>
           </button>
           <button class="wal2-action" id="wal2-send-btn">
             <span class="wal2-action-icon">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24"><path fill="#fff" d="M4.4 19.425q-.5.2-.95-.088T3 18.5V14l8-2l-8-2V5.5q0-.55.45-.837t.95-.088l15.4 6.5q.625.275.625.925t-.625.925z"/></svg>
             </span>
-            <span>Send</span>
+            <span data-i18n="wal2_send">Send</span>
           </button>
           <button class="wal2-action" id="wal2-swap-btn">
             <span class="wal2-action-icon">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24"><path fill="#fff" d="M21.5 9a6.5 6.5 0 0 1-4 6.002V15A8.5 8.5 0 0 0 9 6.5h-.002A6.502 6.502 0 0 1 21.5 9M7 3a4 4 0 0 0-4 4v1.5h2V7a2 2 0 0 1 2-2h1.5V3zm12 12.5V17a2 2 0 0 1-2 2h-1.5v2H17a4 4 0 0 0 4-4v-1.5zm-10 6a6.5 6.5 0 1 0 0-13a6.5 6.5 0 0 0 0 13m0-9l2.5 2.5L9 17.5L6.5 15z"/></svg>
             </span>
-            <span>Swap</span>
+            <span data-i18n="wal2_swap">Swap</span>
           </button>
         </div>
       </div>
 
       <!-- ── Token list ───────────────────────────────────────────── -->
       <div class="wal2-tokens" id="wal2-tokens-list">
-        <div class="wal2-loading">Loading…</div>
+        <div class="wal2-loading" data-i18n="wal2_loading">Loading…</div>
       </div>
 
       <!-- Hidden legacy nodes for older code paths -->
@@ -2217,14 +2217,14 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24"><path fill="#1aa6fe" d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12s12-5.373 12-12S18.627 0 12 0M7.902 6.697h8.196c1.505 0 2.462 1.628 1.705 2.94l-5.059 8.765a.86.86 0 0 1-1.488 0L6.199 9.637c-.758-1.314.197-2.94 1.703-2.94m4.844 1.496v7.58l1.102-2.128l2.656-4.756a.465.465 0 0 0-.408-.696zM7.9 8.195a.464.464 0 0 0-.408.694l2.658 4.754l1.102 2.13V8.195z"/></svg>
           </div>
           <div>
-            <div class="topup-modal-title" id="topup-modal-title">Top Up Wallet</div>
-            <div class="topup-modal-sub">Send TON from your wallet</div>
+            <div class="topup-modal-title" id="topup-modal-title" data-i18n="topup_modal_title_wallet">Top Up Wallet</div>
+            <div class="topup-modal-sub" data-i18n="topup_modal_sub">Send TON from your wallet</div>
           </div>
         </div>
 
         <!-- Amount input -->
         <div class="topup-amount-wrap" id="topup-idle-section">
-          <div class="topup-amount-label">Amount (TON)</div>
+          <div class="topup-amount-label" data-i18n="topup_amount_label">Amount (TON)</div>
           <div class="topup-amount-row">
             <input
               id="topup-amount-input"
@@ -2249,8 +2249,8 @@
         <!-- Sending state -->
         <div class="topup-state topup-state--sending" id="topup-state-sending" style="display:none">
           <div class="topup-state-spinner"></div>
-          <div class="topup-state-text">Confirm in your wallet…</div>
-          <div class="topup-state-sub">Waiting for on-chain confirmation</div>
+          <div class="topup-state-text" data-i18n="topup_state_confirm">Confirm in your wallet…</div>
+          <div class="topup-state-sub" data-i18n="topup_state_confirm_sub">Waiting for on-chain confirmation</div>
         </div>
 
         <!-- Success state -->
@@ -2258,20 +2258,81 @@
           <div class="topup-state-check">
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </div>
-          <div class="topup-state-text">Top-up confirmed!</div>
+          <div class="topup-state-text" data-i18n="topup_state_success_text">Top-up confirmed!</div>
           <div class="topup-state-sub" id="topup-state-success-sub"></div>
         </div>
 
         <!-- Actions -->
         <div class="topup-modal-actions" id="topup-idle-actions">
-          <button class="topup-btn-cancel" id="topup-btn-cancel">Cancel</button>
+          <button class="topup-btn-cancel" id="topup-btn-cancel" data-i18n="topup_btn_cancel">Cancel</button>
           <button class="topup-btn-send" id="topup-btn-send">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"><g fill="#fff" fill-rule="evenodd" clip-rule="evenodd"><path d="M5 14.997a.75.75 0 0 1 .75.75V18c0 .138.112.25.25.25h12a.25.25 0 0 0 .25-.25v-2.253a.75.75 0 0 1 1.5 0V18A1.75 1.75 0 0 1 18 19.75H6A1.75 1.75 0 0 1 4.25 18v-2.253a.75.75 0 0 1 .75-.75M12.202 4.25a.75.75 0 0 1 .75.75v8.086a.75.75 0 0 1-1.5 0V5a.75.75 0 0 1 .75-.75"/><path d="M8.322 10.626a.75.75 0 0 1 1.06-.013l2.82 2.755l2.82-2.755a.75.75 0 1 1 1.048 1.073l-3.344 3.267a.75.75 0 0 1-1.048 0l-3.344-3.267a.75.75 0 0 1-.012-1.06"/></g></svg>
-            Top Up
+            <span data-i18n="topup_btn_send">Top Up</span>
           </button>
         </div>
         <div class="topup-modal-actions" id="topup-success-actions" style="display:none">
-          <button class="topup-btn-send" id="topup-btn-done" style="flex:1">Done</button>
+          <button class="topup-btn-send" id="topup-btn-done" data-i18n="topup_btn_done" style="flex:1">Done</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Send (TON Withdrawal) modal ────────────────────────────────────── -->
+    <div id="send-modal" class="topup-modal" aria-hidden="true">
+      <div class="topup-modal-backdrop" id="send-modal-backdrop"></div>
+      <div class="topup-modal-sheet" role="dialog" aria-modal="true">
+        <div class="topup-modal-handle"></div>
+
+        <!-- Idle: amount input -->
+        <div id="send-idle-section">
+          <div class="topup-modal-head">
+            <div class="topup-modal-icon">
+              <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24"><path fill="#1aa6fe" d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12s12-5.373 12-12S18.627 0 12 0M7.902 6.697h8.196c1.505 0 2.462 1.628 1.705 2.94l-5.059 8.765a.86.86 0 0 1-1.488 0L6.199 9.637c-.758-1.314.197-2.94 1.703-2.94m4.844 1.496v7.58l1.102-2.128l2.656-4.756a.465.465 0 0 0-.408-.696zM7.9 8.195a.464.464 0 0 0-.408.694l2.658 4.754l1.102 2.13V8.195z"/></svg>
+            </div>
+            <div>
+              <div class="topup-modal-title" data-i18n="send_modal_title">Send TON</div>
+              <div class="topup-modal-sub" id="send-modal-address">—</div>
+            </div>
+          </div>
+
+          <div class="topup-amount-wrap">
+            <div class="topup-amount-label" data-i18n="send_amount_label">Amount (TON)</div>
+            <div class="topup-amount-row">
+              <input id="send-amount-input" class="topup-amount-input" type="number" min="0.01" step="0.01" placeholder="0.00" inputmode="decimal" />
+              <span class="topup-amount-currency">TON</span>
+            </div>
+            <div class="send-balance-row">
+              <span data-i18n="send_balance_label">Balance:</span>
+              <span id="send-balance-display">— TON</span>
+              <button id="send-max-btn" class="send-max-btn" data-i18n="send_max_btn">Max</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Submitting state -->
+        <div class="topup-state topup-state--sending" id="send-state-submitting" style="display:none">
+          <div class="topup-state-spinner"></div>
+          <div class="topup-state-text" data-i18n="send_submitting">Submitting request…</div>
+        </div>
+
+        <!-- Success state -->
+        <div class="topup-state topup-state--success" id="send-state-success" style="display:none">
+          <div class="topup-state-check">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          <div class="topup-state-text" data-i18n="send_success_title">Sent!</div>
+          <div class="topup-state-sub" data-i18n="send_success_sub">TON is being sent to your wallet. Check TON Space in a few minutes.</div>
+        </div>
+
+        <!-- Actions -->
+        <div class="topup-modal-actions" id="send-idle-actions">
+          <button class="topup-btn-cancel" id="send-btn-cancel" data-i18n="topup_btn_cancel">Cancel</button>
+          <button class="topup-btn-send" id="send-btn-submit">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"><path fill="#fff" d="M4.4 19.425q-.5.2-.95-.088T3 18.5V14l8-2l-8-2V5.5q0-.55.45-.837t.95-.088l15.4 6.5q.625.275.625.925t-.625.925z"/></svg>
+            <span data-i18n="send_btn_submit">Send</span>
+          </button>
+        </div>
+        <div class="topup-modal-actions" id="send-success-actions" style="display:none">
+          <button class="topup-btn-send" id="send-btn-done" data-i18n="topup_btn_done" style="flex:1">Done</button>
         </div>
       </div>
     </div>
@@ -2285,7 +2346,7 @@
         <button class="sw-icon-btn" id="sw-back-btn" aria-label="Back">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
         </button>
-        <div class="sw-title">Swap</div>
+        <div class="sw-title" data-i18n="swap_title">Swap</div>
         <button class="sw-icon-btn" id="sw-refresh-btn" aria-label="Refresh">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
         </button>
@@ -2294,7 +2355,7 @@
       <!-- FROM card -->
       <div class="sw-card" data-side="from">
         <div class="sw-card-row1">
-          <div class="sw-card-label">You send</div>
+          <div class="sw-card-label" data-i18n="swap_you_send">You send</div>
           <div class="sw-card-max" id="sw-from-max">Max: — TON</div>
         </div>
         <div class="sw-card-row2">
@@ -2320,14 +2381,14 @@
       <!-- TO card -->
       <div class="sw-card" data-side="to">
         <div class="sw-card-row1">
-          <div class="sw-card-label">You receive</div>
+          <div class="sw-card-label" data-i18n="swap_you_receive">You receive</div>
           <div class="sw-card-max" id="sw-to-bal"></div>
         </div>
         <div class="sw-card-row2">
           <input id="sw-to-input" class="sw-amount-input sw-amount-readonly" type="text" placeholder="0" readonly />
           <button class="sw-token-chip" id="sw-to-chip" type="button">
             <span class="sw-token-chip-icon" id="sw-to-icon"></span>
-            <span class="sw-token-chip-symbol" id="sw-to-symbol">Select</span>
+            <span class="sw-token-chip-symbol" id="sw-to-symbol" data-i18n="swap_select_token">Select</span>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
           </button>
         </div>
@@ -2342,11 +2403,11 @@
           <span id="sw-rate-text">—</span>
         </div>
         <div class="sw-details-row">
-          <span class="sw-details-label">Price impact</span>
+          <span class="sw-details-label" data-i18n="swap_price_impact">Price impact</span>
           <strong id="sw-detail-impact">—</strong>
         </div>
         <div class="sw-details-row">
-          <span class="sw-details-label">Fee</span>
+          <span class="sw-details-label" data-i18n="swap_fee">Fee</span>
           <strong id="sw-detail-fee">—</strong>
         </div>
       </div>
@@ -2357,7 +2418,7 @@
       <!-- Swipe to confirm -->
       <div class="sw-swipe-wrap" id="sw-swipe-wrap">
         <div class="sw-swipe-track" id="sw-swipe-track">
-          <span class="sw-swipe-label" id="sw-swipe-label">Swipe to swap</span>
+          <span class="sw-swipe-label" id="sw-swipe-label" data-i18n="swap_swipe_to_swap">Swipe to swap</span>
           <div class="sw-swipe-thumb" id="sw-swipe-thumb">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
           </div>
@@ -2372,14 +2433,14 @@
     <div class="sw-picker-sheet">
       <div class="sw-picker-handle"></div>
       <div class="sw-picker-head">
-        <div class="sw-picker-title">Select token</div>
+        <div class="sw-picker-title" data-i18n="swap_select_token_picker">Select token</div>
         <button class="sw-icon-btn" id="sw-picker-close" aria-label="Close">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
       </div>
       <div class="sw-picker-search">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-        <input id="sw-picker-search-input" type="text" placeholder="Search by name or symbol…" />
+        <input id="sw-picker-search-input" type="text" placeholder="Search by name or symbol…" data-i18n="swap_search_placeholder" />
       </div>
       <div class="sw-picker-list" id="sw-picker-list"></div>
     </div>
@@ -2413,8 +2474,8 @@
             </svg>
           </div>
           <div class="orh-text">
-            <div class="orh-title">Referral Program</div>
-            <div class="orh-desc">Invite friends &amp; earn rewards together</div>
+            <div class="orh-title" data-i18n="other_referral_title">Referral Program</div>
+            <div class="orh-desc" data-i18n="other_referral_desc">Invite friends &amp; earn rewards together</div>
           </div>
         </div>
         <div class="orh-arrow">
@@ -2433,8 +2494,8 @@
               <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
             </svg>
           </div>
-          <span class="other-tile-label">What's New</span>
-          <span class="other-tile-sub">Release notes</span>
+          <span class="other-tile-label" data-i18n="other_whats_new">What's New</span>
+          <span class="other-tile-sub" data-i18n="other_whats_new_sub">Release notes</span>
         </button>
 
         <button class="other-tile other-tile--gray" id="other-help-btn">
@@ -2444,8 +2505,8 @@
               <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>
             </svg>
           </div>
-          <span class="other-tile-label">Help</span>
-          <span class="other-tile-sub">Documentation</span>
+          <span class="other-tile-label" data-i18n="other_help">Help</span>
+          <span class="other-tile-sub" data-i18n="other_help_sub">Documentation</span>
         </button>
 
         <button class="other-tile other-tile--gray" id="other-language-btn">
@@ -2455,8 +2516,8 @@
               <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
             </svg>
           </div>
-          <span class="other-tile-label">Language</span>
-          <span class="other-tile-sub">App language</span>
+          <span class="other-tile-label" data-i18n="other_language">Language</span>
+          <span class="other-tile-sub" data-i18n="other_language_sub">App language</span>
         </button>
 
         <button class="other-tile other-tile--gray" id="other-support-btn">
@@ -2465,8 +2526,8 @@
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
             </svg>
           </div>
-          <span class="other-tile-label">Support</span>
-          <span class="other-tile-sub">Contact us</span>
+          <span class="other-tile-label" data-i18n="other_support">Support</span>
+          <span class="other-tile-sub" data-i18n="other_support_sub">Contact us</span>
         </button>
 
       </div>
@@ -2477,7 +2538,7 @@
           <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
         </div>
         <div class="other-footer-name">Apps Father</div>
-        <div class="other-footer-version" id="other-footer-version">v1.0</div>
+        <div class="other-footer-version" id="other-footer-version">v4.0.0</div>
       </div>
 
     </main>
@@ -2495,7 +2556,7 @@
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
               </span>
             </span>
-            <span class="bnav-label">Apps</span>
+            <span class="bnav-label" data-i18n="bnav_apps">Apps</span>
           </button>
         </li>
         <!-- Store -->
@@ -2506,7 +2567,7 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 13a5 5 0 0 1-5-5h2a3 3 0 0 0 3 3a3 3 0 0 0 3-3h2a5 5 0 0 1-5 5m0-10a3 3 0 0 1 3 3H9a3 3 0 0 1 3-3m7 3h-2a5 5 0 0 0-5-5a5 5 0 0 0-5 5H5c-1.11 0-2 .89-2 2v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2"/></svg>
               </span>
             </span>
-            <span class="bnav-label">Store</span>
+            <span class="bnav-label" data-i18n="bnav_store">Store</span>
           </button>
         </li>
         <!-- Wallet -->
@@ -2517,7 +2578,7 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M21.1 8.004q-.085-.005-.181-.004h-2.525c-2.068 0-3.837 1.628-3.837 3.75s1.77 3.75 3.837 3.75h2.525q.096.001.182-.004a1.755 1.755 0 0 0 1.645-1.628c.004-.06.004-.125.004-.185V9.817c0-.06 0-.125-.004-.185a1.755 1.755 0 0 0-1.645-1.628m-2.928 4.746c.532 0 .963-.448.963-1s-.431-1-.963-1c-.533 0-.964.448-.964 1s.431 1 .964 1"/><path fill-rule="evenodd" clip-rule="evenodd" d="M20.918 17a.22.22 0 0 1 .221.278c-.2.712-.519 1.32-1.03 1.83c-.749.75-1.698 1.081-2.87 1.239c-1.14.153-2.595.153-4.433.153h-2.112c-1.838 0-3.294 0-4.433-.153c-1.172-.158-2.121-.49-2.87-1.238c-.748-.749-1.08-1.698-1.238-2.87C2 15.099 2 13.644 2 11.806v-.112C2 9.856 2 8.4 2.153 7.26c.158-1.172.49-2.121 1.238-2.87c.749-.748 1.698-1.08 2.87-1.238C7.401 3 8.856 3 10.694 3h2.112c1.838 0 3.294 0 4.433.153c1.172.158 2.121.49 2.87 1.238c.511.512.83 1.119 1.03 1.831a.22.22 0 0 1-.221.278h-2.524c-2.837 0-5.337 2.24-5.337 5.25s2.5 5.25 5.337 5.25zM5.75 7a.75.75 0 0 0 0 1.5h4a.75.75 0 0 0 0-1.5z"/></svg>
               </span>
             </span>
-            <span class="bnav-label">Wallet</span>
+            <span class="bnav-label" data-i18n="bnav_wallet">Wallet</span>
           </button>
         </li>
         <!-- Other -->
@@ -2528,7 +2589,7 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 48 48"><defs><mask id="bnav-other-mask"><g fill="none"><path fill="#fff" stroke="#fff" stroke-linejoin="round" stroke-width="4" d="M24 44c11.046 0 20-8.954 20-20S35.046 4 24 4S4 12.954 4 24s8.954 20 20 20Z"/><circle cx="14" cy="24" r="3" fill="#000"/><circle cx="24" cy="24" r="3" fill="#000"/><circle cx="34" cy="24" r="3" fill="#000"/></g></mask></defs><path fill="currentColor" d="M0 0h48v48H0z" mask="url(#bnav-other-mask)"/></svg>
               </span>
             </span>
-            <span class="bnav-label">Other</span>
+            <span class="bnav-label" data-i18n="bnav_other">Other</span>
           </button>
         </li>
       </ul>

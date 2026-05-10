@@ -131,6 +131,12 @@
       <div class="dash-recent-title">Recent Usage</div>
       <div id="user-usage" style="margin-bottom:24px"></div>
 
+      <div class="dash-recent-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>Transactions</span>
+        <a id="user-ledger-full-link" href="#" style="font-size:12px;color:var(--admin-accent);text-decoration:none;font-weight:400">View in Ledger ↗</a>
+      </div>
+      <div id="user-ledger" style="margin-bottom:24px"></div>
+
       <div class="dash-recent-title">Notes</div>
       <div class="card" style="margin-bottom:24px;display:flex;flex-direction:column;gap:10px">
         <textarea class="textarea" id="note-body" placeholder="Add a note about this user (max 4000 chars)…"></textarea>
@@ -373,6 +379,71 @@
     } else {
       usageEl.innerHTML = `<div class="empty-state"><div class="big">·</div>No usage history</div>`;
     }
+
+    // ── Ledger ──────────────────────────────────────────────────────────
+    const ledgerEl = host.querySelector("#user-ledger");
+    const ledgerLink = host.querySelector("#user-ledger-full-link");
+    if (ledgerLink) {
+      ledgerLink.addEventListener("click", (e) => {
+        e.preventDefault();
+        ctx.push({ pageKey: "ledger" });
+      });
+    }
+
+    async function loadLedger() {
+      if (!ledgerEl) return;
+      ledgerEl.innerHTML = `<div class="loading-state" style="padding:18px"><div class="spinner"></div></div>`;
+      try {
+        const data = await Api.request("/users/" + userId + "/ledger?limit=50");
+        const rows = data.rows || [];
+        if (!rows.length) {
+          ledgerEl.innerHTML = `<div class="empty-state"><div class="big">·</div>No transactions yet</div>`;
+          return;
+        }
+        function fmtLedgerAmount(amount, currency) {
+          const pos = amount >= 0;
+          const sign = pos ? "+" : "";
+          const color = pos ? "#4ade80" : "#f87171";
+          const disp = Math.abs(amount) >= 0.0001 ? (Math.abs(amount) < 1 ? amount.toFixed(6) : amount.toFixed(2)) : amount.toExponential(3);
+          return `<span style="font-weight:700;color:${color};font-variant-numeric:tabular-nums">${sign}${disp}</span> <span style="color:var(--admin-muted);font-size:11px">${Fmt.escapeHtml(currency)}</span>`;
+        }
+        function sourceBadge(source) {
+          const label = source.replace(/_/g, " ");
+          return `<span class="badge">${Fmt.escapeHtml(label)}</span>`;
+        }
+        ledgerEl.innerHTML = `
+          <div class="tbl-wrap">
+            <table class="tbl">
+              <thead><tr><th>Date</th><th>Amount</th><th>Source</th><th>Meta</th></tr></thead>
+              <tbody>
+                ${rows.map(r => {
+                  const meta = r.meta && Object.keys(r.meta).length ? JSON.stringify(r.meta) : "";
+                  const metaHtml = meta
+                    ? `<span title="${Fmt.escapeHtml(meta)}" style="cursor:help;color:var(--admin-muted);font-size:11px">ⓘ</span>`
+                    : `<span style="color:var(--admin-muted)">—</span>`;
+                  const date = new Date(r.date);
+                  const dateStr = date.toLocaleDateString("en-GB", { day: "2-digit", month: "short" })
+                    + " " + date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+                  return `
+                    <tr>
+                      <td style="color:var(--admin-muted);font-size:11px;white-space:nowrap">${dateStr}</td>
+                      <td>${fmtLedgerAmount(r.amount, r.currency)}</td>
+                      <td>${sourceBadge(r.source)}</td>
+                      <td>${metaHtml}</td>
+                    </tr>`;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>
+          ${data.total > 50 ? `<div style="margin-top:6px;color:var(--admin-muted);font-size:11px">Showing first 50 of ${data.total.toLocaleString()} — <a href="#" id="user-ledger-more" style="color:var(--admin-accent);text-decoration:none">see all in Ledger</a></div>` : ""}
+        `;
+        const moreLink = ledgerEl.querySelector("#user-ledger-more");
+        if (moreLink) moreLink.addEventListener("click", (e) => { e.preventDefault(); ctx.push({ pageKey: "ledger" }); });
+      } catch (err) {
+        ledgerEl.innerHTML = `<div class="error-state" style="padding:12px">${Fmt.escapeHtml(err.message || "Failed to load transactions")}</div>`;
+      }
+    }
+    loadLedger();
 
     // ── Notes add ───────────────────────────────────────────────────────
     host.querySelector("#note-add").addEventListener("click", async () => {

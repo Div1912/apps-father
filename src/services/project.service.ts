@@ -21,7 +21,7 @@ export class ProjectService {
     // admin notification, and the random winner of the create decided
     // whether utm_source/referred_by were persisted (only /api/init passes
     // those, so the source data was being lost ~75% of the time).
-    const WELCOME_CREDITS = 50;
+    const WELCOME_CREDITS = 0;
     const createData: any = { telegramId: BigInt(telegramId), username, firstName, balance: 0, credits: WELCOME_CREDITS };
     if (referredBy && referredBy !== telegramId) {
       createData.referredBy = BigInt(referredBy);

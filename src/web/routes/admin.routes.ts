@@ -7,6 +7,7 @@ import { prisma } from "../../db";
 import { config } from "../../config";
 import { runtimeConfig } from "../../services/runtime-config.service";
 import { Decimal } from "@prisma/client/runtime/library";
+import { sendTon } from "../../services/wallet.service";
 import {
   listUsers,
   getUserDetail,
@@ -77,6 +78,12 @@ router.post("/api/login", (req: Request, res: Response) => {
 
 // All API routes below require auth
 router.use("/api", authMiddleware);
+
+// --- Server Uptime ---
+
+router.get("/api/uptime", (_req: Request, res: Response) => {
+  res.json({ uptimeSeconds: Math.floor(process.uptime()) });
+});
 
 // --- Dashboard Stats ---
 
@@ -2131,6 +2138,226 @@ router.delete("/api/agent-feedback/:id", async (req: Request<{ id: string }>, re
     res.status(err.status || 500).json({ error: err.message });
   }
 });
+
+// ── Balance Ledger API ──────────────────────────────────────────────────────
+
+/** GET /api/ledger?page=1&limit=50&userId=&currency=&source=&from=&to= */
+router.get("/api/ledger", async (req: Request, res: Response) => {
+  try {
+    const page = Math.max(1, parseInt(String(req.query.page ?? "1")));
+    const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? "50"))));
+    const skip = (page - 1) * limit;
+
+    const userId = req.query.userId ? parseInt(String(req.query.userId)) : undefined;
+    const currency = req.query.currency ? String(req.query.currency) : undefined;
+    const source = req.query.source ? String(req.query.source) : undefined;
+    const from = req.query.from ? new Date(String(req.query.from)) : undefined;
+    const to = req.query.to ? new Date(String(req.query.to)) : undefined;
+
+    const where: any = {};
+    if (userId && !isNaN(userId)) where.userId = userId;
+    if (currency) where.currency = currency;
+    if (source) where.source = source;
+    if (from || to) {
+      where.createdAt = {};
+      if (from) where.createdAt.gte = from;
+      if (to) where.createdAt.lte = to;
+    }
+
+    const [rows, total] = await Promise.all([
+      prisma.balanceLedger.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limit,
+        include: {
+          user: { select: { id: true, username: true, firstName: true, telegramId: true } },
+        },
+      }),
+      prisma.balanceLedger.count({ where }),
+    ]);
+
+    res.json({
+      rows: rows.map((r) => ({
+        id: r.id.toString(),
+        date: r.createdAt,
+        currency: r.currency,
+        amount: Number(r.amount),
+        source: r.source,
+        meta: r.meta,
+        user: r.user,
+      })),
+      total,
+      page,
+      limit,
+      pages: Math.ceil(total / limit),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** GET /api/users/:id/ledger?page=1&limit=50 */
+router.get("/api/users/:id/ledger", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const userId = parseInt(req.params.id);
+    if (isNaN(userId)) { res.status(400).json({ error: "Invalid user id" }); return; }
+
+    const page = Math.max(1, parseInt(String(req.query.page ?? "1")));
+    const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? "50"))));
+    const skip = (page - 1) * limit;
+
+    const [rows, total] = await Promise.all([
+      prisma.balanceLedger.findMany({
+        where: { userId },
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limit,
+      }),
+      prisma.balanceLedger.count({ where: { userId } }),
+    ]);
+
+    res.json({
+      rows: rows.map((r) => ({
+        id: r.id.toString(),
+        date: r.createdAt,
+        currency: r.currency,
+        amount: Number(r.amount),
+        source: r.source,
+        meta: r.meta,
+      })),
+      total,
+      page,
+      limit,
+      pages: Math.ceil(total / limit),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── TON Withdrawals ──────────────────────────────────────────────────────────
+
+/** GET /api/ton-withdrawals?status=pending&page=1&limit=50 */
+router.get("/api/ton-withdrawals", async (req: Request, res: Response) => {
+  try {
+    const statusFilter = String(req.query.status || "");
+    const page = Math.max(1, parseInt(String(req.query.page ?? "1")));
+    const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? "50"))));
+    const skip = (page - 1) * limit;
+
+    const where = statusFilter ? { status: statusFilter } : {};
+
+    const [rows, total] = await Promise.all([
+      prisma.tonWithdrawal.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limit,
+        include: {
+          user: { select: { id: true, telegramId: true, username: true, firstName: true } },
+        },
+      }),
+      prisma.tonWithdrawal.count({ where }),
+    ]);
+
+    res.json({
+      rows: rows.map((r) => ({
+        id: r.id,
+        userId: r.userId,
+        user: r.user,
+        amountTon: Number(r.amountTon),
+        tonAddress: r.tonAddress,
+        status: r.status,
+        txHash: r.txHash,
+        adminNote: r.adminNote,
+        createdAt: r.createdAt,
+        processedAt: r.processedAt,
+      })),
+      total,
+      page,
+      limit,
+      pages: Math.ceil(total / limit),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** POST /api/ton-withdrawals/:id/retry — re-attempt sendTon for a failed withdrawal */
+router.post("/api/ton-withdrawals/:id/retry", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+    const withdrawal = await prisma.tonWithdrawal.findUnique({ where: { id } });
+    if (!withdrawal) { res.status(404).json({ error: "Not found" }); return; }
+    if (withdrawal.status !== "failed") {
+      res.status(400).json({ error: "Only failed withdrawals can be retried" }); return;
+    }
+
+    // Reset to pending, then attempt send in background
+    await prisma.tonWithdrawal.update({
+      where: { id },
+      data: { status: "pending", adminNote: null, processedAt: null },
+    });
+
+    res.json({ ok: true });
+
+    setImmediate(async () => {
+      const amountTon = Number(withdrawal.amountTon);
+      try {
+        const txHash = await sendTon(withdrawal.tonAddress, amountTon);
+        await prisma.tonWithdrawal.update({
+          where: { id },
+          data: { status: "approved", txHash, processedAt: new Date() },
+        });
+        console.log(`[Admin] Retry withdrawal #${id} succeeded: ${txHash}`);
+      } catch (err: any) {
+        await prisma.tonWithdrawal.update({
+          where: { id },
+          data: { status: "failed", adminNote: err.message, processedAt: new Date() },
+        }).catch(() => {});
+        console.error(`[Admin] Retry withdrawal #${id} failed again:`, err.message);
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** POST /api/ton-withdrawals/:id/refund — cancel a failed withdrawal and return TON balance */
+router.post("/api/ton-withdrawals/:id/refund", async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+    const withdrawal = await prisma.tonWithdrawal.findUnique({ where: { id } });
+    if (!withdrawal) { res.status(404).json({ error: "Not found" }); return; }
+    if (withdrawal.status !== "failed") {
+      res.status(400).json({ error: "Only failed withdrawals can be refunded" }); return;
+    }
+
+    const amountTon = Number(withdrawal.amountTon);
+
+    await prisma.$transaction([
+      prisma.tonWithdrawal.update({
+        where: { id },
+        data: { status: "rejected", adminNote: "Refunded by admin", processedAt: new Date() },
+      }),
+      prisma.user.update({
+        where: { id: withdrawal.userId },
+        data: { tonBalance: { increment: amountTon } },
+      }),
+    ]);
+
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ───────────────────────────────────────────────────────────────────────────
 
 router.get(/^\/(?!api(\/|$)).*/, (_req: Request, res: Response) => {
   const indexPath = path.join(ADMIN_DIR, "index.html");

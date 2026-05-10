@@ -1,5 +1,10 @@
 import dotenv from "dotenv";
+import crypto from "crypto";
 dotenv.config();
+
+// If AF_INTERNAL_SECRET is not in .env, generate one at startup.
+// This ensures bucket internal auth works even on fresh dev servers.
+const _internalSecret = process.env.AF_INTERNAL_SECRET || crypto.randomBytes(32).toString("hex");
 
 export const config = {
   botToken: process.env.APPS_FATHER_TOKEN!,
@@ -35,4 +40,7 @@ export const config = {
   get webhookUrl(): string {
     return `${this.baseUrl}/webhook`;
   },
+
+  /** Shared secret used for server-side bucket uploads from routes.js */
+  internalSecret: _internalSecret,
 };

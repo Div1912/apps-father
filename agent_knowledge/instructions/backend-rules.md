@@ -19,22 +19,37 @@ RULES FOR BACKEND (routes.js):
 11. NEVER use req.query.telegramId or req.body.telegramId for authentication — anyone can spoof these.
 12. NEVER use SQL-style comments (-- comment) in routes.js — they are a syntax error in JavaScript. Always use // for single-line comments.
 13. NEVER use `process.env` in generated project code. Project code cannot read Apps Father platform environment variables. If an external API key, credential, or account ID is required, call `ask_user` before coding or choose a public no-key API.
-14. For project-level secrets (API keys, passwords, account IDs): call `ask_user`, then write them to `backend/.env` with `write_file`, then read via `env.MY_KEY` in routes.js.
+    FORBIDDEN — never generate any of these patterns:
+      process.env                    (any access)
+      process.env.ANYTHING
+      process['env']
+      global.process
+      globalThis.process
+      require('fs').readFileSync('/proc/self/environ')
+      new Function('return process.env')()
+      eval('process.env')
+    These patterns will silently return nothing in production (env is scrubbed), but writing them is a platform policy violation. The agent will be terminated if these are found post-deploy.
+14. NEVER use `require('fs')` to read files outside your own project directory. You may not read:
+      /proc/...
+      /etc/...
+      Any path not under the backend/ or frontend/ folders
+    Use the AF Bucket API for all file storage needs.
+15. For project-level secrets (API keys, passwords, account IDs): call `ask_user`, then write them to `backend/.env` with `write_file`, then read via `env.MY_KEY` in routes.js.
     Example backend/.env:
       OPENAI_KEY=sk-...
       SOME_SECRET=abc123
     Never hardcode secrets directly in routes.js.
-15. You CAN require npm packages — install them first with shell("npm install <pkg>")
-16. API_BASE in frontend ends with "/". Backend route paths must NOT start with "/api/{projectId}/".
+16. You CAN require npm packages — install them first with shell("npm install <pkg>")
+17. API_BASE in frontend ends with "/". Backend route paths must NOT start with "/api/{projectId}/".
     Frontend fetch(API_BASE + 'users') → hits router.get('/users', ...) — correct.
     If you see a double-slash in a URL (e.g. /api/id//users), the frontend endpoint starts with "/" — fix it there.
-17. EVERY Express route path in routes.js MUST start with "/".
+18. EVERY Express route path in routes.js MUST start with "/".
     WRONG:  router.get("words", ...)
     WRONG:  router.post("bot-webhook", ...)
     CORRECT: router.get("/words", ...)
     CORRECT: router.post("/bot-webhook", ...)
     Reason: the platform forwards /api/{projectId}/words to the project router as /words.
-18. FILE UPLOADS — ALWAYS use the AF Bucket API. NEVER implement custom file storage with tmp directories or local disk writes in routes.js.
+19. FILE UPLOADS — ALWAYS use the AF Bucket API. NEVER implement custom file storage with tmp directories or local disk writes in routes.js.
     Load the `bucket` skill before writing any file upload code.
     Platform vars available in routes.js via `env`: AF_INTERNAL_SECRET, BASE_URL, PROJECT_ID
     Pattern: multer memoryStorage → POST req.file.buffer to /bucket/{PROJECT_ID}/upload with Content-Type header

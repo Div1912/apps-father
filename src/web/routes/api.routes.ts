@@ -37,26 +37,22 @@ function createProjectDb(projectDir: string, botToken: string, botUsername: stri
 
   return {
     get(key: string) {
-      const row = sqlite.prepare("SELECT value FROM kv WHERE key = ?").get(key) as any;
-      return row ? JSON.parse(row.value) : null;
+      try { const row = sqlite.prepare("SELECT value FROM kv WHERE key = ?").get(key) as any; return row ? JSON.parse(row.value) : null; } catch { return null; }
     },
     set(key: string, value: any) {
-      sqlite.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)").run(key, JSON.stringify(value));
+      try { sqlite.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)").run(key, JSON.stringify(value)); } catch { }
     },
     getAll() {
-      const rows = sqlite.prepare("SELECT key, value FROM kv").all() as any[];
-      const result: Record<string, any> = {};
-      for (const row of rows) result[row.key] = JSON.parse(row.value);
-      return result;
+      try { const rows = sqlite.prepare("SELECT key, value FROM kv").all() as any[]; const result: Record<string, any> = {}; for (const row of rows) result[row.key] = JSON.parse(row.value); return result; } catch { return {}; }
     },
     delete(key: string) {
-      sqlite.prepare("DELETE FROM kv WHERE key = ?").run(key);
+      try { sqlite.prepare("DELETE FROM kv WHERE key = ?").run(key); } catch { }
     },
     keys() {
-      return (sqlite.prepare("SELECT key FROM kv").all() as any[]).map(r => r.key);
+      try { return (sqlite.prepare("SELECT key FROM kv").all() as any[]).map(r => r.key); } catch { return []; }
     },
     close() {
-      sqlite.close();
+      try { sqlite.close(); } catch {}
     },
     botToken,
     botUsername,
@@ -116,7 +112,7 @@ async function loadProjectEntry(
   const envVars = fs.existsSync(envPath) ? dotenv.parse(fs.readFileSync(envPath)) : {};
 
   // Inject platform vars so routes.js can use the AF Bucket API
-  envVars.AF_INTERNAL_SECRET = process.env.AF_INTERNAL_SECRET || "";
+  envVars.AF_INTERNAL_SECRET = config.internalSecret;
   envVars.BASE_URL = config.baseUrl;
   envVars.PROJECT_ID = projectId;
   // INTERNAL_BASE_URL bypasses nginx/Cloudflare — use this for server-side bucket calls

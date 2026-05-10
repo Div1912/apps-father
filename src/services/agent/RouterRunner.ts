@@ -58,12 +58,29 @@ export class RouterRunner {
     let costUsdOutput = 0;
 
     for (let iter = 0; iter < maxIterations; iter++) {
+      const isLastIter = iter === maxIterations - 1;
+      const iterNote = `[Iteration ${iter + 1}/${maxIterations}]`;
+
+      // On the final iteration, force propose_action so the router always ends
+      // with a decision rather than running out of budget silently.
+      const toolChoice: any = isLastIter
+        ? { type: "function", function: { name: "propose_action" } }
+        : "auto";
+
+      // Append a lightweight system note so the model knows its budget.
+      const iterSystemMsg = {
+        role: "system" as const,
+        content: isLastIter
+          ? `${iterNote} ⚠️ FINAL ITERATION — you MUST call propose_action NOW. No more reading or questions allowed.`
+          : `${iterNote} You have ${maxIterations - iter - 1} iteration(s) remaining after this. Reserve the last iteration for propose_action.`,
+      };
+
       const params: any = {
         model: modelCfg.modelId,
         max_tokens: modelCfg.maxTokens,
-        messages: [{ role: "system", content: systemPrompt }, ...messages],
+        messages: [{ role: "system", content: systemPrompt }, ...messages, iterSystemMsg],
         tools: openAiTools,
-        tool_choice: "auto",
+        tool_choice: toolChoice,
         ...(opts.telegramId ? { user: opts.telegramId } : {}),
         // Opt into OpenRouter usage accounting — see AskRunner / AgentRunner.
         extra_body: { session_id: opts.sessionId, usage: { include: true } },

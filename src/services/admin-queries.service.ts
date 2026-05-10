@@ -13,6 +13,7 @@
  */
 import { prisma } from "../db";
 import { Decimal } from "@prisma/client/runtime/library";
+import { writeLedger } from "./ledger.service";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -268,6 +269,10 @@ export async function setUserBalance(userId: number, action: "set" | "add", amou
 export async function setUserCredits(userId: number, action: "set" | "add", credits: number) {
   if (!Number.isFinite(credits) || credits < 0) throw new Error("Invalid credits amount");
   const v = Math.round(credits);
+
+  const current = await prisma.user.findUnique({ where: { id: userId }, select: { credits: true } });
+  const before = (current as any)?.credits ?? 0;
+
   const updated =
     action === "set"
       ? await prisma.user.update({ where: { id: userId }, data: { credits: v } as any })
@@ -275,7 +280,12 @@ export async function setUserCredits(userId: number, action: "set" | "add", cred
           where: { id: userId },
           data: { credits: { increment: v } } as any,
         });
-  return { credits: (updated as any).credits ?? 0 };
+
+  const after = (updated as any).credits ?? 0;
+  const delta = after - before;
+  writeLedger(userId, "credits", delta, "admin_grant", { action, amount: v });
+
+  return { credits: after };
 }
 
 export async function updateUserPartner(

@@ -191,7 +191,7 @@ export function notifyDeposit(
 
     // Bundle line: "Bundle: Minimal | 100 cr (×2 first purchase)"
     let bundleDesc = creditsGranted.toLocaleString() + " cr";
-    if (isFirstPurchase) bundleDesc += " (×2 first purchase)";
+    if (isFirstPurchase) bundleDesc += " (×1.5 first purchase)";
     else if (bonusCredits > 0) bundleDesc += ` (+${bonusCredits.toLocaleString()} bonus)`;
 
     const bundleLine = bundleName

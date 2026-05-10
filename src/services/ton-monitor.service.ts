@@ -21,6 +21,7 @@
 
 import { prisma } from "../db";
 import { BillingService } from "./billing.service";
+import { writeLedger } from "./ledger.service";
 import {
   executeBuy, executeSell, markTradeSettled,
   applyLiquidityDeposit,
@@ -254,6 +255,8 @@ class TonMonitorService {
         data: { tonBalance: { increment: amountTon } },
       }),
     ]);
+    writeLedger(topup.userId, "TON", amountTon, "ton_topup",
+      { topupId, txHash: tx.hash, amountNano: topup.amountNano });
 
     console.log(`[TonMonitor] topup:${topupId} confirmed — +${amountTon} TON for user ${topup.userId}`);
 

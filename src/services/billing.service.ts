@@ -1,5 +1,6 @@
 import { prisma } from "../db";
 import { config } from "../config";
+import { writeLedger } from "./ledger.service";
 import crypto from "crypto";
 import { Decimal } from "@prisma/client/runtime/library";
 import { Cell } from "@ton/core";
@@ -175,6 +176,8 @@ export class BillingService {
         data: { totalCostUsd: { increment: new Decimal("0") } },
       }).catch(() => {});
     }
+    writeLedger(userId, "credits", -creditsCharged, "agent_usage",
+      projectId ? { projectId } : undefined);
     return { creditsCharged, newCredits: updatedUser.credits };
   }
 
@@ -218,6 +221,8 @@ export class BillingService {
       });
       return u.credits;
     });
+    writeLedger(userId, "credits", credits, "refund",
+      { operation, ...(projectId ? { projectId } : {}), ...(taskId ? { taskId } : {}) });
     return { newCredits: result };
   }
 
@@ -313,7 +318,7 @@ export class BillingService {
   /**
    * Resolve credits to grant for a payment.
    * Uses bundle definition when bundleId is present, else falls back to creditsPerDollar rate.
-   * isFirstPurchase = user has 0 previously confirmed payments → doubles total.
+   * isFirstPurchase = user has 0 previously confirmed payments → 1.5× total.
    */
   async resolveCreditsForPayment(paymentId: number): Promise<{
     total: number; base: number; bonus: number; isFirstPurchase: boolean; bundleName?: string;
@@ -328,18 +333,18 @@ export class BillingService {
       where: { userId: payment.userId, status: "confirmed", id: { not: paymentId } },
     });
     const isFirstPurchase = confirmedBefore === 0;
-    const multiplier = isFirstPurchase ? 2 : 1;
+    const multiplier = isFirstPurchase ? 1.5 : 1;
 
     if (payment.bundle) {
       const base = payment.bundle.credits;
       const bonus = payment.bundle.bonusCredits;
-      const total = (base + bonus) * multiplier;
+      const total = Math.round((base + bonus) * multiplier);
       return { total, base, bonus, isFirstPurchase, bundleName: payment.bundle.name };
     }
 
     // Legacy: no bundle → flat rate
     const base = Math.floor(Number(payment.amountUsd) * runtimeConfig.getCreditsPerDollar());
-    return { total: base * multiplier, base, bonus: 0, isFirstPurchase };
+    return { total: Math.round(base * multiplier), base, bonus: 0, isFirstPurchase };
   }
 
   async createTopUp(
@@ -504,7 +509,7 @@ export class BillingService {
     return { paymentId: payment.id, invoiceUrl: data.result };
   }
 
-  static readonly TON_WALLET = "UQCoZZWxI49ZtHqiUfc5v23OzY0lGG31LNEvyxu_NDlE4wNV";
+  static readonly TON_WALLET = "UQDi9sw_Fs8KLlAJ4llpDovLPRGmjesIrJoGQxNfs_hy88bG";
 
   async createTonPayment(
     userId: number,
@@ -668,6 +673,8 @@ export class BillingService {
         });
       }
     });
+    writeLedger(payment.userId, "credits", creditsToGrant, "payment",
+      { paymentId, method: "ton", amountUsd: Number(payment.amountUsd), isFirstPurchase, bonus });
 
     console.log(`[Billing] TON payment #${paymentId} confirmed — $${payment.amountUsd} / ${creditsToGrant} cr credited to user ${payment.userId}`);
 
@@ -678,7 +685,7 @@ export class BillingService {
         `<b><tg-emoji emoji-id="5377544696656599429">✅</tg-emoji> Payment confirmed!</b>\n\n` +
         `<b>+${creditsToGrant.toLocaleString()} credits</b> added to your balance.` +
         (bonus > 0 ? ` (includes ${(bonus * (isFirstPurchase ? 2 : 1)).toLocaleString()} bonus!)` : "") +
-        (isFirstPurchase ? "\n🎉 <b>×2 first-purchase bonus applied!</b>" : "") +
+        (isFirstPurchase ? "\n🎉 <b>×1.5 first-purchase bonus applied!</b>" : "") +
         `\n\n<blockquote>New balance: <b>${(await this.getUserCredits(user.id)).toLocaleString()} credits</b></blockquote>`;
 
       await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
@@ -727,6 +734,8 @@ export class BillingService {
         });
       }
     });
+    writeLedger(payment.userId, "credits", creditsToGrant, "payment",
+      { paymentId, method: "stars", amountUsd: Number(payment.amountUsd), isFirstPurchase, bonus });
 
     console.log(`[Billing] Stars payment #${paymentId} confirmed — $${payment.amountUsd} / ${creditsToGrant} cr credited to user ${payment.userId}`);
 
@@ -737,7 +746,7 @@ export class BillingService {
         `<b><tg-emoji emoji-id="5377544696656599429">✅</tg-emoji> Payment confirmed!</b>\n\n` +
         `<b>+${creditsToGrant.toLocaleString()} credits</b> added to your balance.` +
         (bonus > 0 ? ` (includes ${(bonus * (isFirstPurchase ? 2 : 1)).toLocaleString()} bonus!)` : "") +
-        (isFirstPurchase ? "\n🎉 <b>×2 first-purchase bonus applied!</b>" : "") +
+        (isFirstPurchase ? "\n🎉 <b>×1.5 first-purchase bonus applied!</b>" : "") +
         `\n\n<blockquote>New balance: <b>${(await this.getUserCredits(user.id)).toLocaleString()} credits</b></blockquote>`;
 
       await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
@@ -816,6 +825,8 @@ export class BillingService {
           });
         }
       });
+      writeLedger(payment.userId, "credits", creditsToGrant, "payment",
+        { paymentId, method: "crypto", amountUsd: Number(payment.amountUsd), isFirstPurchase, bonus });
 
       console.log(
         `[Billing] Payment #${paymentId} confirmed — $${payment.amountUsd} / ${creditsToGrant} cr credited to user ${payment.userId}`
@@ -830,7 +841,7 @@ export class BillingService {
             `<b><tg-emoji emoji-id="5377544696656599429">✅</tg-emoji> Payment confirmed!</b>\n\n` +
             `<b>+${creditsToGrant.toLocaleString()} credits</b> added to your balance.` +
             (bonus > 0 ? ` (includes ${(bonus * (isFirstPurchase ? 2 : 1)).toLocaleString()} bonus!)` : "") +
-            (isFirstPurchase ? "\n🎉 <b>×2 first-purchase bonus applied!</b>" : "") +
+            (isFirstPurchase ? "\n🎉 <b>×1.5 first-purchase bonus applied!</b>" : "") +
             `\n\n<blockquote>New balance: <b>${(await this.getUserCredits(user.id)).toLocaleString()} credits</b></blockquote>`;
 
           await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
@@ -884,7 +895,7 @@ export class BillingService {
   /**
    * Credit a percentage-based bonus on the user's very first confirmed deposit.
    * The bonus equals `runtimeConfig.firstTopupBonusPercent`% of the deposited
-   * amount (e.g. 100% → user deposits $5 and receives an extra +$5).
+   * amount (e.g. 50% → user deposits $5 and receives an extra +$2.50, total ×1.5).
    * Atomic: only triggers if `firstDepositBonusGiven` is still false AND the
    * confirmed-payments-count equals 1 (i.e. the payment we just confirmed).
    */
@@ -922,6 +933,9 @@ export class BillingService {
         },
       });
       if (updated.count === 0) return;
+
+      writeLedger(userId, "credits", bonusCredits, "first_deposit_bonus",
+        { paymentId: justConfirmedPaymentId, bonusUsd, percent });
 
       const user = await prisma.user.findUnique({ where: { id: userId } });
       if (!user) return;
@@ -973,6 +987,8 @@ export class BillingService {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ chat_id: referrer.telegramId.toString(), text: bonusText, parse_mode: "HTML" }),
         }).catch(() => {});
+        writeLedger(referrer.id, "USD", bonusUsd, "referral_bonus",
+          { referredTelegramId: Number(user.telegramId), type: "partner_commission" });
         notifyReferralBonus(Number(referrer.telegramId), referrer.username ?? undefined, bonusUsd, Number(user.telegramId));
         console.log(`[Billing] Partner commission $${bonusUsd.toFixed(2)} credited to ${referrer.telegramId}`);
       } else {
@@ -995,6 +1011,8 @@ export class BillingService {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ chat_id: referrer.telegramId.toString(), text: bonusText, parse_mode: "HTML" }),
         }).catch(() => {});
+        writeLedger(referrer.id, "credits", bonusCredits, "referral_bonus",
+          { referredTelegramId: Number(user.telegramId), type: "referral" });
         notifyReferralBonus(Number(referrer.telegramId), referrer.username ?? undefined, bonusCredits, Number(user.telegramId));
         console.log(`[Billing] Referral bonus ${bonusCredits} cr credited to ${referrer.telegramId}`);
       }

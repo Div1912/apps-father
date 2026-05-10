@@ -1,5 +1,6 @@
 import { prisma } from "../db";
 import { Decimal } from "@prisma/client/runtime/library";
+import { writeLedger } from "./ledger.service";
 
 export interface PaidFeature {
   id: string;
@@ -15,7 +16,6 @@ export const PAID_FEATURES: PaidFeature[] = [
   { id: "ton_payment",   label: "TON Payment System",   price: 25, creditsPrice: 1250, description: "Enable TON blockchain payment integration in your app" },
   { id: "admin_panel",   label: "Admin Panel",           price: 30, creditsPrice: 1500, description: "Unlock the Admin Panel for your app" },
   { id: "disable_splash",label: "Disable Splash",        price: 10, creditsPrice: 500,  description: "Remove the 'Made by Apps Father' splash screen" },
-  { id: "get_code",      label: "Get Code",              price: 50, creditsPrice: 2500, description: "Access and edit the source code of your app" },
 ];
 
 const FEATURE_MAP = new Map(PAID_FEATURES.map(f => [f.id, f]));
@@ -27,7 +27,6 @@ export const BUNDLE_FEATURES: string[] = [
   "stars_payment",
   "ton_payment",
   "disable_splash",
-  "get_code",
 ];
 export const BUNDLE_PRICE = 50;
 export const BUNDLE_CREDITS_PRICE = 2000; // discounted bundle in credits
@@ -136,6 +135,8 @@ export async function purchaseFeature(
       await tx.project.update({ where: { id: projectId }, data: { features: JSON.stringify(updated) } });
       return { newBalance: Number(updatedUser.balance), newCredits: updatedUser.credits };
     });
+    writeLedger(userId, "credits", -feature.creditsPrice, "feature_purchase",
+      { featureId, featureLabel: feature.label, projectId });
     return result;
   } else {
     if (Number(user.balance) < feature.price) throw new Error("Insufficient balance");
@@ -147,6 +148,8 @@ export async function purchaseFeature(
       await tx.project.update({ where: { id: projectId }, data: { features: JSON.stringify(updated) } });
       return { newBalance: Number(updatedUser.balance) };
     });
+    writeLedger(userId, "USD", -feature.price, "feature_purchase",
+      { featureId, featureLabel: feature.label, projectId });
     return result;
   }
 }
@@ -187,6 +190,8 @@ export async function purchaseBundle(
       await tx.project.update({ where: { id: projectId }, data: { features: JSON.stringify(updated) } });
       return { newBalance: Number(updatedUser.balance), newCredits: updatedUser.credits, granted: quote.missingIds.slice(), charged: quote.bundleCreditsPrice };
     });
+    writeLedger(userId, "credits", -quote.bundleCreditsPrice, "feature_purchase",
+      { bundle: true, projectId, granted: quote.missingIds });
     return result;
   } else {
     if (Number(user.balance) < quote.bundlePrice) throw new Error("Insufficient balance");
@@ -198,6 +203,8 @@ export async function purchaseBundle(
       await tx.project.update({ where: { id: projectId }, data: { features: JSON.stringify(updated) } });
       return { newBalance: Number(updatedUser.balance), granted: quote.missingIds.slice(), charged: quote.bundlePrice };
     });
+    writeLedger(userId, "USD", -quote.bundlePrice, "feature_purchase",
+      { bundle: true, projectId, granted: quote.missingIds });
     return result;
   }
 }

@@ -15,6 +15,7 @@
 import { prisma } from "../db";
 import fs from "fs";
 import path from "path";
+import { avatarCache } from "./avatar-cache";
 import { runtimeConfig } from "./runtime-config.service";
 import { BUCKET_ROOT } from "../web/routes/bucket.routes";
 import {
@@ -174,13 +175,10 @@ class AppStoreService {
   async updateDraft(listingId: string, input: ListingDraftInput) {
     const listing = await prisma.appListing.findUnique({ where: { id: listingId }, include: { token: true } });
     if (!listing) throw new Error("Listing not found");
-    // Once the listing is fully published we lock the metadata. Earlier
-    // states (draft / submitting / pending / approved / deployed_pending_lp)
-    // remain editable so the publisher can correct typos before the
-    // on-chain LP-init lands.
-    if (listing.status === "published") {
-      throw new Error("Listing already published — cannot edit core fields");
-    }
+    // Listing metadata (name, descriptions, category, tags, translations,
+    // banner, socials) is always editable — even after publication — so
+    // owners can correct typos or update content at any time.
+    // Token fields are still locked once the jetton is live (see below).
 
     const data: any = {};
     if (input.appName !== undefined) data.appName = input.appName?.slice(0, 64) || null;
@@ -1100,15 +1098,20 @@ class AppStoreService {
     // The App avatar (listing.appLogoFilename) is the canonical image and
     // overrides the token's standalone logoFilename anywhere the token is
     // displayed (App Store detail, Wallet, Swap).
+    // Falls back to the bot's Telegram avatar (populated by the projects list endpoint).
+    const botAvatarUrl = avatarCache.get(row.projectId) ?? null;
     const displayLogo = row.appLogoFilename || token?.logoFilename || null;
     return {
       listingId: row.id,
       projectId: row.projectId,
+      appName: row.appName || null,
       projectName: row.project?.name,
       botUsername: row.project?.botUsername,
+      botAvatarUrl: displayLogo ? null : botAvatarUrl,
       shortDescription: row.shortDescription,
       category: row.category,
       tags: (row.tags as string[] | null) || [],
+      translations: (row.translations as Record<string, { name?: string; short?: string; long?: string }> | null) || null,
       appLogoFilename: row.appLogoFilename || null,
       bannerFilename: row.bannerFilename || null,
       publishedAt: row.publishedAt,
@@ -1136,13 +1139,24 @@ class AppStoreService {
   // ── Token detail JSON for the listing detail page ────────────────────────
 
   async getTokenDetail(listingId: string) {
-    const listing = await prisma.appListing.findUnique({
+    // Accept both listing ID and project ID so that the frontend can pass either
+    let listing = await prisma.appListing.findUnique({
       where: { id: listingId },
       include: {
         token: true,
         project: { select: { id: true, name: true, botUsername: true, userId: true } },
       },
     });
+    if (!listing) {
+      // Try looking up by project ID as fallback
+      listing = await prisma.appListing.findUnique({
+        where: { projectId: listingId },
+        include: {
+          token: true,
+          project: { select: { id: true, name: true, botUsername: true, userId: true } },
+        },
+      });
+    }
     if (!listing) throw new Error("Listing not found");
 
     const trades = listing.token
