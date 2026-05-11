@@ -2532,6 +2532,7 @@ export function createWebServer() {
             creditsCharged: preCharge.creditsCharged,
             maxMode,
             complexity: proposalComplexity,
+            sessionKind: (kind === "build" || kind === "update" || kind === "bug-fix" || kind === "update-plan") ? kind as "build" | "update" | "bug-fix" | "update-plan" : undefined,
           };
           if (kind === "build") {
             result = await agentSessionService.session_build(
@@ -5063,7 +5064,7 @@ Rules:
 
   // ── Mini App Admin API ──
 
-  const ADMIN_TELEGRAM_IDS = [8784357184, 8796958409, 7951167611];
+  const ADMIN_TELEGRAM_IDS = [8784357184, 8796958409];
   function isAdminTelegramId(telegramId: number | undefined): boolean {
     return !!telegramId && ADMIN_TELEGRAM_IDS.includes(telegramId);
   }

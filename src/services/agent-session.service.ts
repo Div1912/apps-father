@@ -88,6 +88,8 @@ export interface SessionExtras {
   creditsCharged?: number;
   maxMode?: boolean;
   complexity?: AgentComplexity | string | null;
+  /** Explicit session kind — lets callers like bug-fix override the default build/update config. */
+  sessionKind?: "build" | "update" | "bug-fix" | "update-plan";
 }
 
 /**
@@ -495,7 +497,8 @@ class AgentSessionService {
       : null;
     const agentTelegramId = agentOwner?.telegramId ? String(agentOwner.telegramId) : undefined;
 
-    const sessionType = mode === "new" ? "build" : "update";
+    const defaultSessionType = mode === "new" ? "build" : "update";
+    const sessionType = extras.sessionKind ?? defaultSessionType;
     const isMaxMode = !!extras.maxMode;
     const sessionCfg = runtimeConfig.getEffectiveSessionConfig(sessionType, isMaxMode);
     const creditsCharged = extras.creditsCharged;
