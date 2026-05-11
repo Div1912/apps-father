@@ -104,7 +104,10 @@ export async function buildFeatureGating(projectId: string): Promise<string> {
   } else {
     tonStatus = "LOCKED — do NOT implement any TON / blockchain payment logic. If the user asks for it, respond that they need to purchase this feature first.";
   }
-  return `\nPAID FEATURES STATUS:\n- Stars Payment System: ${starsStatus}\n- TON Payment System: ${tonStatus}\n`;
+  const adminStatus = features.includes("admin_panel")
+    ? "UNLOCKED — you may build an admin panel / admin dashboard for this app"
+    : "LOCKED — do NOT build an admin panel. If the user asks for it, they need to purchase this feature first.";
+  return `\nPAID FEATURES STATUS:\n- Stars Payment System: ${starsStatus}\n- TON Payment System: ${tonStatus}\n- Admin Panel: ${adminStatus}\n`;
 }
 
 export function walkDirWithStats(dir: string, base: string): string[] {
@@ -409,6 +412,9 @@ Catalog and trigger phrases (case/language insensitive):
                       "крипто-оплата", "tonconnect", "оплата криптой".
   - disable_splash  : Remove / hide the "Apps Father" splash, "убрать заставку",
                       "remove watermark", "remove splash", "hide branding", "удалить рекламу".
+  - admin_panel     : Add an admin panel, admin dashboard, admin page, content management,
+                      "добавь админку", "нужна админ панель", "панель управления", "admin area",
+                      "manage users from admin", "admin dashboard", "cms", "back-office".
   - admin_panel     : Admin panel / moderator panel / "админ-панель", "панель модератора".
 
 When triggered:
@@ -429,6 +435,9 @@ Examples:
   User: "please disable splash screen"           → paid-feature, featureId="disable_splash"
   User: "add stars payments"                     → paid-feature, featureId="stars_payment"
   User: "I want to accept TON for premium"       → paid-feature, featureId="ton_payment"
+  User: "add an admin panel"                     → paid-feature, featureId="admin_panel"
+  User: "I need an admin dashboard"              → paid-feature, featureId="admin_panel"
+  User: "добавь админку"                         → paid-feature, featureId="admin_panel"
   User: "give me admin panel for moderators"     → paid-feature, featureId="admin_panel"
 BUILD RULES (kind="build"):
   - You MUST call questionnaire at least once before proposing. Ask 1–5 product questions (not technical).

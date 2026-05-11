@@ -7557,7 +7557,7 @@ async function openFeatures(projectId) {
     document.getElementById('features-balance').innerHTML = fmtBalance(data.balance);
 
     const listEl = document.getElementById('features-list');
-    const visible = data.features.filter(f => f.id !== 'admin_panel');
+    const visible = data.features;
     const cards = visible.map(f => {
       const label = featureLabel(f);
       const desc = featureDescription(f);

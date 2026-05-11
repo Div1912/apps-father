@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { prisma } from "../db";
+import { validateRoutesSecurity } from "./agent/security-validator";
 
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
 
@@ -149,6 +150,27 @@ class CommitService {
     const projectDir = path.join(PROJECTS_DIR, projectId);
     const devDir = path.join(projectDir, "development");
     const releaseDir = path.join(projectDir, "release");
+
+    // Defense-in-depth: re-run the security validator on the dev backend
+    // before promoting to release. deploy_to_dev already blocks backdoors,
+    // but this catches any path that bypasses the agent (manual file edits,
+    // revertToCommit of an old commit written before the validator existed,
+    // etc.) so unsafe code never reaches the production release/ directory.
+    const devRoutesPath = path.join(devDir, "backend", "routes.js");
+    if (fs.existsSync(devRoutesPath)) {
+      try {
+        const devRoutesContent = fs.readFileSync(devRoutesPath, "utf-8");
+        const securityError = validateRoutesSecurity(devRoutesContent);
+        if (securityError) {
+          console.warn(
+            `[SecurityValidator] BLOCKED release for project ${projectId.substring(0, 8)} — ${securityError.split("\n")[0]}`,
+          );
+          throw new Error(securityError);
+        }
+      } catch (err: any) {
+        if (err?.message?.startsWith("Security validator BLOCKED")) throw err;
+      }
+    }
 
     rmDirSync(path.join(releaseDir, "frontend"));
     rmDirSync(path.join(releaseDir, "backend"));

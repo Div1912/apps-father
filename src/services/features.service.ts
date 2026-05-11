@@ -14,7 +14,7 @@ export interface PaidFeature {
 export const PAID_FEATURES: PaidFeature[] = [
   { id: "stars_payment", label: "Stars Payment System", price: 15, creditsPrice: 750,  description: "Enable Telegram Stars payment integration in your app" },
   { id: "ton_payment",   label: "TON Payment System",   price: 25, creditsPrice: 1250, description: "Enable TON blockchain payment integration in your app" },
-  { id: "admin_panel",   label: "Admin Panel",           price: 30, creditsPrice: 1500, description: "Unlock the Admin Panel for your app" },
+  { id: "admin_panel",   label: "Admin Panel",           price: 2,  creditsPrice: 100,  description: "Unlock a built-in admin panel for your app" },
   { id: "disable_splash",label: "Disable Splash",        price: 10, creditsPrice: 500,  description: "Remove the 'Made by Apps Father' splash screen" },
 ];
 

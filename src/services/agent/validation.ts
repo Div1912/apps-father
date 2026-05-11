@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { AgentMode } from "./types";
+import { validateRoutesSecurity } from "./security-validator";
 
 export interface TestRunFlags {
   telegram: boolean;
@@ -229,6 +230,18 @@ export function validateBackendRoutes(
     new Function(content);
   } catch (err: any) {
     errors.push(`backend/routes.js has a JavaScript syntax error: ${err.message}.`);
+  }
+
+  // Security validation — block deploy if user code contains backdoor
+  // patterns (shell exec, vm escapes, platform secret reads, sudoers writes,
+  // etc.). This runs before commitService.syncToDev so unsafe code never
+  // reaches the dev or release directories.
+  const securityError = validateRoutesSecurity(content);
+  if (securityError) {
+    console.warn(
+      `[SecurityValidator] BLOCKED deploy for project ${projectId.substring(0, 8)} — ${securityError.split("\n")[0]}`,
+    );
+    errors.push(securityError);
   }
 
   if (/^--\s/m.test(content)) {

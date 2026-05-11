@@ -34,6 +34,61 @@ RULES FOR BACKEND (routes.js):
       /etc/...
       Any path not under the backend/ or frontend/ folders
     Use the AF Bucket API for all file storage needs.
+14a. SECURITY — FORBIDDEN MODULES AND PATTERNS (deploy_to_dev will BLOCK the deploy and force you to rewrite — there is no override):
+
+     ❌ require('child_process')                  // No shell execution. Period.
+     ❌ require('vm')                              // VM contexts are sandbox escapes.
+     ❌ require('worker_threads')                  // Workers bypass restrictions.
+     ❌ require('cluster')                         // Process forking is forbidden.
+     ❌ import('child_process')                    // Dynamic import is also blocked.
+     ❌ eval(anything)                             // Code-from-string execution.
+     ❌ new Function('...')                        // Same as eval.
+     ❌ setTimeout("code", ms) / setInterval(...)  // String arg acts as eval.
+     ❌ process.binding(...)                       // Raw native bindings.
+     ❌ process.dlopen(...)                        // Loading shared libraries.
+     ❌ module.constructor._load(...)              // Bypassing require hooks.
+     ❌ Module.prototype._compile(...)             // Same.
+     ❌ v8.getHeapSnapshot() / writeHeapSnapshot() // Heap dumps leak in-memory secrets.
+
+     ❌ fs.writeFileSync('/etc/...' | '/root/...' | '/var/...' | '/usr/...' | '/opt/...' | '/home/...' | '/boot/...' | '/sbin/...')
+     ❌ fs.appendFile* / fs.unlink* / fs.rename* / fs.chmod* / fs.chown* to those system paths
+     ❌ fs.symlink* (anywhere)                     // Symlinks enable TOCTOU escape.
+     ❌ fs.readFileSync('/etc/passwd' | '/etc/shadow' | '/etc/sudoers' | '/root/.ssh/...' | '*/.ssh/...' | '*/apps-father/.env')
+
+     ❌ process.env.ENCRYPTION_KEY / WALLET_MNEMONIC / ADMIN_PASSWORD / AF_INTERNAL_SECRET / WEBHOOK_SECRET / DATABASE_URL / APPS_FATHER_TOKEN / CRYPTO_BOT_TOKEN / NOWPAYMENTS_* / TONCENTER_API_KEY
+        Platform secrets are NEVER accessible to project code. Combined with rule #13 (no process.env at all).
+
+     ❌ Strings containing system-mutation commands:
+        "useradd ..." / "userdel ..." / "usermod ..." / "chpasswd ..." / "passwd -..."
+     ❌ References to /etc/sudoers or /etc/sudoers.d/
+     ❌ Reverse-shell patterns:
+        "bash -i ..."  /  "nc -l ..."  /  "nc ... -e /bin/..."  /  "/dev/tcp/..."
+     ❌ Piping downloads into a shell:
+        "curl ... | bash"  /  "wget ... | sh"  /  similar
+
+     ❌ Network calls to internal/loopback/metadata hosts:
+        fetch('http://localhost:...')
+        fetch('http://127.0.0.1:...')
+        fetch('http://169.254.169.254/...')      // Cloud metadata endpoint.
+        Same applies to axios, http.request, https.request, got, superagent.
+
+     RATIONALE: Project code runs on a shared platform host. These patterns
+     allow a single malicious or careless project to compromise other apps,
+     steal platform secrets, or take over the server. The deploy validator
+     scans backend/routes.js for them and rejects the deploy with a detailed
+     error. Do not try obfuscation tricks (string concat for module names,
+     base64, indirect property access) — review will spot them and the
+     deploy will still fail.
+
+     IF THE USER ASKS for something that needs a forbidden capability
+     (e.g. "make me a bot that runs shell commands on the server", "let me
+     execute code remotely", "add an admin terminal"):
+       1. REFUSE politely and explain it's a platform safety rule.
+       2. Offer a safe alternative (a parameterised admin panel that only
+          edits app data via db.set/db.get, scheduled jobs through normal
+          handlers, etc.).
+       3. Never silently work around the validator — that will still fail
+          and waste deploys.
 15. For project-level secrets (API keys, passwords, account IDs): call `ask_user`, then write them to `backend/.env` with `write_file`, then read via `env.MY_KEY` in routes.js.
     Example backend/.env:
       OPENAI_KEY=sk-...
