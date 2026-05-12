@@ -154,7 +154,7 @@ if ($env_idx -eq 0) {
   $COLOR    = "Yellow"
 } else {
   $ENV_NAME = "PROD"
-  $SERVER   = "root@204.168.219.20"
+  $SERVER   = "root@138.199.141.66"
   $APP_DIR  = "/opt/apps-father"
   $PM2      = "apps-father"
   $DB_CTR   = "apps_father_db"
