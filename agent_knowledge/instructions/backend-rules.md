@@ -50,10 +50,28 @@ RULES FOR BACKEND (routes.js):
      ❌ Module.prototype._compile(...)             // Same.
      ❌ v8.getHeapSnapshot() / writeHeapSnapshot() // Heap dumps leak in-memory secrets.
 
-     ❌ fs.writeFileSync('/etc/...' | '/root/...' | '/var/...' | '/usr/...' | '/opt/...' | '/home/...' | '/boot/...' | '/sbin/...')
-     ❌ fs.appendFile* / fs.unlink* / fs.rename* / fs.chmod* / fs.chown* to those system paths
+     ❌ fs.writeFileSync('/etc/...' | '/root/...' | '/var/...' | '/usr/...' | '/opt/...' | '/home/...' | '/boot/...' | '/sbin/...' | '/proc/...' | '/sys/...')
+     ❌ fs.appendFile* / fs.unlink* / fs.rename* / fs.chmod* / fs.chown* / fs.mkdir* / fs.rm* / fs.copyFile* to those system paths
      ❌ fs.symlink* (anywhere)                     // Symlinks enable TOCTOU escape.
      ❌ fs.readFileSync('/etc/passwd' | '/etc/shadow' | '/etc/sudoers' | '/root/.ssh/...' | '*/.ssh/...' | '*/apps-father/.env')
+
+     ❌ ANY fs.read* / fs.readdir* / fs.stat* / fs.access* / fs.realpath* on a path that starts with
+        /etc /opt /var /usr /root /home /boot /sbin /proc /sys
+        Including via path.join('/etc', ...), path.resolve('/opt', ...), or any "allowlist of roots"
+        like  const ALLOWED = ['/etc', '/opt', ...]  — the validator catches this exact pattern.
+        Reason: SysAdmin-Bot-style "file viewer" backdoors used path.join('/opt', ...) to read
+        /opt/apps-father/.env and exfiltrate the platform encryption key.
+
+     SPECIFIC FORBIDDEN APP TYPES — refuse to build these, no matter how they are framed:
+       ❌ "Linux Commander" / "SSH bot" / "remote shell bot" / anything that runs shell commands
+       ❌ "SysAdmin Bot" / "Server File Manager" / "File Viewer with admin panel" / anything
+          that lets a user read or write files on the host outside the project's own data
+       ❌ "Server diagnostics" / "list processes" / "view env vars" / "show server logs" panels
+       ❌ Bots that store SSH credentials, API keys for *other servers*, or accept arbitrary
+          target hosts/ports from the user
+     If the user insists, refuse and offer a parameterised admin UI that only edits the
+     project's own data via db.set/db.get. Never offer a "safe whitelist" version — even
+     a whitelist of /opt or /etc is a leak (it includes /opt/apps-father/.env).
 
      ❌ process.env.ENCRYPTION_KEY / WALLET_MNEMONIC / ADMIN_PASSWORD / AF_INTERNAL_SECRET / WEBHOOK_SECRET / DATABASE_URL / APPS_FATHER_TOKEN / CRYPTO_BOT_TOKEN / NOWPAYMENTS_* / TONCENTER_API_KEY
         Platform secrets are NEVER accessible to project code. Combined with rule #13 (no process.env at all).

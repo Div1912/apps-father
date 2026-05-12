@@ -509,7 +509,7 @@ export class BillingService {
     return { paymentId: payment.id, invoiceUrl: data.result };
   }
 
-  static readonly TON_WALLET = "UQDz7aWvIe3TLk8h3HMOmcz2i8OPaTtoGzR01L9w-LBobIJF";
+  static readonly TON_WALLET = "UQASnze6hR-SJGPjmfApze4f3gCq5f4AxS1-Sk2gl3MdnPLe";
 
   async createTonPayment(
     userId: number,

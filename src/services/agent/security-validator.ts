@@ -103,13 +103,41 @@ const RULES: SecurityRule[] = [
     id: "fs_write_etc",
     description: "Writing to /etc, /root, /var, /usr or /opt outside the project is not allowed.",
     severity: "critical",
-    regex: /fs\s*\.\s*(?:writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|unlink|unlinkSync|rename|renameSync|symlink|symlinkSync|chmod|chmodSync|chown|chownSync)\s*\(\s*["'`]\/(?:etc|root|var|usr|opt|home|boot|sbin)\b/,
+    regex: /fs\s*(?:\.\s*promises)?\s*\.\s*(?:writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|unlink|unlinkSync|rename|renameSync|symlink|symlinkSync|chmod|chmodSync|chown|chownSync|mkdir|mkdirSync|rmdir|rmdirSync|rm|rmSync|copyFile|copyFileSync)\s*\(\s*["'`]\/(?:etc|root|var|usr|opt|home|boot|sbin|proc|sys)\b/,
   },
   {
     id: "fs_read_secrets",
     description: "Reading /etc/passwd, /etc/shadow, .ssh keys, or platform .env files is not allowed.",
     severity: "critical",
     regex: /fs\s*\.\s*(?:readFile|readFileSync|createReadStream)\s*\(\s*["'`](?:\/etc\/(?:passwd|shadow|sudoers)|\/root\/\.ssh\/|[^"'`]*\/\.ssh\/|[^"'`]*\/apps-father\/\.env)/,
+  },
+  {
+    // SysAdmin-Bot-style "file viewer" backdoors: reading anything under
+    // /etc /opt /var /usr /root /home /boot /sbin /proc /sys leaks platform
+    // secrets, other tenants' data, or kernel info. Project code must stay
+    // inside its own directory (provided as `db` / project-relative paths).
+    id: "fs_read_system_paths",
+    description: "Reading from system paths (/etc, /opt, /var, /usr, /root, /home, /boot, /sbin, /proc, /sys) is not allowed. Project code must only read files inside its own project directory via the db/* helpers — system paths leak platform secrets and other tenants' data.",
+    severity: "critical",
+    regex: /fs\s*(?:\.\s*promises)?\s*\.\s*(?:readFile|readFileSync|createReadStream|readdir|readdirSync|opendir|opendirSync|stat|statSync|lstat|lstatSync|access|accessSync|realpath|realpathSync)\s*\(\s*["'`]\/(?:etc|opt|var|usr|root|home|boot|sbin|proc|sys)\b/,
+  },
+  {
+    // Block string literals like '/etc' / '/opt' inside path.join / path.resolve —
+    // catches backdoors that build the final path dynamically:
+    //   const root = '/opt'; fs.readFileSync(path.join(root, ...))
+    id: "path_join_system_root",
+    description: "path.join() / path.resolve() with a system root literal ('/etc', '/opt', '/var', '/usr', '/root', '/home', '/boot', '/sbin', '/proc', '/sys') is not allowed. These roots are platform / OS territory.",
+    severity: "critical",
+    regex: /path\s*\.\s*(?:join|resolve|normalize)\s*\([^)]*["'`]\/(?:etc|opt|var|usr|root|home|boot|sbin|proc|sys)(?:\/|["'`])/,
+  },
+  {
+    // Catch the explicit "allowlist of system roots" pattern that SysAdmin Bot
+    // used. Any array / object literal that contains two or more system-root
+    // string literals is almost certainly a file-reader allowlist.
+    id: "system_root_allowlist",
+    description: "Defining an allowlist of system roots ('/etc', '/opt', '/var', '/usr', '/root', '/home') in project code is not allowed — this pattern is only ever used to build a file-viewer backdoor.",
+    severity: "critical",
+    regex: /["'`]\/(?:etc|opt|var|usr|root|home|boot|sbin|proc|sys)["'`]\s*,\s*["'`]\/(?:etc|opt|var|usr|root|home|boot|sbin|proc|sys)["'`]/,
   },
   {
     id: "symlink_traversal",
