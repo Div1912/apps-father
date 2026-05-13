@@ -16,6 +16,7 @@ import { connectDatabase, prisma } from "./db";
 import { createBot } from "./bot";
 import { startWebServer, getExpressApp } from "./web/server";
 import { botRunnerService } from "./services/bot-runner.service";
+import { runnerManager } from "./services/runner-manager.service";
 import { webhookCallback } from "grammy";
 import { processingProjects } from "./bot/processing";
 import { commitService } from "./services/commit.service";
@@ -69,8 +70,16 @@ async function main() {
   console.log("[2/4] Starting web server...");
   await startWebServer();
 
-  console.log("[3/4] Loading managed bots...");
-  await botRunnerService.loadAllBots();
+  // Worker mode: enable the per-project runner. Registry stays empty until
+  // the first inbound request lazy-spawns a worker. In-process bot runner is
+  // bypassed entirely — webhooks are forwarded to workers by BotForwarderService.
+  if (config.runtimeMode === "worker") {
+    runnerManager.enable();
+    console.log("[3/4] Worker runtime enabled — managed bots will be served by per-project workers");
+  } else {
+    console.log("[3/4] Loading managed bots...");
+    await botRunnerService.loadAllBots();
+  }
 
   console.log("[4/4] Starting Apps Father bot...");
   const bot = createBot();
@@ -143,6 +152,16 @@ async function gracefulShutdown(signal: string) {
     console.log(`[Shutdown] Timeout reached. ${processingProjects.size} agent(s) still running. Force exiting.`);
   } else {
     console.log("[Shutdown] All agents finished. Exiting.");
+  }
+
+  // Worker mode: gracefully drain every per-project worker before exit.
+  if (config.runtimeMode === "worker") {
+    try {
+      console.log("[Shutdown] Stopping all project workers...");
+      await runnerManager.stopAll();
+    } catch (err) {
+      console.error("[Shutdown] runnerManager.stopAll() failed:", err);
+    }
   }
 
   // Best-effort drain of any buffered log lines so the final shutdown

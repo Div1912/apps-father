@@ -1,0 +1,86 @@
+{
+  "$comment": [
+    "Allowlist of npm packages that user routes.js may require().",
+    "ONLY packages listed here are installable via the npm_install agent tool",
+    "and accepted by the install-runner-npms.ps1 server-side scanner.",
+    "",
+    "Security model:",
+    "  - All packages are well-known, widely audited, and low supply-chain risk.",
+    "  - On install, npm runs with --ignore-scripts to neuter postinstall RCE.",
+    "  - The agent cannot install anything else; the shell tool blocks 'npm install'",
+    "    and 'pnpm/yarn/npx' patterns entirely.",
+    "",
+    "Adding a new package:",
+    "  1. Justify it (must be widely used, no install scripts when possible).",
+    "  2. Pin a minVersion that's at least known-clean.",
+    "  3. Add a short description so the agent knows when to use it.",
+    "  4. Re-deploy install-runner-npms.ps1 + commit the allowlist together."
+  ],
+  "version": 1,
+  "allowedPackages": {
+    "multer": {
+      "minVersion": "2.0.0",
+      "description": "Multipart form-data parser. Required for file uploads via the /bucket runner-side proxy."
+    },
+    "axios": {
+      "minVersion": "1.7.0",
+      "description": "Promise-based HTTP client for outbound requests to public APIs (e.g. third-party data fetches)."
+    },
+    "node-fetch": {
+      "minVersion": "2.7.0",
+      "description": "Lightweight fetch() polyfill for routes.js. Most code can use globalThis.fetch directly; use this only when streaming a response body."
+    },
+    "uuid": {
+      "minVersion": "9.0.0",
+      "description": "RFC4122 UUID generator. For idempotency keys, request IDs, etc."
+    },
+    "nanoid": {
+      "minVersion": "3.3.0",
+      "description": "URL-safe random ID generator. Smaller than uuid, useful for short share-codes."
+    },
+    "dayjs": {
+      "minVersion": "1.11.0",
+      "description": "Tiny date utility. Use this instead of moment for parsing/formatting dates."
+    },
+    "zod": {
+      "minVersion": "3.23.0",
+      "description": "Schema validation. Useful for validating req.body shape before persisting."
+    },
+    "lodash.clonedeep": {
+      "minVersion": "4.5.0",
+      "description": "Deep-clone helper. Single-purpose, smaller than full lodash."
+    },
+    "lodash.get": {
+      "minVersion": "4.4.0",
+      "description": "Safe nested property accessor."
+    },
+    "qs": {
+      "minVersion": "6.13.0",
+      "description": "Querystring parser supporting nested objects."
+    },
+    "mime-types": {
+      "minVersion": "2.1.35",
+      "description": "MIME type lookups for serving uploaded files."
+    },
+    "sharp": {
+      "minVersion": "0.34.0",
+      "description": "Image processor (resize, format-convert). Native binary; install-time can be slow."
+    },
+    "qrcode": {
+      "minVersion": "1.5.0",
+      "description": "QR code generator. Useful for share / referral links."
+    },
+    "jsonwebtoken": {
+      "minVersion": "9.0.0",
+      "description": "JWT signing/verification. Use for inter-service tokens; do NOT roll your own crypto."
+    },
+    "marked": {
+      "minVersion": "12.0.0",
+      "description": "Markdown → HTML renderer. Sanitize output before injecting into the DOM."
+    },
+    "papaparse": {
+      "minVersion": "5.4.0",
+      "description": "Robust CSV parser. Use for CSV import/export features."
+    }
+  }
+}

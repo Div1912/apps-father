@@ -14,6 +14,7 @@ import { TechnicalPlanTool } from "./impl/build/TechnicalPlanTool";
 import { DbTool } from "./impl/build/DbTool";
 import { DeployToDevTool } from "./impl/build/DeployToDevTool";
 import { LoadSkillTool } from "./impl/build/LoadSkillTool";
+import { NpmInstallTool } from "./impl/build/NpmInstallTool";
 import { AskUserTool } from "./impl/build/AskUserTool";
 import { ServerLogsTool } from "./impl/build/ServerLogsTool";
 import { SimulateTelegramTool } from "./impl/build/SimulateTelegramTool";
@@ -41,6 +42,7 @@ export const AGENT_TOOL_INSTANCES: AgentTool[] = [
   new DbTool(),
   new DeployToDevTool(),
   new LoadSkillTool(),
+  new NpmInstallTool(),
   new AskUserTool(),
   new ServerLogsTool(),
   new SimulateTelegramTool(),

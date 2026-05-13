@@ -11,6 +11,18 @@ export const BLOCKED_INFRA_SHELL_PATTERNS = [
   /\blocalhost:\d+\b/i,
 ];
 
+/**
+ * Package-manager invocations that the shell tool refuses outright. The agent
+ * must use `npm_install` (which validates against runner-npm-allowlist.json)
+ * to add runtime deps. Direct npm/pnpm/yarn/npx calls would bypass the
+ * allowlist and let the agent (or a prompt-injected user message) pull
+ * arbitrary packages — the #1 supply-chain risk on the runner.
+ */
+export const BLOCKED_PACKAGE_MANAGER_PATTERNS = [
+  /(^|[\s;&|])(?:npm|pnpm|yarn|npx|bun)\b/i,
+  /(^|[\s;&|])node\s+(?:--require|-r)\s+/i,
+];
+
 export const SKIP_DIRS = new Set([
   "node_modules", ".git", "data",
 ]);

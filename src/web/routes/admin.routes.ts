@@ -35,6 +35,7 @@ import { getOutLog, getErrLog, readTailLines } from "./logs.routes";
 import { decryptToken } from "../../services/crypto.service";
 import { PAID_FEATURES } from "../../services/features.service";
 import { exec } from "child_process";
+import { runnerManager } from "../../services/runner-manager.service";
 
 const router = Router();
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
@@ -1079,7 +1080,7 @@ router.get("/api/agent-sessions", async (req: Request, res: Response) => {
       if (toDate   && !isNaN(toDate.getTime()))   where.createdAt.lte = toDate;
     }
 
-    const [rows, total] = await Promise.all([
+    const [rows, total, agg, failCount] = await Promise.all([
       prisma.agentSession.findMany({
         where,
         orderBy: { createdAt: "desc" },
@@ -1088,6 +1089,11 @@ router.get("/api/agent-sessions", async (req: Request, res: Response) => {
         include: { project: { select: { name: true } } },
       }),
       prisma.agentSession.count({ where }),
+      prisma.agentSession.aggregate({
+        where,
+        _sum: { costUsd: true, creditsCharged: true, durationMs: true },
+      }),
+      prisma.agentSession.count({ where: { ...where, success: false } }),
     ]);
 
     const creditsPerDollar = runtimeConfig.getCreditsPerDollar() || 50;
@@ -1125,7 +1131,27 @@ router.get("/api/agent-sessions", async (req: Request, res: Response) => {
       };
     });
 
-    res.json({ sessions, total, page, limit, creditsPerDollar });
+    const totalCostUsd      = Number(agg._sum.costUsd       || 0);
+    const totalCredits      = Number(agg._sum.creditsCharged || 0);
+    const totalRevenueUsd   = totalCredits / creditsPerDollar;
+    const totalMarginUsd    = totalRevenueUsd - totalCostUsd;
+    const totalDurationMs   = Number(agg._sum.durationMs    || 0);
+    const avgDurationMs     = total > 0 ? Math.round(totalDurationMs / total) : 0;
+
+    res.json({
+      sessions,
+      total,
+      page,
+      limit,
+      creditsPerDollar,
+      totals: {
+        costUsd:    parseFloat(totalCostUsd.toFixed(5)),
+        revenueUsd: parseFloat(totalRevenueUsd.toFixed(4)),
+        marginUsd:  parseFloat(totalMarginUsd.toFixed(4)),
+        failCount,
+        avgDurationMs,
+      },
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1295,6 +1321,171 @@ router.post("/api/config", (req: Request, res: Response) => {
     res.json(runtimeConfig.get());
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Runner npm allowlist ---
+//
+// Backs the admin "Allowed npm packages" page. The file is the single source
+// of truth read by both:
+//   * src/services/runner-npm-allowlist.service.ts (agent-side npm_install tool)
+//   * security-migrations/runner-npm-scan.sh       (server-side post-deploy scan)
+// Both load it from $APP_DIR/runner-npm-allowlist.json (= cwd at runtime).
+//
+// PUT writes the file atomically (write-then-rename) so a concurrent reader
+// never sees a half-written JSON. The runtime allowlist service mtime-checks
+// on every read, so changes are picked up by the very next npm_install call
+// without restarting node.
+
+const RUNNER_ALLOWLIST_PATH = path.join(process.cwd(), "runner-npm-allowlist.json");
+
+interface AllowlistEntryAdmin {
+  minVersion?: string;
+  description: string;
+}
+interface AllowlistFileAdmin {
+  version?: number;
+  allowedPackages: Record<string, AllowlistEntryAdmin>;
+  $comment?: string[];
+}
+
+function readAllowlistFile(): { exists: boolean; raw: string; parsed: AllowlistFileAdmin } {
+  if (!fs.existsSync(RUNNER_ALLOWLIST_PATH)) {
+    return {
+      exists: false,
+      raw: "",
+      parsed: { version: 1, allowedPackages: {} },
+    };
+  }
+  const raw = fs.readFileSync(RUNNER_ALLOWLIST_PATH, "utf-8");
+  let parsed: AllowlistFileAdmin;
+  try {
+    parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || !parsed.allowedPackages || typeof parsed.allowedPackages !== "object") {
+      throw new Error("file does not contain an allowedPackages object");
+    }
+  } catch (err) {
+    throw Object.assign(new Error("Existing allowlist file is not valid JSON: " + (err as Error).message), { status: 500 });
+  }
+  return { exists: true, raw, parsed };
+}
+
+function validatePackageName(name: string): string | null {
+  if (!name || typeof name !== "string") return "package name is required";
+  if (name.length > 214) return "package name too long";
+  // Bare package name OR scoped (@scope/name).
+  if (!/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i.test(name)) {
+    return `"${name}" is not a valid bare npm package name (use lowercase letters, digits, dot, dash, underscore; scoped names @scope/name are OK)`;
+  }
+  return null;
+}
+
+router.get("/api/runner-allowlist", (_req: Request, res: Response) => {
+  try {
+    const { exists, raw, parsed } = readAllowlistFile();
+    res.json({
+      path: RUNNER_ALLOWLIST_PATH,
+      exists,
+      raw,
+      version: parsed.version || 1,
+      allowedPackages: parsed.allowedPackages || {},
+      comment: Array.isArray(parsed.$comment) ? parsed.$comment : [],
+    });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.post("/api/runner-allowlist", (req: Request, res: Response) => {
+  try {
+    let next: AllowlistFileAdmin;
+
+    if (typeof req.body?.raw === "string") {
+      // Raw-text save (whole-file JSON paste). Parse + validate before writing.
+      let parsed: any;
+      try {
+        parsed = JSON.parse(req.body.raw);
+      } catch (err) {
+        res.status(400).json({ error: "Body is not valid JSON: " + (err as Error).message });
+        return;
+      }
+      if (!parsed || typeof parsed !== "object" || !parsed.allowedPackages || typeof parsed.allowedPackages !== "object") {
+        res.status(400).json({ error: "JSON must have an 'allowedPackages' object at the top level" });
+        return;
+      }
+      next = parsed as AllowlistFileAdmin;
+    } else if (req.body?.allowedPackages && typeof req.body.allowedPackages === "object") {
+      // Form-mode save: caller passes the new packages map; preserve $comment +
+      // version from disk (or from the body if explicitly provided).
+      const current = (() => {
+        try { return readAllowlistFile().parsed; }
+        catch { return { version: 1, allowedPackages: {} } as AllowlistFileAdmin; }
+      })();
+      next = {
+        $comment: Array.isArray(req.body.$comment) ? req.body.$comment : current.$comment,
+        version: typeof req.body.version === "number" ? req.body.version : (current.version || 1),
+        allowedPackages: req.body.allowedPackages,
+      };
+    } else {
+      res.status(400).json({ error: "Body must include either { raw: '<json>' } or { allowedPackages: {...} }" });
+      return;
+    }
+
+    // Validate every package entry.
+    const issues: string[] = [];
+    const sanitised: Record<string, AllowlistEntryAdmin> = {};
+    for (const [rawName, rawEntry] of Object.entries(next.allowedPackages)) {
+      const name = String(rawName || "").trim();
+      const nameErr = validatePackageName(name);
+      if (nameErr) { issues.push(nameErr); continue; }
+      if (!rawEntry || typeof rawEntry !== "object") { issues.push(`"${name}": entry must be an object`); continue; }
+      const entry = rawEntry as unknown as Record<string, unknown>;
+      const description = typeof entry.description === "string" ? entry.description.trim() : "";
+      if (!description) { issues.push(`"${name}": description is required`); continue; }
+      const sanitisedEntry: AllowlistEntryAdmin = { description };
+      if (typeof entry.minVersion === "string" && entry.minVersion.trim()) {
+        const v = entry.minVersion.trim();
+        // Light-weight semver-ish check; accept things like "1", "1.2", "1.2.3", "1.2.3-beta".
+        if (!/^\d+(?:\.\d+){0,2}(?:-[A-Za-z0-9.-]+)?$/.test(v)) {
+          issues.push(`"${name}": minVersion "${v}" doesn't look like a semver (expected e.g. 1.2.3)`);
+          continue;
+        }
+        sanitisedEntry.minVersion = v;
+      }
+      sanitised[name] = sanitisedEntry;
+    }
+    if (issues.length) {
+      res.status(400).json({ error: "Validation failed", issues });
+      return;
+    }
+
+    next.allowedPackages = sanitised;
+    if (typeof next.version !== "number") next.version = 1;
+
+    // Re-emit with stable key order: $comment, version, allowedPackages (sorted).
+    const sortedKeys = Object.keys(sanitised).sort((a, b) => a.localeCompare(b));
+    const ordered: AllowlistFileAdmin = {
+      $comment: next.$comment,
+      version: next.version,
+      allowedPackages: Object.fromEntries(sortedKeys.map(k => [k, sanitised[k]])),
+    };
+
+    const newRaw = JSON.stringify(ordered, null, 2) + "\n";
+    const tmpPath = RUNNER_ALLOWLIST_PATH + ".tmp." + process.pid;
+    fs.writeFileSync(tmpPath, newRaw, "utf-8");
+    fs.renameSync(tmpPath, RUNNER_ALLOWLIST_PATH);
+
+    res.json({
+      ok: true,
+      path: RUNNER_ALLOWLIST_PATH,
+      raw: newRaw,
+      version: ordered.version,
+      allowedPackages: ordered.allowedPackages,
+      comment: Array.isArray(ordered.$comment) ? ordered.$comment : [],
+      packageCount: sortedKeys.length,
+    });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -2367,6 +2558,92 @@ router.post("/api/ton-withdrawals/:id/refund", async (req: Request<{ id: string 
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Phase 1 worker admin API. JSON-only, no SPA tab. Behind authMiddleware via
+// the `/api` mount above.
+//
+// Lists, inspects, and manually controls per-project workers. Phase 2 will
+// add provision / pin / set-tier / clear-cache / log-streaming endpoints
+// plus a Workers tab in the admin SPA.
+
+router.get("/api/workers", (_req: Request, res: Response) => {
+  if (config.runtimeMode !== "worker") {
+    res.json({ mode: "in-process", workers: [] });
+    return;
+  }
+  res.json({ mode: "worker", workers: runnerManager.list() });
+});
+
+// stop-all defined BEFORE :id routes so Express does not interpret "stop-all"
+// as a project id.
+router.post("/api/workers/stop-all", async (_req: Request, res: Response) => {
+  if (config.runtimeMode !== "worker") {
+    res.status(409).json({ error: "not_in_worker_mode" });
+    return;
+  }
+  try {
+    await runnerManager.stopAll();
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: "stop_all_failed", message: err.message });
+  }
+});
+
+router.get("/api/workers/:id", (req: Request<{ id: string }>, res: Response) => {
+  if (config.runtimeMode !== "worker") {
+    res.status(409).json({ error: "not_in_worker_mode" });
+    return;
+  }
+  const id = req.params.id;
+  const metrics = runnerManager.getMetrics(id);
+  if (!metrics) {
+    res.status(404).json({ error: "worker_not_running", projectId: id });
+    return;
+  }
+  const limit = req.query.logs ? parseInt(String(req.query.logs), 10) : 200;
+  const logs = runnerManager.getLogs(id, Number.isFinite(limit) ? limit : 200);
+  res.json({ ...metrics, logs });
+});
+
+router.post("/api/workers/:id/stop", async (req: Request<{ id: string }>, res: Response) => {
+  if (config.runtimeMode !== "worker") {
+    res.status(409).json({ error: "not_in_worker_mode" });
+    return;
+  }
+  try {
+    await runnerManager.stop(req.params.id);
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: "stop_failed", message: err.message });
+  }
+});
+
+router.post("/api/workers/:id/restart", async (req: Request<{ id: string }>, res: Response) => {
+  if (config.runtimeMode !== "worker") {
+    res.status(409).json({ error: "not_in_worker_mode" });
+    return;
+  }
+  try {
+    const handle = await runnerManager.restart(req.params.id);
+    res.json({ ok: true, port: handle.port, pid: handle.pid });
+  } catch (err: any) {
+    res.status(500).json({ error: "restart_failed", message: err.message });
+  }
+});
+
+router.post("/api/workers/:id/reload", async (req: Request<{ id: string }>, res: Response) => {
+  if (config.runtimeMode !== "worker") {
+    res.status(409).json({ error: "not_in_worker_mode" });
+    return;
+  }
+  try {
+    const handle = await runnerManager.reload(req.params.id);
+    res.json({ ok: true, port: handle.port, pid: handle.pid });
+  } catch (err: any) {
+    res.status(500).json({ error: "reload_failed", message: err.message });
   }
 });
 

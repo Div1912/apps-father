@@ -147,29 +147,30 @@
       }
 
       function renderSummary(data) {
-        const rows = data.sessions || [];
-        if (!rows.length) { summary.innerHTML = ""; return; }
-        const totalCost    = rows.reduce((a, r) => a + (r.costUsd || 0), 0);
-        const totalRev     = rows.reduce((a, r) => a + (r.revenueUsd || 0), 0);
-        const totalMargin  = rows.reduce((a, r) => a + (r.marginUsd || 0), 0);
-        const failCount    = rows.filter(r => !r.success).length;
-        const avgDurMs     = rows.filter(r => r.durationMs).reduce((a, r, _i, arr) => a + r.durationMs / arr.length, 0);
+        if (!data.total) { summary.innerHTML = ""; return; }
+        const t = data.totals || {};
+        const totalCost   = t.costUsd    || 0;
+        const totalRev    = t.revenueUsd || 0;
+        const totalMargin = t.marginUsd  || 0;
+        const failCount   = t.failCount  || 0;
+        const avgDurMs    = t.avgDurationMs || 0;
 
-        const card = (label, value, color) =>
+        const card = (label, value, color, sub) =>
           `<div style="flex:1;min-width:120px;background:var(--admin-card-bg,rgba(255,255,255,0.04));border:1px solid var(--admin-border);border-radius:10px;padding:10px 14px">
             <div style="font-size:11px;color:var(--admin-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${label}</div>
             <div style="font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;color:${color || "inherit"}">${value}</div>
+            ${sub ? `<div style="font-size:11px;color:var(--admin-muted);margin-top:2px">${sub}</div>` : ""}
           </div>`;
 
         const marginColor = totalMargin > 0 ? "#4ade80" : totalMargin < 0 ? "#f87171" : "var(--admin-muted)";
+        const pageInfo = `page ${data.page}: ${fmtInt((data.sessions || []).length)}`;
         summary.innerHTML =
-          card("This page", fmtInt(rows.length), "") +
-          card("Total (filtered)", fmtInt(data.total), "") +
-          card("Cost", fmtUsd(totalCost, 5), "#94a3b8") +
-          card("Revenue", fmtUsd(totalRev, 4), "#60a5fa") +
-          card("Margin", (totalMargin >= 0 ? "+" : "") + fmtUsd(totalMargin, 4), marginColor) +
-          (failCount > 0 ? card("Failed", fmtInt(failCount), "#f87171") : "") +
-          (avgDurMs > 0 ? card("Avg duration", fmtDur(Math.round(avgDurMs)), "") : "");
+          card("Total sessions", fmtInt(data.total), "", pageInfo) +
+          card("Cost", fmtUsd(totalCost, 5), "#94a3b8", "all sessions") +
+          card("Revenue", fmtUsd(totalRev, 4), "#60a5fa", "all sessions") +
+          card("Margin", (totalMargin >= 0 ? "+" : "") + fmtUsd(totalMargin, 4), marginColor, "all sessions") +
+          (failCount > 0 ? card("Failed", fmtInt(failCount), "#f87171", "all sessions") : "") +
+          (avgDurMs > 0 ? card("Avg duration", fmtDur(avgDurMs), "", "all sessions") : "");
       }
 
       function renderRows(data) {

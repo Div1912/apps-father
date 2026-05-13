@@ -112,7 +112,7 @@ RULES FOR BACKEND (routes.js):
       OPENAI_KEY=sk-...
       SOME_SECRET=abc123
     Never hardcode secrets directly in routes.js.
-16. You CAN require npm packages — install them first with shell("npm install <pkg>")
+16. You CAN require npm packages — declare them first with the `npm_install` tool: `npm_install({ packages: ["multer", ...] })`. ONLY allowlisted packages are accepted (the tool returns the full list on rejection); the platform pre-installs them so you can `require()` immediately. Do NOT call `shell("npm install ...")` — that is blocked. Built-in modules (`fs`, `path`, `crypto`, etc.) need no install.
 17. API_BASE in frontend ends with "/". Backend route paths must NOT start with "/api/{projectId}/".
     Frontend fetch(API_BASE + 'users') → hits router.get('/users', ...) — correct.
     If you see a double-slash in a URL (e.g. /api/id//users), the frontend endpoint starts with "/" — fix it there.

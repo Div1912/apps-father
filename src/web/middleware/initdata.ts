@@ -24,14 +24,21 @@ export async function verifyInitData(req: Request, res: Response, next: NextFunc
 
   // Always parse the user out of initData so req.telegramUser is populated
   // even when we cannot verify the signature (no bot token yet, dev mode, etc.)
-  // HMAC verification is still attempted and logged, but never blocks the request.
   const parsedUser = parseInitDataUser(initData);
   if (parsedUser) {
     (req as any).telegramUser = parsedUser;
   }
 
+  // Skip HMAC verification for dev API endpoints — unverified user set above is enough.
+  if (req.originalUrl?.includes("/devapi/")) {
+    next();
+    return;
+  }
+
   try {
     const project = await projectService.getProject(projectId);
+    console.log("checking encrypted bot token");
+    console.log(project?.botTokenEncrypted);
     if (!project?.botTokenEncrypted) {
       // No bot token configured yet — user is set from raw initData above.
       next();
@@ -39,20 +46,28 @@ export async function verifyInitData(req: Request, res: Response, next: NextFunc
     }
 
     const botToken = decryptToken(project.botTokenEncrypted);
+
+    console.log(botToken);
     const isValid = validateTelegramInitData(initData, botToken);
+    console.log(isValid);
 
     if (!isValid) {
       console.log(`[InitData] Hash mismatch for project ${projectId} — allowing with unverified user`);
+
+      res.status(401).json({ error: "Not Authorized" });
+      return;
     } else {
       // Full parse when hash is valid (includes all fields, not just user).
       const parsed = parseInitData(initData);
       (req as any).telegramUser = parsed.user;
+      
+      next();
     }
-
-    next();
   } catch (err) {
     console.error("[InitData] Verification error:", err);
-    next();
+
+    res.status(401).json({ error: "Not Authorized" });
+    return;
   }
 }
 
@@ -77,6 +92,7 @@ function validateTelegramInitData(initData: string, botToken: string): boolean {
       .update(dataCheckString)
       .digest("hex");
 
+      console.log(`${computedHash} === ${hash}`, computedHash === hash);
     return computedHash === hash;
   } catch {
     return false;

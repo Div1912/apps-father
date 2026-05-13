@@ -2,6 +2,10 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 
+// Chat history is always stored in the platform-managed project tree at
+// cwd/projects — never under /srv/apps-father/projects (the runner root).
+// The runner root is only for routes.js execution; platform files (chat,
+// agent logs, etc.) stay here regardless of RUNTIME_MODE.
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
 
 export interface ChatMessage {

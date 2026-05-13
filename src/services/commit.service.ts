@@ -2,7 +2,13 @@ import fs from "fs";
 import path from "path";
 import { prisma } from "../db";
 import { validateRoutesSecurity } from "./agent/security-validator";
+import { config } from "../config";
+import { runnerManager } from "./runner-manager.service";
+import { runnerProvisionService } from "./runner-provision.service";
 
+// Commits, agent logs, and code snapshots are always stored in the platform-
+// managed tree at cwd/projects regardless of RUNTIME_MODE. Only routes.js
+// execution is relocated to /srv/apps-father/projects by the worker runtime.
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
 
 function copyDirSync(src: string, dest: string) {
@@ -37,6 +43,42 @@ function bustCache(dir: string): void {
     );
     fs.writeFileSync(indexPath, html, "utf-8");
   } catch {}
+}
+
+/**
+ * In worker mode, copy the backend/ AND frontend/ directories from the
+ * platform-managed tree (cwd/projects) to the worker execution tree
+ * (/srv/apps-father/projects) so the worker process can see the newly
+ * deployed code AND the platform can serve frontend assets from the same
+ * isolated tree (so the per-project Linux user owns its own static files).
+ *
+ * Errors are non-fatal (logged as warnings) so a missing /srv mount never
+ * blocks a deploy.
+ */
+async function pushProjectToWorkerPath(
+  projectId: string,
+  runtime: "release" | "development",
+  srcProjectDir: string,
+): Promise<void> {
+  // Ensure the full /srv/.../runtime/{frontend,backend,data} tree exists.
+  await runnerProvisionService.ensureLayout(projectId);
+
+  for (const sub of ["backend", "frontend"] as const) {
+    const src = path.join(srcProjectDir, runtime, sub);
+    const dest = sub === "backend"
+      ? runnerProvisionService.backendDir(projectId, runtime)
+      : runnerProvisionService.frontendDir(projectId, runtime);
+
+    if (fs.existsSync(dest)) {
+      fs.rmSync(dest, { recursive: true, force: true });
+    }
+    if (fs.existsSync(src)) {
+      copyDirSync(src, dest);
+      console.log(`[Worker] Pushed ${runtime} ${sub} to ${dest}`);
+    } else {
+      console.log(`[Worker] No ${runtime} ${sub} source at ${src}, skipping push`);
+    }
+  }
 }
 
 class CommitService {
@@ -117,6 +159,26 @@ class CommitService {
 
     bustCache(devDir);
     console.log(`[Commit] Synced to development/ for project ${projectId.substring(0, 8)}`);
+
+    // Worker mode: push new backend + frontend files to /srv, re-chown, then
+    // reload. If the worker is stopped (Phase 1 lazy-start default) reloadIfRunning
+    // is a no-op — the next inbound request lazy-spawns with the new code.
+    // Frontend is pushed because /app and /dev routes serve from /srv in
+    // worker mode (see app.routes.ts / dev.routes.ts).
+    if (config.runtimeMode === "worker") {
+      pushProjectToWorkerPath(projectId, "development", path.join(PROJECTS_DIR, projectId))
+        .then(() =>
+          runnerProvisionService
+            .fixupOwnership(projectId, "development")
+            .catch((err) => console.warn(`[Commit] fixupOwnership(dev) failed:`, err)),
+        )
+        .then(() =>
+          runnerManager
+            .reloadIfRunning(projectId)
+            .catch((err) => console.warn(`[Commit] reloadIfRunning failed:`, err)),
+        )
+        .catch((err) => console.warn(`[Commit] pushProjectToWorkerPath(dev) failed:`, err));
+    }
   }
 
   /**
@@ -205,6 +267,22 @@ class CommitService {
     });
 
     console.log(`[Release] Project ${projectId.substring(0, 8)} → released commit #${commitNum}`);
+
+    if (config.runtimeMode === "worker") {
+      pushProjectToWorkerPath(projectId, "release", path.join(PROJECTS_DIR, projectId))
+        .then(() =>
+          runnerProvisionService
+            .fixupOwnership(projectId, "release")
+            .catch((err) => console.warn(`[Release] fixupOwnership(release) failed:`, err)),
+        )
+        .then(() =>
+          runnerManager
+            .reloadIfRunning(projectId)
+            .catch((err) => console.warn(`[Release] reloadIfRunning failed:`, err)),
+        )
+        .catch((err) => console.warn(`[Release] pushProjectToWorkerPath(release) failed:`, err));
+    }
+
     return commitNum;
   }
 

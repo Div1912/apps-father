@@ -8,6 +8,7 @@ import { projectService } from "../services/project.service";
 import { decryptToken } from "../services/crypto.service";
 import { runWithProject } from "../services/console-tagger.service";
 import { config } from "../config";
+import { proxyWebSocketUpgrade } from "./routes/runner-proxy";
 
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
 
@@ -236,6 +237,22 @@ export function setupWebSocket(server: import("http").Server, miniAppWss?: impor
       miniAppWss.handleUpgrade(request, socket, head, (ws) => {
         miniAppWss.emit("connection", ws, request);
       });
+      return;
+    }
+
+    // ── Worker mode: proxy /app/:id/ws, /dev/:id/ws, /ws/:id, /devws/:id
+    //    into the per-project worker before falling through to in-process WS.
+    if (config.runtimeMode === "worker") {
+      try {
+        const handled = await proxyWebSocketUpgrade(request, socket as any, head);
+        if (handled) return;
+      } catch (err) {
+        console.error("[WS] runner-proxy upgrade failed:", err);
+        try { socket.destroy(); } catch {}
+        return;
+      }
+      // No worker path matched in worker mode — close the upgrade.
+      try { socket.destroy(); } catch {}
       return;
     }
 

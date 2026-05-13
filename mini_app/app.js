@@ -4545,20 +4545,91 @@ async function handleUnlinkBot(projectId) {
     if (local) { local.botUsername = null; local.botUserId = null; }
     renderAppList();
 
-    // Swap the bot-actions area to "Connect Bot" without full re-render
-    const botActionsEl = document.getElementById('detail-bot-actions');
-    if (botActionsEl) {
-      botActionsEl.style.marginTop = '0';
-      botActionsEl.innerHTML = `<div class="tm-active-button" id="detail-connect-bot-btn">${t('detail_connect_bot')}</div>`;
-      botActionsEl.querySelector('#detail-connect-bot-btn')
-        .addEventListener('click', function () { handleLinkBotClick(projectId, this, () => openDetail(projectId)); });
-    }
-    // Hide the token wrap since the bot is gone
-    document.getElementById('token-wrap').style.display = 'none';
-    document.getElementById('token-help-text').style.display = 'none';
+    // Navigate back to detail, which will re-render with "Connect Bot"
+    showView('detail', 'back');
   } catch (err) {
     console.error('[unlink-bot] error:', err);
     showToast(t('toast_network_error'), 'error');
+  }
+}
+
+// ── Bot Details view ────────────────────────────────────────────────────────
+
+async function openBotDetails(projectId) {
+  showView('bot-details');
+
+  // Reset spoilers
+  const tokenSpoiler = document.getElementById('bd-token-spoiler');
+  const urlSpoiler   = document.getElementById('bd-url-spoiler');
+  tokenSpoiler.classList.add('spoiler-active');
+  tokenSpoiler.classList.remove('js-spoiler-revealed');
+  urlSpoiler.classList.add('spoiler-active');
+  urlSpoiler.classList.remove('js-spoiler-revealed');
+  document.getElementById('bd-token-text').textContent = '';
+  document.getElementById('bd-url-text').textContent   = '';
+  document.getElementById('bd-bot-id').textContent     = '—';
+  document.getElementById('bd-url-row').style.display  = 'none';
+
+  // Fetch the token
+  try {
+    const res = await fetch(`${API_BASE}/token/${encodeURIComponent(projectId)}`, { headers: apiHeaders() });
+    if (res.ok) {
+      const data = await res.json();
+      currentToken = data.token || null;
+      if (currentToken) {
+        document.getElementById('bd-token-text').textContent = currentToken;
+        generateSpoilerPoints(tokenSpoiler);
+        // Bot ID = first part of token (before ":")
+        const botId = currentToken.split(':')[0] || '—';
+        document.getElementById('bd-bot-id').textContent = botId;
+      }
+    }
+  } catch (err) {
+    console.error('[bot-details] fetchToken error:', err);
+  }
+
+  // Populate App URL
+  const p = currentProject;
+  if (p) {
+    const appUrl = `${location.origin}/app/${p.id}/`;
+    document.getElementById('bd-url-text').textContent = appUrl;
+    generateSpoilerPoints(urlSpoiler);
+    document.getElementById('bd-url-row').style.display = '';
+  }
+
+  // Wire buttons
+  const revokeBtn = document.getElementById('bd-revoke-btn');
+  const unlinkBtn = document.getElementById('bd-unlink-btn');
+
+  revokeBtn.onclick = () => handleRevokeBotToken(projectId);
+  unlinkBtn.onclick = () => handleUnlinkBot(projectId);
+}
+
+async function handleRevokeBotToken(projectId) {
+  if (!confirm(t('bd_revoke_confirm') || 'Revoke the current bot token and issue a new one automatically? The bot will remain connected.')) return;
+
+  const btn = document.getElementById('bd-revoke-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+
+  try {
+    const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/revoke-bot-token`, {
+      method: 'POST',
+      headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      showToast(data?.error || t('bd_revoke_error'), 'error');
+      return;
+    }
+    hapticNotify('success');
+    showToast(t('bd_revoke_success'), 'success');
+    // Refresh the bot-details view with new token
+    await openBotDetails(projectId);
+  } catch (err) {
+    console.error('[revoke-bot-token] error:', err);
+    showToast(t('toast_network_error'), 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = t('bd_btn_revoke'); }
   }
 }
 
@@ -6129,47 +6200,20 @@ async function openDetail(id) {
   });
 
   const isLive = ['deployed', 'released'].includes(p.status);
-  const baseUrl = location.origin;
-
-  const webappUrl = `${baseUrl}/app/${p.id}/`;
-  const webappUrlRow = document.getElementById('webapp-url-row');
-  const webappUrlSpoiler = document.getElementById('webapp-url-spoiler');
-  document.getElementById('webapp-url-text').textContent = webappUrl;
-  // Keep row invisible until spoiler dots are ready, then fade in — prevents blank flash
-  webappUrlRow.style.display = '';
-  webappUrlRow.style.opacity = '0';
-  webappUrlSpoiler.classList.add('spoiler-active');
-  webappUrlSpoiler.classList.remove('js-spoiler-revealed');
-  destroySpoilerPoints(webappUrlSpoiler);
-  setTimeout(() => {
-    generateSpoilerPoints(webappUrlSpoiler);
-    webappUrlRow.style.transition = 'opacity 0.15s';
-    webappUrlRow.style.opacity = '1';
-    setTimeout(() => { webappUrlRow.style.transition = ''; }, 160);
-  }, 300);
 
   currentToken = null;
-  const spoiler = document.getElementById('token-spoiler');
-  spoiler.classList.add('spoiler-active');
-  spoiler.classList.remove('js-spoiler-revealed');
-  document.getElementById('token-text').textContent = '';
-  document.getElementById('token-wrap').style.display = 'none';
-  document.getElementById('token-help-text').style.display = 'none';
-  document.getElementById('detail-bot-actions').style.marginTop = '0';
 
   // Bot action buttons — always visible in the token section
   const botActionsEl = document.getElementById('detail-bot-actions');
   if (p.botUsername) {
-    botActionsEl.innerHTML = `<div class="tm-revoke-button" id="detail-unlink-bot-btn">${t('detail_unlink_bot')}</div>`;
-    botActionsEl.querySelector('#detail-unlink-bot-btn')
-      .addEventListener('click', () => handleUnlinkBot(p.id));
+    botActionsEl.innerHTML = `<div class="tm-active-button" id="detail-bot-details-btn">${t('detail_bot_details')}</div>`;
+    botActionsEl.querySelector('#detail-bot-details-btn')
+      .addEventListener('click', () => openBotDetails(p.id));
   } else {
     botActionsEl.innerHTML = `<div class="tm-active-button" id="detail-connect-bot-btn">${t('detail_connect_bot')}</div>`;
     botActionsEl.querySelector('#detail-connect-bot-btn')
       .addEventListener('click', function () { handleLinkBotClick(p.id, this, () => openDetail(p.id)); });
   }
-
-  fetchToken(p.id);
 
   // App rows (live only) — shown inside the section-app mini-card
   let appRows = '';
@@ -6440,8 +6484,9 @@ function _bindAs3SettingsRows(p) {
   wire('as3-row-token',    () => openAppToken(p.id));
   wire('as3-row-versions', () => openVersions(p.id));
   wire('as3-row-paid',     () => openFeatures(p.id));
-  wire('as3-row-env',      () => openProjectEnv(p.id));
-  wire('as3-row-bucket',   () => openBucket(p.id));
+  wire('as3-row-env',            () => openProjectEnv(p.id));
+  wire('as3-row-bucket',         () => openBucket(p.id));
+  wire('as3-row-server-control', () => openServerControl(p.id));
   wire('as3-row-transfer', () => openTransfer());
   wire('as3-row-delete',   () => openDeleteApp());
 }
@@ -6451,12 +6496,7 @@ async function fetchToken(projectId) {
     const res = await fetch(`${API_BASE}/token/${projectId}`, { headers: apiHeaders() });
     if (!res.ok) return;
     const data = await res.json();
-    currentToken = data.token;
-    document.getElementById('token-text').textContent = currentToken;
-    document.getElementById('token-wrap').style.display = '';
-    document.getElementById('token-help-text').style.display = '';
-    const spoiler = document.getElementById('token-spoiler');
-    generateSpoilerPoints(spoiler);
+    currentToken = data.token || null;
   } catch (err) {
     console.error('Failed to fetch token:', err);
   }
@@ -6507,7 +6547,11 @@ function initAutosize() {
 }
 
 async function openEditInfo() {
-  if (!currentProject || !currentToken) {
+  if (!currentProject) return;
+  if (!currentToken) {
+    await fetchToken(currentProject.id);
+  }
+  if (!currentToken) {
     showToast(t('toast_token_loading'), 'info');
     return;
   }
@@ -7196,13 +7240,14 @@ function revealAndCopy(spoilerEl, text) {
 }
 
 function initTokenActions() {
-  document.getElementById('webapp-url-row').addEventListener('click', () => {
-    const url = document.getElementById('webapp-url-text').textContent;
-    revealAndCopy(document.getElementById('webapp-url-spoiler'), url);
+  // Bot Details view spoilers
+  document.getElementById('bd-url-row')?.addEventListener('click', () => {
+    const url = document.getElementById('bd-url-text')?.textContent || '';
+    revealAndCopy(document.getElementById('bd-url-spoiler'), url);
   });
 
-  document.getElementById('token-spoiler').addEventListener('click', () => {
-    revealAndCopy(document.getElementById('token-spoiler'), currentToken);
+  document.getElementById('bd-token-spoiler')?.addEventListener('click', () => {
+    revealAndCopy(document.getElementById('bd-token-spoiler'), currentToken);
   });
 }
 
@@ -8775,7 +8820,7 @@ const VIEW_DEPTH = {
   help: 1, referral: 1, partner: 1, 'slots-full': 1,
   store: 1, portfolio: 1, swap: 1,
   'edit-info': 2, transfer: 2, delete: 2, versions: 2,
-  features: 2, 'project-env': 2, bucket: 2, 'release-notes': 2,
+  features: 2, 'project-env': 2, bucket: 2, 'server-control': 2, 'bot-details': 2, 'release-notes': 2,
   'store-app': 2, publish: 2, 'app-info': 2, 'app-token': 2,
   admin: 1, 'adm-dashboard': 2, 'adm-sources': 2, 'adm-activities': 2,
   'adm-users': 2, 'adm-apps': 2, 'adm-vouchers': 2, 'adm-config': 2,
@@ -8788,7 +8833,7 @@ const ALL_VIEW_IDS = [
   'adm-sources', 'adm-source-users', 'adm-activities', 'adm-users',
   'adm-apps', 'adm-vouchers', 'adm-config', 'admin-user',
   'versions', 'version-detail', 'features', 'tasks', 'slots-full',
-  'topup', 'language', 'onboarding', 'project-env', 'bucket', 'chat',
+  'topup', 'language', 'onboarding', 'project-env', 'bucket', 'server-control', 'bot-details', 'chat',
   'store', 'store-app', 'publish', 'app-info', 'app-token', 'portfolio', 'wallet', 'other', 'swap',
 ];
 
@@ -8806,7 +8851,7 @@ const VIEW_PARENT_TAB = {
   chat: 'list', detail: 'list', 'edit-info': 'list', transfer: 'list',
   delete: 'list', partner: 'list', topup: 'list', tasks: 'list',
   'slots-full': 'list', versions: 'list', 'version-detail': 'list',
-  features: 'list', 'project-env': 'list', bucket: 'list',
+  features: 'list', 'project-env': 'list', bucket: 'list', 'server-control': 'list', 'bot-details': 'list',
   portfolio: 'store', 'store-app': 'store', publish: 'store',
   swap: 'wallet',
   'app-info': 'list', 'app-token': 'list',
@@ -9824,6 +9869,10 @@ async function init() {
         }
       } else if (currentView === 'bucket') {
         showView('detail', 'back');
+      } else if (currentView === 'server-control') {
+        showView('detail', 'back');
+      } else if (currentView === 'bot-details') {
+        showView('detail', 'back');
       } else if (currentView === 'store') {
         showView('list', 'back');
       } else if (currentView === 'store-app') {
@@ -10421,21 +10470,17 @@ async function loadBucketFiles() {
       btn.addEventListener('click', () => {
         const url = location.origin + btn.dataset.link;
         navigator.clipboard.writeText(url).then(() => {
-          const orig = btn.textContent;
-          btn.textContent = 'Copied!';
-          setTimeout(() => { btn.textContent = orig; }, 1400);
+          const orig = btn.innerHTML;
+          btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+          setTimeout(() => { btn.innerHTML = orig; }, 1400);
         }).catch(() => { });
       });
     });
     list.querySelectorAll('.bucket-dl-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const a = document.createElement('a');
-        a.href = btn.dataset.link;
-        a.download = btn.dataset.filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-      });
+      btn.addEventListener('click', () => bucketDownload(btn.dataset.link, btn.dataset.filename));
+    });
+    list.querySelectorAll('.bucket-view-btn:not([disabled])').forEach(btn => {
+      btn.addEventListener('click', () => bucketPreview(btn.dataset.link, btn.dataset.filename, btn.dataset.type));
     });
   } catch (err) {
     loading.style.display = 'none';
@@ -10447,31 +10492,125 @@ function bucketFileRow(f) {
   const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp', 'svg'].includes(f.ext);
   const isAudio = ['mp3', 'ogg', 'wav', 'flac', 'aac', 'm4a', 'weba'].includes(f.ext);
   const isVideo = ['mp4', 'webm', 'ogv', 'mov'].includes(f.ext);
+  const isPdf   = f.ext === 'pdf';
+  const isText  = ['txt', 'csv', 'json', 'md', 'html', 'css', 'js'].includes(f.ext);
+  const canPreview = isImage || isAudio || isVideo || isPdf || isText;
+
   let icon = '📄';
   if (isImage) icon = '🖼️';
   else if (isAudio) icon = '🎵';
   else if (isVideo) icon = '🎬';
-  else if (f.ext === 'pdf') icon = '📕';
+  else if (isPdf) icon = '📕';
 
   const sizeStr = f.size > 1048576
     ? (f.size / 1048576).toFixed(1) + ' MB'
     : (f.size / 1024).toFixed(0) + ' KB';
 
-  const date = new Date(f.uploaded_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const date = new Date(f.uploaded_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+  // SVG icons for the three action buttons
+  const viewSvg = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+  const linkSvg = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>`;
+  const dlSvg   = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+  const delSvg  = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>`;
 
   return `
     <div class="bucket-file-row" data-filename="${esc(f.filename)}">
       <div class="bucket-file-icon">${icon}</div>
       <div class="bucket-file-info">
-        <div class="bucket-file-name">${esc(f.filename)}</div>
+        <div class="bucket-file-name" title="${esc(f.filename)}">${esc(f.filename)}</div>
         <div class="bucket-file-meta">${esc(f.ext.toUpperCase())} · ${sizeStr} · ${date}</div>
       </div>
       <div class="bucket-file-actions">
-        <button class="bucket-copy-btn" data-link="${esc(f.direct_link)}" title="Copy link">Link</button>
-        <button class="bucket-dl-btn"   data-link="${esc(f.direct_link)}" data-filename="${esc(f.filename)}" title="Download">DL</button>
-        <button class="bucket-del-btn"  data-filename="${esc(f.filename)}" title="Delete">✕</button>
+        <button class="bucket-view-btn${canPreview ? '' : ' bucket-view-btn--disabled'}"
+          data-link="${esc(f.direct_link)}" data-filename="${esc(f.filename)}"
+          data-type="${isImage ? 'image' : isVideo ? 'video' : isAudio ? 'audio' : isPdf ? 'pdf' : isText ? 'text' : 'none'}"
+          title="Preview" ${canPreview ? '' : 'disabled'}>${viewSvg}</button>
+        <button class="bucket-copy-btn" data-link="${esc(f.direct_link)}" title="Copy link">${linkSvg}</button>
+        <button class="bucket-dl-btn"   data-link="${esc(f.direct_link)}" data-filename="${esc(f.filename)}" title="Download">${dlSvg}</button>
+        <button class="bucket-del-btn"  data-filename="${esc(f.filename)}" title="Delete">${delSvg}</button>
       </div>
     </div>`;
+}
+
+async function bucketDownload(link, filename) {
+  try {
+    const r = await fetch(location.origin + link);
+    if (!r.ok) throw new Error('Failed to fetch file');
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (e) {
+    showToast('Download failed: ' + e.message, 'error');
+  }
+}
+
+function bucketPreview(link, filename, type) {
+  // Remove any existing preview modal
+  document.getElementById('bucket-preview-modal')?.remove();
+
+  const url = location.origin + link;
+  let contentHtml = '';
+
+  if (type === 'image') {
+    contentHtml = `<img class="bpm-img" src="${esc(url)}" alt="${esc(filename)}">`;
+  } else if (type === 'video') {
+    contentHtml = `<video class="bpm-video" src="${esc(url)}" controls autoplay playsinline></video>`;
+  } else if (type === 'audio') {
+    contentHtml = `
+      <div class="bpm-audio-wrap">
+        <div class="bpm-audio-icon">🎵</div>
+        <div class="bpm-audio-name">${esc(filename)}</div>
+        <audio class="bpm-audio" src="${esc(url)}" controls autoplay></audio>
+      </div>`;
+  } else if (type === 'pdf') {
+    contentHtml = `<iframe class="bpm-iframe" src="${esc(url)}" title="${esc(filename)}"></iframe>`;
+  } else if (type === 'text') {
+    contentHtml = `<div class="bpm-text-loading">Loading…</div>`;
+  }
+
+  const modal = document.createElement('div');
+  modal.id = 'bucket-preview-modal';
+  modal.className = 'bpm-overlay';
+  modal.innerHTML = `
+    <div class="bpm-panel">
+      <div class="bpm-header">
+        <span class="bpm-title" title="${esc(filename)}">${esc(filename)}</span>
+        <button class="bpm-close" aria-label="Close">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="bpm-body">${contentHtml}</div>
+    </div>`;
+
+  document.body.appendChild(modal);
+
+  // Close on backdrop click or X
+  modal.querySelector('.bpm-close').addEventListener('click', () => modal.remove());
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+  // For text files, fetch and render
+  if (type === 'text') {
+    fetch(url)
+      .then(r => r.text())
+      .then(text => {
+        const body = modal.querySelector('.bpm-body');
+        if (body) body.innerHTML = `<pre class="bpm-text">${esc(text.substring(0, 50000))}</pre>`;
+      })
+      .catch(() => {
+        const body = modal.querySelector('.bpm-body');
+        if (body) body.innerHTML = `<div class="bpm-text-loading" style="color:#f87171">Failed to load file.</div>`;
+      });
+  }
+
+  // Animate in
+  requestAnimationFrame(() => modal.classList.add('bpm-open'));
 }
 
 async function handleBucketUpload(files) {
@@ -10535,6 +10674,16 @@ async function deleteBucketFile(filename) {
     }
     splash.classList.add('fade-out');
     setTimeout(() => { try { splash.remove(); } catch {} }, 400);
+
+    // Play launch sound exactly once per session, timed with the reveal
+    try {
+      if (!sessionStorage.getItem('af_launch_sound')) {
+        sessionStorage.setItem('af_launch_sound', '1');
+        const snd = new Audio('assets/launch-sound.mp3');
+        snd.volume = 0.5;
+        snd.play().catch(() => {});
+      }
+    } catch (_) {}
   };
   setTimeout(dismiss, 2000);
 })();
@@ -13345,6 +13494,198 @@ function startPublishStatusPolling() {
 
 // Make publish flow reachable from openDetail (App Settings).
 window._afOpenPublish = openPublish;
+
+// ── Server Control ──────────────────────────────────────────────────────────
+
+let scProjectId = null;
+let scRefreshTimer = null;
+
+function openServerControl(projectId) {
+  scProjectId = projectId;
+  showView('server-control');
+  scLoad();
+  scLoadLogs();
+}
+
+function scFmtBytes(b) {
+  if (b == null) return '—';
+  if (b < 1024) return b + ' B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+  return (b / (1024 * 1024)).toFixed(2) + ' MB';
+}
+
+function scFmtUptime(ms) {
+  if (ms == null || ms < 0) return '—';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return s + 's';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + 'm ' + (s % 60) + 's';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ' + (m % 60) + 'm';
+  return Math.floor(h / 24) + 'd ' + (h % 24) + 'h';
+}
+
+function scStateLabel(state) {
+  const map = {
+    spawning:        t('sc_state_starting'),
+    ready:           t('sc_state_running'),
+    stopping:        t('sc_state_stopping'),
+    stopped:         t('sc_state_stopped'),
+    'circuit-broken': t('sc_state_circuit_broken'),
+    not_tracked:     t('sc_state_not_started'),
+  };
+  return map[state] || state;
+}
+
+async function scLoad() {
+  if (!scProjectId) return;
+  try {
+    const r = await fetch(`${API_BASE}/server-control/${scProjectId}`, { headers: apiHeaders() });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+
+    const relBadge = document.getElementById('sc-badge-release');
+    const devBadge = document.getElementById('sc-badge-dev');
+    if (relBadge) {
+      relBadge.className = 'sc-badge ' + scBadgeClass(d.release);
+      relBadge.textContent = scBadgeText(d.release);
+    }
+    if (devBadge) {
+      devBadge.className = 'sc-badge ' + scBadgeClass(d.development);
+      devBadge.textContent = scBadgeText(d.development);
+    }
+
+    document.getElementById('sc-state').textContent = scStateLabel(d.state);
+    document.getElementById('sc-uptime').textContent = scFmtUptime(d.uptimeMs);
+    document.getElementById('sc-mem').textContent = scFmtBytes(d.memRssBytes);
+    document.getElementById('sc-cpu').textContent = d.cpuPercent != null ? d.cpuPercent.toFixed(1) + '%' : '—';
+    document.getElementById('sc-crashes').textContent = d.crashCount ?? 0;
+    document.getElementById('sc-restarts').textContent = d.restartCount ?? 0;
+    document.getElementById('sc-app-size').textContent = scFmtBytes(d.appSizeBytes);
+    document.getElementById('sc-bucket-size').textContent = scFmtBytes(d.bucketSizeBytes);
+
+    const errEl = document.getElementById('sc-last-error');
+    if (d.lastError) {
+      errEl.textContent = 'Last error: ' + d.lastError;
+      errEl.style.display = '';
+    } else {
+      errEl.style.display = 'none';
+    }
+
+    // Disable/enable buttons based on state
+    const isRunning = d.state === 'ready' || d.state === 'spawning';
+    const isStopped = !isRunning;
+    document.getElementById('sc-btn-start').disabled = !d.workerMode || isRunning;
+    document.getElementById('sc-btn-stop').disabled = !d.workerMode || isStopped;
+    document.getElementById('sc-btn-restart').disabled = !d.workerMode;
+    if (!d.workerMode) {
+      document.getElementById('sc-subtitle').textContent = t('sc_no_worker_mode');
+    }
+
+    // Maintenance toggle — programmatic .checked assignment never fires 'change'
+    const toggle = document.getElementById('sc-maintenance-toggle');
+    if (toggle) toggle.checked = !!d.maintenanceMode;
+    const banner = document.getElementById('sc-maintenance-banner');
+    if (banner) banner.style.display = d.maintenanceMode ? '' : 'none';
+  } catch (err) {
+    console.error('[ServerControl] load error:', err);
+  }
+}
+
+function scBadgeClass(rts) {
+  if (!rts) return 'sc-badge--off';
+  if (rts.error) return 'sc-badge--off';
+  if (rts.loaded) return 'sc-badge--ok';
+  return 'sc-badge--boot';
+}
+function scBadgeText(rts) {
+  if (!rts) return t('sc_badge_not_launched');
+  if (rts.error) return t('sc_badge_not_launched');
+  if (rts.loaded) return t('sc_badge_running');
+  return t('sc_badge_starting');
+}
+
+async function scLoadLogs() {
+  if (!scProjectId) return;
+  const logsEl = document.getElementById('sc-logs');
+  if (!logsEl) return;
+  try {
+    const r = await fetch(`${API_BASE}/server-control/${scProjectId}/logs?n=300`, { headers: apiHeaders() });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    const lines = (d.logs || []);
+    if (lines.length === 0) {
+      logsEl.textContent = t('sc_no_logs');
+      return;
+    }
+    logsEl.innerHTML = lines.map(l => {
+      const time = new Date(l.ts).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const cls = l.stream === 'stderr' ? ' class="sc-log-stderr"' : '';
+      return `<span${cls}>[${time}] ${esc(l.text)}</span>`;
+    }).join('\n');
+    logsEl.scrollTop = logsEl.scrollHeight;
+  } catch (err) {
+    if (logsEl) logsEl.textContent = t('sc_logs_fail');
+  }
+}
+
+async function scAction(action) {
+  if (!scProjectId) return;
+  const btn = document.getElementById(`sc-btn-${action}`);
+  if (btn) { btn.disabled = true; }
+  try {
+    const r = await fetch(`${API_BASE}/server-control/${scProjectId}/${action}`, {
+      method: 'POST',
+      headers: apiHeaders(),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      showToast(d.error || t('sc_action_failed').replace('{action}', action), 'error');
+    } else {
+      showToast(action === 'start' ? t('sc_toast_started') : action === 'stop' ? t('sc_toast_stopped') : t('sc_toast_restarted'), 'success');
+    }
+  } catch (err) {
+    showToast(t('sc_action_failed').replace('{action}', action) + ': ' + err.message, 'error');
+  } finally {
+    await scLoad();
+    if (action !== 'stop') await scLoadLogs();
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('sc-btn-start')?.addEventListener('click', () => scAction('start'));
+  document.getElementById('sc-btn-stop')?.addEventListener('click', () => scAction('stop'));
+  document.getElementById('sc-btn-restart')?.addEventListener('click', () => scAction('restart'));
+  document.getElementById('sc-btn-refresh')?.addEventListener('click', () => { scLoad(); scLoadLogs(); });
+  document.getElementById('sc-btn-logs-refresh')?.addEventListener('click', () => scLoadLogs());
+
+  document.getElementById('sc-maintenance-toggle')?.addEventListener('change', async function () {
+    if (!scProjectId) return;
+    const enabled = this.checked;
+    const banner = document.getElementById('sc-maintenance-banner');
+    if (banner) banner.style.display = enabled ? '' : 'none';
+    try {
+      const r = await fetch(`${API_BASE}/server-control/${scProjectId}/maintenance`, {
+        method: 'POST',
+        headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      const d = await r.json();
+      if (!r.ok) {
+        showToast(d.error || t('sc_maintenance_toggle_fail'), 'error');
+        // Revert UI — .checked assignment does not re-fire 'change'
+        this.checked = !enabled;
+        if (banner) banner.style.display = !enabled ? '' : 'none';
+      } else {
+        showToast(enabled ? t('sc_toast_maintenance_on') : t('sc_toast_maintenance_off'), enabled ? 'info' : 'success');
+      }
+    } catch (err) {
+      showToast(t('sc_network_error'), 'error');
+      this.checked = !enabled;
+      if (banner) banner.style.display = !enabled ? '' : 'none';
+    }
+  });
+});
 
 init();
 

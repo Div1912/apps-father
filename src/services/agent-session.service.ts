@@ -613,7 +613,7 @@ class AgentSessionService {
         ? orCostUsd
         : (runnerResult.inputTokens * agentPricing.input + runnerResult.outputTokens * agentPricing.output);
       void this.logSession({
-        type: mode === "new" ? "build" : "update",
+        type: sessionType,
         projectId,
         userId: (agentProject as any)?.userId ?? null,
         model: tierConfig.modelId,
@@ -676,7 +676,7 @@ class AgentSessionService {
       ? ctx.totalCostUsd
       : (ctx.totalInputTokens * agentPricing.input + ctx.totalOutputTokens * agentPricing.output);
     void this.logSession({
-      type: mode === "new" ? "build" : "update",
+      type: sessionType,
       projectId,
       userId: (agentProject as any)?.userId ?? null,
       model: tierConfig.modelId,

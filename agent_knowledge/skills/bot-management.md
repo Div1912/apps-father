@@ -205,7 +205,7 @@ router.post("/bot-webhook", async (req, res) => {
         parse_mode: "HTML",
         reply_markup: {
           inline_keyboard: [[
-            { text: "🚀 Launch App", web_app: { url: "<APP_URL>" } },
+            { text: "🚀 Launch App", web_app: { url: `${env.BASE_URL}/app/${env.PROJECT_ID}/` } },
           ]],
         },
       });
@@ -241,7 +241,7 @@ router.post("/bot-webhook", async (req, res) => {
       text: "Tap the button below to open the app:",
       reply_markup: {
         inline_keyboard: [[
-          { text: "🚀 Launch App", web_app: { url: "<APP_URL>" } },
+          { text: "🚀 Launch App", web_app: { url: `${env.BASE_URL}/app/${env.PROJECT_ID}/` } },
         ]],
       },
     });
@@ -272,7 +272,8 @@ router.post("/bot-webhook", async (req, res) => {
 });
 ```
 
-Replace `<APP_URL>` with the actual mini-app URL. The platform serves apps at `{baseUrl}/app/{projectId}/` — substitute `{projectId}` with the real id at build time, or read the platform-provided `db.appUrl` if available.
+⚠️ **Always use `${env.BASE_URL}/app/${env.PROJECT_ID}/` for the `web_app.url`.**
+Never use `https://t.me/${botUsername}/app` or any `t.me` link — those are bot profile links, NOT mini-app launch URLs. The correct URL is always built from `env.BASE_URL` and `env.PROJECT_ID` which are injected by the platform.
 
 ### Why `res.json({ ok: true })` BEFORE the work?
 
@@ -301,7 +302,7 @@ router.post("/notify-winner", async (req, res) => {
         parse_mode: "HTML",
         reply_markup: {
           inline_keyboard: [[
-            { text: "🎁 Claim", web_app: { url: "<APP_URL>" } },
+            { text: "🎁 Claim", web_app: { url: `${env.BASE_URL}/app/${env.PROJECT_ID}/` } },
           ]],
         },
       }),
@@ -405,7 +406,7 @@ router.post("/bot-webhook", async (req, res) => {
         chat_id: msg.chat.id,
         text: `Welcome! Tap the button below to open the app.`,
         reply_markup: {
-          inline_keyboard: [[{ text: "🚀 Launch App", web_app: { url: "<APP_URL>" } }]],
+          inline_keyboard: [[{ text: "🚀 Launch App", web_app: { url: `${env.BASE_URL}/app/${env.PROJECT_ID}/` } }]],
         },
       }),
     });

@@ -3,13 +3,153 @@
  *   • Chat      — agent chat history (with admin system-note composer)
  *   • Settings  — editable name/description/status/features
  *   • Features  — paid features checklist
- *   • Files     — directory tree + read-only viewer (safe for binaries)
+ *   • Files     — opens a full-screen file browser modal
  *   • Logs      — persistent runtime logs (DB-backed, scoped to this app)
  *   • Agent     — per-commit JSONL parsed agent decision log
  */
 (function () {
   "use strict";
   window.AdminPages = window.AdminPages || {};
+
+  // ── File Browser Modal (also exposed as window.FilesModal) ──────────────
+  if (!document.getElementById("fm-modal-styles")) {
+    const s = document.createElement("style");
+    s.id = "fm-modal-styles";
+    s.textContent = `
+      .fm-overlay {
+        position: fixed; inset: 0; z-index: 2100;
+        background: rgba(0,0,0,.78);
+        backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+        display: flex; align-items: center; justify-content: center;
+        padding: 20px;
+        animation: fmFadeIn 180ms ease;
+      }
+      @keyframes fmFadeIn { from { opacity:0 } to { opacity:1 } }
+      .fm-modal {
+        position: relative;
+        width: 100%; height: 92vh; max-width: 1280px;
+        background: var(--header-bg-color);
+        border: 1px solid var(--admin-card-border);
+        border-radius: 20px;
+        box-shadow: 0 32px 80px rgba(0,0,0,.6);
+        display: flex; flex-direction: column;
+        overflow: hidden;
+        animation: fmSlideUp 220ms cubic-bezier(.22,.68,0,1.2);
+      }
+      @keyframes fmSlideUp {
+        from { transform: translateY(24px) scale(.97); opacity:0 }
+        to   { transform: translateY(0)    scale(1);   opacity:1 }
+      }
+      .fm-head {
+        padding: 14px 20px;
+        border-bottom: 1px solid var(--admin-divider);
+        display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+        min-height: 58px;
+      }
+      .fm-head-title {
+        font-size: 15px; font-weight: 700; color: var(--admin-text);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        flex: 1; min-width: 0;
+      }
+      .fm-head-url {
+        font-size: 11px; font-family: monospace; color: var(--admin-muted);
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        max-width: 380px; flex-shrink: 1; min-width: 0;
+      }
+      .fm-head-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+      .fm-close {
+        width: 32px; height: 32px; border-radius: 50%;
+        border: 1px solid var(--admin-card-border);
+        background: var(--admin-card-bg); color: var(--admin-muted);
+        font-size: 16px; display: flex; align-items: center; justify-content: center;
+        cursor: pointer; transition: background 120ms, color 120ms;
+      }
+      .fm-close:hover { background: var(--admin-tab-hover-bg); color: var(--admin-text); }
+      .fm-iframe { flex: 1; width: 100%; border: none; }
+      .fm-legacy-body { flex: 1; overflow: auto; padding: 16px; }
+    `;
+    document.head.appendChild(s);
+  }
+
+  // options.srvPath — absolute server path to open (e.g. /srv/apps-father/projects/:id/)
+  //                    when omitted, falls back to config filesBrowserProjectsRoot/:id/commits/
+  function openFilesModal(projectId, projectName, options) {
+    const existing = document.getElementById("fm-overlay");
+    if (existing) existing.remove();
+
+    const name = projectName || ("Project " + projectId.slice(0, 8));
+    const tok  = Api.getToken ? Api.getToken() : "";
+    const dlHref = "/admin/api/projects/" + encodeURIComponent(projectId) +
+                   "/download.zip?dir=development&token=" + encodeURIComponent(tok || "");
+
+    const overlay = document.createElement("div");
+    overlay.className = "fm-overlay";
+    overlay.id = "fm-overlay";
+
+    function closeModal() {
+      overlay.style.animation = "fmFadeIn 160ms ease reverse";
+      setTimeout(() => overlay.remove(), 160);
+    }
+
+    // Async: fetch config then build the modal
+    (async () => {
+      let cfg = {};
+      try { cfg = await Api.request("/config"); } catch { cfg = {}; }
+      const base = (cfg.filesBrowserBaseUrl || "").replace(/\/+$/, "");
+      const root = (cfg.filesBrowserProjectsRoot || "").replace(/\/+$/, "");
+
+      // If a custom absolute server path is provided, build the URL from that.
+      // e.g. srvPath = "/srv/apps-father/projects/abc/" → base + "/files/srv/..."
+      const srvPath = options && options.srvPath;
+
+      if (base && (root || srvPath)) {
+        const url = srvPath
+          ? `${base}/files${srvPath}`
+          : `${base}${root}/${encodeURIComponent(projectId)}/commits/`;
+        overlay.innerHTML = `
+          <div class="fm-modal">
+            <div class="fm-head">
+              ${Avatar.lazyAvatarHtml({ kind: "project", id: projectId, name, seed: projectId, size: 32 })}
+              <div class="fm-head-title">📂 ${Fmt.escapeHtml(name)} — Files</div>
+              <code class="fm-head-url" title="${Fmt.escapeHtml(url)}">${Fmt.escapeHtml(url)}</code>
+              <div class="fm-head-actions">
+                <a class="btn btn-xs btn-ghost" href="${Fmt.escapeHtml(url)}" target="_blank" rel="noopener">↗ New tab</a>
+                <a class="btn btn-xs btn-ghost" href="${Fmt.escapeHtml(dlHref)}" target="_blank" rel="noopener">⬇ ZIP</a>
+                <button class="fm-close" id="fm-close-btn" title="Close">✕</button>
+              </div>
+            </div>
+            <iframe class="fm-iframe" src="${Fmt.escapeHtml(url)}" referrerpolicy="no-referrer"></iframe>
+          </div>`;
+      } else {
+        // No filebrowser configured — fall back to the built-in legacy tree
+        overlay.innerHTML = `
+          <div class="fm-modal">
+            <div class="fm-head">
+              ${Avatar.lazyAvatarHtml({ kind: "project", id: projectId, name, seed: projectId, size: 32 })}
+              <div class="fm-head-title">📂 ${Fmt.escapeHtml(name)} — Files</div>
+              <div class="fm-head-actions">
+                <a class="btn btn-xs btn-ghost" href="${Fmt.escapeHtml(dlHref)}" target="_blank" rel="noopener">⬇ ZIP</a>
+                <button class="fm-close" id="fm-close-btn" title="Close">✕</button>
+              </div>
+            </div>
+            <div class="fm-legacy-body" id="fm-legacy-body"></div>
+          </div>`;
+        renderFilesLegacy(overlay.querySelector("#fm-legacy-body"), { id: projectId, name });
+      }
+
+      overlay.addEventListener("click", e => { if (e.target === overlay) closeModal(); });
+      overlay.querySelector("#fm-close-btn").addEventListener("click", closeModal);
+    })();
+
+    document.body.appendChild(overlay);
+
+    // Keyboard close
+    function onKey(e) { if (e.key === "Escape") { closeModal(); document.removeEventListener("keydown", onKey); } }
+    document.addEventListener("keydown", onKey);
+  }
+
+  // Expose globally so workers.js (and other pages) can open the files modal
+  window.FilesModal = { open: openFilesModal };
 
   // ─── status select options (mirrors the project lifecycle) ───────────────
   const STATUSES = [
@@ -111,7 +251,17 @@
           const fresh = await Api.request("/projects/" + projectId);
           Object.assign(p, fresh);
         });
-        else if (key === "files")    renderFiles(subHost, p);
+        else if (key === "files") {
+          subHost.innerHTML = `
+            <div class="empty-state" style="padding:32px 0">
+              <div style="font-size:32px;margin-bottom:8px">📂</div>
+              <div style="font-size:14px;font-weight:600;color:var(--admin-text);margin-bottom:4px">File Browser</div>
+              <div style="font-size:12px;color:var(--admin-muted);margin-bottom:16px">Opens the filebrowser in a full-screen overlay</div>
+              <button class="btn btn-primary" id="files-open-modal">Open file browser</button>
+            </div>`;
+          subHost.querySelector("#files-open-modal").addEventListener("click", () => openFilesModal(p.id, p.name));
+          openFilesModal(p.id, p.name);
+        }
         else if (key === "logs")     renderRuntimeLogs(subHost, p, ctx);
         else if (key === "agent")    renderAgentLogs(subHost, p);
       }
@@ -361,48 +511,7 @@
     });
   }
 
-  // ────────────────────── Sub-tab: Files ───────────────────────────────────
-  // The legacy in-browser tree is kept around for offline use, but by default
-  // we embed an external File Browser instance (configured per environment in
-  // the Configuration page, keys: filesBrowserBaseUrl + filesBrowserProjectsRoot).
-  // Falls back to the built-in tree if the URL is empty.
-  async function renderFiles(host, p) {
-    host.innerHTML = `<div class="loading-state"><div class="spinner"></div>Loading file browser…</div>`;
-    let cfg = {};
-    try { cfg = await Api.request("/config"); } catch { cfg = {}; }
-    const base = (cfg.filesBrowserBaseUrl || "").replace(/\/+$/, "");
-    const root = (cfg.filesBrowserProjectsRoot || "").replace(/\/+$/, "");
-
-    if (!base || !root) {
-      // Configuration missing → render the legacy tree viewer.
-      renderFilesLegacy(host, p);
-      return;
-    }
-
-    // Trailing slash matters: most file-browser implementations interpret
-    // "/path" as a download and "/path/" as a directory listing.
-    const url = `${base}${root}/${encodeURIComponent(p.id)}/commits/`;
-    const tok = Api.getToken();
-    const dlHref = "/admin/api/projects/" + encodeURIComponent(p.id) + "/download.zip?dir=development&token=" + encodeURIComponent(tok || "");
-
-    host.innerHTML = `
-      <div class="files-iframe-shell">
-        <div class="files-iframe-toolbar">
-          <span class="files-iframe-label">External file browser</span>
-          <code class="files-iframe-url" title="${Fmt.escapeHtml(url)}">${Fmt.escapeHtml(url)}</code>
-          <div style="margin-left:auto;display:flex;gap:6px">
-            <a class="btn btn-xs btn-ghost" href="${Fmt.escapeHtml(url)}" target="_blank" rel="noopener">Open in new tab ↗</a>
-            <a class="btn btn-xs btn-ghost" href="${Fmt.escapeHtml(dlHref)}" target="_blank" rel="noopener">Download ZIP</a>
-            <button class="btn btn-xs btn-ghost" id="files-legacy">Built-in tree</button>
-          </div>
-        </div>
-        <iframe id="files-iframe" src="${Fmt.escapeHtml(url)}" referrerpolicy="no-referrer"></iframe>
-      </div>
-    `;
-
-    host.querySelector("#files-legacy").addEventListener("click", () => renderFilesLegacy(host, p));
-  }
-
+  // ────────────────────── Files legacy tree (used as fallback inside modal) ─
   function renderFilesLegacy(host, p) {
     host.innerHTML = `
       <div class="files-shell">

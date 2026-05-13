@@ -109,6 +109,13 @@ model Project {
   releaseCommit Int?           @map("release_commit")
   lastTaskId    String?        @map("last_task_id")
 
+  // ── Per-project worker runtime (Phase 1, DEV) ─────────────────────────
+  /// 127.0.0.1 listener port allocated lazily on first worker spawn.
+  workerPort     Int?    @unique @map("worker_port")
+  /// Cached afp_<10hex(sha256(id))> for ops/admin lookup. Populated by
+  /// the migration script and on first provision.
+  workerUsername String? @map("worker_username")
+
   user          User           @relation(fields: [userId], references: [id])
   versions      Version[]
   assets        Asset[]

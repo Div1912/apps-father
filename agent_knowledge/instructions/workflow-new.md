@@ -43,7 +43,7 @@ Follow the standard App workflow below.
 6. Write frontend files (frontend/index.html, frontend/styles.css, frontend/app.js).
    API base: /api/{projectId}/ — WS base: {wsBaseUrl}/ws/{projectId}.
 
-7. shell("npm install <pkg>") if an external package is genuinely needed.
+7. npm_install({ packages: ["<pkg>"] }) if an external package is genuinely needed (allowlisted only — the tool tells you the full list on rejection). Direct shell("npm install ...") is blocked.
 
 8. configure_app(name, description, longDescription, menuButtonText)
    — ONE atomic call. First build only. Saves to Apps Father DB first and configures the bot now or when it is later linked.

@@ -60,6 +60,10 @@
   }
 
   function init({ stripEl, panelsEl }) {
+    // Tear down any stale tabs from a previous shell render (e.g. after re-login).
+    // The old panel DOM nodes are already detached; just clear the in-memory registry.
+    tabs.length = 0;
+    activeId = null;
     strip = stripEl;
     panels = panelsEl;
   }

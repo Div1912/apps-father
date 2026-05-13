@@ -11,6 +11,8 @@ import apiRoutes, { invalidateProjectDbCache } from "./routes/api.routes";
 import devRoutes from "./routes/dev.routes";
 import bucketRoutes, { listProjectFiles, uploadProjectFile, uploadProjectFileFromBuffer, deleteProjectFile } from "./routes/bucket.routes";
 import devApiRoutes from "./routes/devapi.routes";
+import { createRunnerProxyRouter, proxyWebSocketUpgrade } from "./routes/runner-proxy";
+import { runnerManager } from "../services/runner-manager.service";
 import webhookRoutes from "./routes/webhook.routes";
 import adminRoutes from "./routes/admin.routes";
 import logsRoutes from "./routes/logs.routes";
@@ -25,7 +27,7 @@ import { setupMiniAppWebSocket } from "./miniapp-ws";
 import { broadcastToProject, registerAnswerResolver, resolveAnswer } from "./miniapp-ws";
 import { projectService } from "../services/project.service";
 import { parseAgentLog } from "../services/agent-logger";
-import { decryptToken } from "../services/crypto.service";
+import { decryptToken, encryptToken } from "../services/crypto.service";
 import { billingService } from "../services/billing.service";
 import { avatarCache } from "../services/avatar-cache";
 import { chatService, ChatMessage } from "../services/chat.service";
@@ -37,6 +39,7 @@ import * as adminQueries from "../services/admin-queries.service";
 import { publishReport } from "../services/telegraph.service";
 import { claudeService } from "../services/claude.service";
 import { parseStartParam, trackEvent } from "../services/analytics.service";
+import { isMaintenanceMode, setMaintenanceMode } from "../services/maintenance.service";
 import { prisma } from "../db";
 import { runtimeConfig, LINK_BOT_FEE_CREDITS } from "../services/runtime-config.service";
 import { Decimal } from "@prisma/client/runtime/library";
@@ -72,7 +75,12 @@ import { sendTon } from "../services/wallet.service";
     "OPENPANEL_CLIENT_SECRET",
     "ELEVENLABS_API_KEY",
     "APIPASS_KEY",
-    // AF_INTERNAL_SECRET is intentionally passed to user routes via envVars — do not scrub.
+    // AF_INTERNAL_SECRET is intentionally passed to user routes via envVars in
+    // in-process mode — do not scrub here. Worker mode strips it at spawn time
+    // (see runner-manager.service.ts → buildWorkerEnv) and again inside
+    // worker-entry.js before routes.js is required.
+    "RUNNER_SECRET",
+    "RUNTIME_MODE",
   ];
   for (const key of SENSITIVE) {
     delete process.env[key];
@@ -699,6 +707,181 @@ export function createWebServer() {
       res.json({ ok: true });
     } catch (err: any) {
       console.error("[Bucket API] Delete error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // ── Server Control (worker lifecycle + metrics) ──────────────────────────
+
+  /** Recursively sum directory size in bytes. Returns 0 if dir does not exist. */
+  function dirSizeBytes(dir: string): number {
+    try {
+      if (!fs.existsSync(dir)) return 0;
+      let total = 0;
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isSymbolicLink()) continue;
+        if (entry.isDirectory()) total += dirSizeBytes(full);
+        else { try { total += fs.statSync(full).size; } catch {} }
+      }
+      return total;
+    } catch { return 0; }
+  }
+
+  // GET /telegram-mini-app/api/server-control/:projectId
+  app.get("/telegram-mini-app/api/server-control/:projectId", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const { projectId } = req.params;
+      const project = await projectService.getProject(projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) {
+        res.status(403).json({ error: "Forbidden" }); return;
+      }
+
+      const metrics = config.runtimeMode === "worker" ? runnerManager.getMetrics(projectId) : null;
+
+      // App size: sum of the project directory under /srv (worker mode) or projects/
+      const { runnerProvisionService } = await import("../services/runner-provision.service");
+      const workerRoot = config.runtimeMode === "worker"
+        ? runnerProvisionService.projectRoot(projectId)
+        : path.join(process.cwd(), "projects", projectId);
+      const appSizeBytes = dirSizeBytes(workerRoot);
+
+      // Bucket size
+      const bucketDir = path.join(process.cwd(), "bucket", projectId);
+      const bucketSizeBytes = dirSizeBytes(bucketDir);
+
+      res.json({
+        workerMode: config.runtimeMode === "worker",
+        state: metrics?.state ?? "not_tracked",
+        uptimeMs: metrics?.uptimeMs ?? null,
+        memRssBytes: metrics?.memRssBytes ?? null,
+        cpuPercent: metrics?.cpuPercent ?? null,
+        crashCount: metrics?.crashCount ?? 0,
+        restartCount: metrics?.restartCount ?? 0,
+        release: metrics?.release ?? null,
+        development: metrics?.development ?? null,
+        lastError: metrics?.lastError ?? null,
+        appSizeBytes,
+        bucketSizeBytes,
+        maintenanceMode: isMaintenanceMode(projectId),
+      });
+    } catch (err: any) {
+      console.error("[ServerControl] GET error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /telegram-mini-app/api/server-control/:projectId/logs
+  app.get("/telegram-mini-app/api/server-control/:projectId/logs", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const { projectId } = req.params;
+      const project = await projectService.getProject(projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) {
+        res.status(403).json({ error: "Forbidden" }); return;
+      }
+      if (config.runtimeMode !== "worker") {
+        res.json({ logs: [] }); return;
+      }
+      const n = req.query.n ? Math.min(500, Math.max(1, parseInt(String(req.query.n), 10))) : 200;
+      const logs = runnerManager.getLogs(projectId, n);
+      res.json({ logs });
+    } catch (err: any) {
+      console.error("[ServerControl] logs error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /telegram-mini-app/api/server-control/:projectId/start
+  app.post("/telegram-mini-app/api/server-control/:projectId/start", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const { projectId } = req.params;
+      const project = await projectService.getProject(projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) {
+        res.status(403).json({ error: "Forbidden" }); return;
+      }
+      if (config.runtimeMode !== "worker") {
+        res.status(409).json({ error: "not_in_worker_mode" }); return;
+      }
+      const handle = await runnerManager.ensureRunning(projectId);
+      res.json({ ok: true, port: handle.port, pid: handle.pid });
+    } catch (err: any) {
+      console.error("[ServerControl] start error:", err);
+      res.status(500).json({ error: err.message || "Start failed" });
+    }
+  });
+
+  // POST /telegram-mini-app/api/server-control/:projectId/stop
+  app.post("/telegram-mini-app/api/server-control/:projectId/stop", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const { projectId } = req.params;
+      const project = await projectService.getProject(projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) {
+        res.status(403).json({ error: "Forbidden" }); return;
+      }
+      if (config.runtimeMode !== "worker") {
+        res.status(409).json({ error: "not_in_worker_mode" }); return;
+      }
+      await runnerManager.stop(projectId);
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error("[ServerControl] stop error:", err);
+      res.status(500).json({ error: err.message || "Stop failed" });
+    }
+  });
+
+  // POST /telegram-mini-app/api/server-control/:projectId/restart
+  app.post("/telegram-mini-app/api/server-control/:projectId/restart", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const { projectId } = req.params;
+      const project = await projectService.getProject(projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) {
+        res.status(403).json({ error: "Forbidden" }); return;
+      }
+      if (config.runtimeMode !== "worker") {
+        res.status(409).json({ error: "not_in_worker_mode" }); return;
+      }
+      const handle = await runnerManager.restart(projectId);
+      res.json({ ok: true, port: handle.port, pid: handle.pid });
+    } catch (err: any) {
+      console.error("[ServerControl] restart error:", err);
+      res.status(500).json({ error: err.message || "Restart failed" });
+    }
+  });
+
+  // POST /telegram-mini-app/api/server-control/:projectId/maintenance
+  app.post("/telegram-mini-app/api/server-control/:projectId/maintenance", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const { projectId } = req.params;
+      const project = await projectService.getProject(projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) {
+        res.status(403).json({ error: "Forbidden" }); return;
+      }
+      const { enabled } = req.body as { enabled: boolean };
+      if (typeof enabled !== "boolean") {
+        res.status(400).json({ error: "enabled (boolean) required" }); return;
+      }
+      setMaintenanceMode(projectId, enabled);
+      res.json({ ok: true, maintenanceMode: enabled });
+    } catch (err: any) {
+      console.error("[ServerControl] maintenance error:", err);
       res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -4606,6 +4789,67 @@ Rules:
 
   // ── Unlink Bot ──
 
+  // ── Revoke / replace bot token via Telegram's replaceManagedBotToken ──
+  app.post("/telegram-mini-app/api/projects/:projectId/revoke-bot-token", async (req, res) => {
+    try {
+      const auth = validateAuth(req);
+      if (!auth.valid) { res.status(401).json({ error: "Unauthorized" }); return; }
+      const { user } = await getOrCreateUserFromReq(req, auth);
+      const projectId = req.params.projectId as string;
+      const project = await projectService.getProject(projectId);
+      if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) {
+        res.status(403).json({ error: "Forbidden" }); return;
+      }
+      if (!project.botTokenEncrypted) {
+        res.status(400).json({ error: "No existing bot token" }); return;
+      }
+      if (!project.botUserId) {
+        res.status(400).json({ error: "Bot user ID not found — cannot revoke via managed API" }); return;
+      }
+
+      // Call Telegram's replaceManagedBotToken using the platform's own token
+      const replaceRes = await fetch(`https://api.telegram.org/bot${config.botToken}/replaceManagedBotToken`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: Number(project.botUserId) }),
+      });
+      const replaceData = await replaceRes.json() as any;
+      if (!replaceData.ok) {
+        res.status(400).json({ error: "Telegram error: " + (replaceData.description || "replaceManagedBotToken failed") }); return;
+      }
+      const newToken = replaceData.result as string;
+
+      // Stop the old bot runner so it releases the old webhook
+      try {
+        const { botRunnerService } = await import("../services/bot-runner.service");
+        await botRunnerService.stopBot(projectId);
+      } catch {}
+
+      // Give Telegram ~1s to activate the new token before setting the webhook
+      await new Promise(r => setTimeout(r, 1000));
+
+      // Save the new encrypted token (keep same botUsername / botUserId)
+      await prisma.project.update({
+        where: { id: projectId },
+        data: { botTokenEncrypted: encryptToken(newToken) },
+      });
+
+      // Re-start the bot runner with the new token (sets webhook automatically in production)
+      try {
+        const { botRunnerService } = await import("../services/bot-runner.service");
+        await botRunnerService.startBot(projectId, newToken, project.botUsername!);
+      } catch (err: any) {
+        console.error("[revoke-bot-token] re-start error:", err?.message || err);
+        // Non-fatal — token is already saved
+      }
+
+      res.json({ ok: true, botUsername: project.botUsername });
+    } catch (err: any) {
+      console.error("[MiniApp API] Revoke bot token error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   app.post("/telegram-mini-app/api/projects/:projectId/unlink-bot", async (req, res) => {
     try {
       const auth = validateAuth(req);
@@ -5722,8 +5966,19 @@ Rules:
   // catch-all that returns "No backend routes configured for this project" for
   // anything it doesn't recognise, which would shadow /api/store/*.
   app.use("/api/store", appStoreRoutes);
-  app.use("/api", apiRoutes);
-  app.use("/devapi", devApiRoutes);
+
+  // ── Runner proxy (DEV-only worker mode) ─────────────────────────────────
+  // When RUNTIME_MODE=worker, /app/:id/api/*, /dev/:id/api/*, /api/:id/*,
+  // and /devapi/:id/* are proxied into the per-project worker process. The
+  // legacy in-process api/devapi routers are skipped.
+  if (config.runtimeMode === "worker") {
+    app.use(createRunnerProxyRouter());
+    console.log("[Runtime] Worker mode active — user routes execute in per-project workers");
+  } else {
+    app.use("/api", apiRoutes);
+    app.use("/devapi", devApiRoutes);
+  }
+
   app.use("/webhook", webhookRoutes);
   app.use("/admin", adminRoutes);
   app.use("/logs", logsRoutes);

@@ -2,9 +2,27 @@ import { Router, Request, Response } from "express";
 import path from "path";
 import fs from "fs";
 import { hasFeature } from "../../services/features.service";
+import { config } from "../../config";
+import { runnerProvisionService } from "../../services/runner-provision.service";
 
 const router = Router();
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
+
+/**
+ * Resolve the directory that holds the development frontend for a project.
+ *
+ * In worker mode the source of truth is the per-project, isolated tree under
+ * /srv/apps-father/projects/<id>/development/frontend (owned by the
+ * project's Linux user). The platform-managed cwd/projects copy is the
+ * fallback for projects not yet migrated to /srv.
+ */
+function resolveDevelopmentFrontendDir(projectId: string): string {
+  if (config.runtimeMode === "worker") {
+    const srvDir = runnerProvisionService.frontendDir(projectId, "development");
+    if (fs.existsSync(srvDir)) return srvDir;
+  }
+  return path.join(PROJECTS_DIR, projectId, "development", "frontend");
+}
 
 // Splash shown over the player iframe while the user's app boots.
 // Animation spec (1800 ms total, linear):
@@ -24,7 +42,7 @@ const SPLASH_HTML = `
 }
 </style>
 <div id="af-splash" style="position:fixed;inset:0;z-index:999999;display:flex;align-items:center;justify-content:center;background:#000000;pointer-events:none">
-<img src="https://apps-father.com/splash-logo.png" alt="" style="max-width:60vw;max-height:32vh;width:auto;height:auto;animation:af-splash-logo 1800ms linear forwards;will-change:transform,opacity"/>
+<img src="https://dev.apps-father.com/splash-logo.png" alt="" style="max-width:60vw;max-height:32vh;width:auto;height:auto;animation:af-splash-logo 1800ms linear forwards;will-change:transform,opacity"/>
 <div style="display:none">Make your app with no code</div>
 </div>
 <script>setTimeout(function(){var s=document.getElementById('af-splash');if(s)s.remove()},1800)</script>`;
@@ -66,9 +84,13 @@ router.get("/:projectId/{*filePath}", async (req: Request, res: Response) => {
   const rawPath = (Array.isArray(rawParam) ? rawParam.join("/") : String(rawParam || "")).replace(/^\/+/, "");
   const filePath = rawPath || "index.html";
 
-  const fullPath = path.join(PROJECTS_DIR, projectId, "development", "frontend", filePath);
+  const baseDir = resolveDevelopmentFrontendDir(projectId);
+  const fullPath = path.join(baseDir, filePath);
 
-  if (!fullPath.startsWith(path.join(PROJECTS_DIR, projectId))) {
+  // Path-traversal guard: resolved absolute path must remain inside baseDir.
+  const resolved = path.resolve(fullPath);
+  const resolvedBase = path.resolve(baseDir);
+  if (!resolved.startsWith(resolvedBase + path.sep) && resolved !== resolvedBase) {
     res.status(403).send("Forbidden");
     return;
   }
@@ -77,7 +99,7 @@ router.get("/:projectId/{*filePath}", async (req: Request, res: Response) => {
 
   if (!fs.existsSync(fullPath)) {
     if (isIndex || !rawPath) {
-      const indexPath = path.join(PROJECTS_DIR, projectId, "development", "frontend", "index.html");
+      const indexPath = path.join(baseDir, "index.html");
       if (fs.existsSync(indexPath)) {
         const html = await injectDevTools(projectId, indexPath);
         res.type("html").send(rewriteApiPaths(html, projectId));

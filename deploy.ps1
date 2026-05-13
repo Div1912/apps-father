@@ -21,6 +21,9 @@ $STEPS = @(
   [pscustomobject]@{ id="prisma";          label="Prisma generate";              default=$false }
   [pscustomobject]@{ id="migrations";      label="DB migrations (batched)";      default=$false }
   [pscustomobject]@{ id="agent_knowledge"; label="Upload agent_knowledge/ (zip)";default=$true  }
+  [pscustomobject]@{ id="runner";          label="Upload runner/ (worker code)"; default=$false }
+  [pscustomobject]@{ id="runner_install";  label="Run runner/install-runner.sh"; default=$false }
+  [pscustomobject]@{ id="npm_allowlist";   label="Sync runner-npm-allowlist.json";default=$true }
   [pscustomobject]@{ id="restart";         label="Restart PM2";                  default=$true  }
 )
 
@@ -299,6 +302,10 @@ if ($checked["migrations"]) {
 
   $sqlLines = [System.Collections.Generic.List[string]]::new()
   $sqlLines.Add("ALTER TABLE projects ADD COLUMN IF NOT EXISTS release_commit INT;")
+  # Per-project worker runtime (DEV): isolate routes.js into per-project Node workers.
+  $sqlLines.Add("ALTER TABLE projects ADD COLUMN IF NOT EXISTS worker_port INT;")
+  $sqlLines.Add("ALTER TABLE projects ADD COLUMN IF NOT EXISTS worker_username TEXT;")
+  $sqlLines.Add("CREATE UNIQUE INDEX IF NOT EXISTS projects_worker_port_unique ON projects(worker_port) WHERE worker_port IS NOT NULL;")
   $sqlLines.Add("ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT;")
   $sqlLines.Add("ALTER TABLE users ADD COLUMN IF NOT EXISTS language TEXT;")
   $sqlLines.Add("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_partner BOOLEAN DEFAULT false;")
@@ -436,6 +443,63 @@ if ($checked["agent_knowledge"]) {
   scp -r agent_knowledge/ask/* ($SERVER + ":" + $APP_DIR + "/agent_knowledge/ask/")
   if ($LASTEXITCODE -ne 0) { Step-Err "agent_knowledge/ask upload failed" }
   Step-OK "agent_knowledge uploaded"
+}
+
+# ---- runner ----
+# Per-project worker runtime. Plain JS, no compile step. scp the runner/
+# tree into ${APP_DIR}/runner/ so worker-entry.js + lib/* are in the layout
+# expected by runner-manager.service.ts (which resolves ../../runner from dist).
+if ($checked["runner"]) {
+  Step-Header "Uploading runner via scp"
+  ssh $SERVER ("mkdir -p " + $APP_DIR + "/runner/lib")
+  scp -r runner/*.js ($SERVER + ":" + $APP_DIR + "/runner/")
+  if ($LASTEXITCODE -ne 0) { Step-Err "runner upload (entry) failed" }
+  scp -r runner/lib/*.js ($SERVER + ":" + $APP_DIR + "/runner/lib/")
+  if ($LASTEXITCODE -ne 0) { Step-Err "runner upload (lib) failed" }
+
+  # install-runner.sh is bash; PowerShell git checkout leaves it with CRLF line
+  # endings, which bash on Linux reads as `set -o pipefail\r` and dies with
+  # `set: pipefail\r: invalid option name`. Re-write to a temp file with LF
+  # before scp.
+  $shTmp = Join-Path $PSScriptRoot ".install_runner_tmp.sh"
+  $shContent = Get-Content "runner/install-runner.sh" -Raw
+  [System.IO.File]::WriteAllText($shTmp, $shContent.Replace("`r`n", "`n"), (New-Object System.Text.UTF8Encoding $false))
+  scp $shTmp ($SERVER + ":" + $APP_DIR + "/runner/install-runner.sh")
+  $scpRc = $LASTEXITCODE
+  Remove-Item $shTmp -Force -ErrorAction SilentlyContinue
+  if ($scpRc -ne 0) { Step-Err "runner install script upload failed" }
+
+  ssh $SERVER ("chmod +x " + $APP_DIR + "/runner/install-runner.sh")
+  Step-OK "runner uploaded"
+}
+
+# ---- runner_install ----
+# Host-level setup: create /srv/apps-father/projects, apt-install acl, etc.
+# Idempotent — safe to re-run on every deploy. Should run ONCE per server.
+if ($checked["runner_install"]) {
+  Step-Header "Running runner/install-runner.sh on server"
+  # Strip any leftover CRs in case the script was uploaded on a previous run
+  # before the CRLF→LF normalisation was added. Idempotent and cheap.
+  ssh $SERVER ("sed -i 's/\r$//' " + $APP_DIR + "/runner/install-runner.sh && chmod +x " + $APP_DIR + "/runner/install-runner.sh")
+  ssh $SERVER ("APP_DIR=" + $APP_DIR + " bash " + $APP_DIR + "/runner/install-runner.sh")
+  if ($LASTEXITCODE -ne 0) { Step-Err "runner install failed" }
+  Step-OK "runner installed"
+}
+
+# ---- runner-npm-allowlist.json ----
+# Synced to APP_DIR root because:
+#   * runner-npm-allowlist.service.ts reads it from cwd/runner-npm-allowlist.json
+#   * security-migrations/runner-npm-scan.sh reads it from $APP_DIR/runner-npm-allowlist.json
+# Both the agent-side npm_install tool and the server-side scanner enforce
+# the same allowlist; a missing or stale file degrades to deny-all.
+if ($checked["npm_allowlist"]) {
+  Step-Header "Syncing runner-npm-allowlist.json"
+  if (-not (Test-Path "runner-npm-allowlist.json")) {
+    Step-Err "runner-npm-allowlist.json not found at repo root"
+  }
+  scp runner-npm-allowlist.json ($SERVER + ":" + $APP_DIR + "/runner-npm-allowlist.json")
+  if ($LASTEXITCODE -ne 0) { Step-Err "allowlist sync failed" }
+  Step-OK "runner-npm-allowlist.json synced"
 }
 
 # ---- Restart PM2 ----

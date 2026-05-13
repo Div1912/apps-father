@@ -3,7 +3,11 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import type { AgentTool } from "../../../AgentTool";
 import type { RunContext } from "../../../RunContext";
-import { BLOCKED_COMMANDS, BLOCKED_INFRA_SHELL_PATTERNS } from "../../../config";
+import {
+  BLOCKED_COMMANDS,
+  BLOCKED_INFRA_SHELL_PATTERNS,
+  BLOCKED_PACKAGE_MANAGER_PATTERNS,
+} from "../../../config";
 
 const execAsync = promisify(exec);
 
@@ -13,7 +17,7 @@ export class ShellTool implements AgentTool {
       type: "function",
       function: {
         name: "shell",
-        description: "Run a shell command in the project directory. Use for package installation, file manipulation, or running scripts. Blocked: rm -rf /, shutdown, etc.",
+        description: "Run a shell command in the project directory for file manipulation or one-off scripts. Blocked: rm -rf /, shutdown, AND any package-manager call (npm/pnpm/yarn/npx/bun). To add a runtime dependency, use the npm_install tool — it enforces the runner allowlist.",
         parameters: {
           type: "object",
           properties: {
@@ -29,6 +33,9 @@ export class ShellTool implements AgentTool {
     const cmd: string = args.command;
     if (BLOCKED_COMMANDS.some(b => cmd.includes(b))) {
       return "Error: Command blocked for safety";
+    }
+    if (BLOCKED_PACKAGE_MANAGER_PATTERNS.some(re => re.test(cmd))) {
+      return "Error: Direct package-manager calls (npm/pnpm/yarn/npx/bun) are blocked from the project shell. To add a runtime dependency, call the npm_install tool — it enforces the runner allowlist (only known-safe packages installable, --ignore-scripts always set). Built-in modules ('fs', 'path', 'crypto', etc.) need no install.";
     }
     if (BLOCKED_INFRA_SHELL_PATTERNS.some(re => re.test(cmd))) {
       return "Error: Platform infrastructure diagnostics are not allowed from project shell. Use deploy_to_dev, simulate_api, simulate_telegram, simulate_ws, and server_logs; fix project files based on those tool results.";

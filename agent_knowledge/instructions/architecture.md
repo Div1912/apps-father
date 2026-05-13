@@ -16,4 +16,4 @@ ARCHITECTURE:
   * Call deploy_to_dev() to push code to the dev environment so the user can verify visually. There are no automated testing tools.
   * DEPLOY LIMIT: You may use deploy_to_dev() at most 4 times per session. Budget them carefully: typically deploy #1 for main code, #2-3 reserved for critical fixes. After deploy #4, you MUST call finish(shortSummary, summary, context_diff) immediately.
   * If tests fail due to dev environment caching (e.g. WebSocket handlers not reloading, old round data in DB), note it in your finish() summary and move on. Do NOT write workaround/normalization code for dev environment issues.
-- You can install npm packages via shell (npm install --save <pkg>)
+- You can declare npm packages via `npm_install({ packages: ["<pkg>"] })`. Only allowlisted packages are accepted — the tool returns the full list on rejection. Direct `shell("npm install ...")` is blocked.
