@@ -433,6 +433,7 @@ model Voucher {
   maxUses     Int       @map("max_uses")
   usedCount   Int       @default(0) @map("used_count")
   active      Boolean   @default(true)
+  payingOnly  Boolean   @default(false) @map("paying_only")
   createdAt   DateTime  @default(now()) @map("created_at")
 
   redemptions VoucherRedemption[]

@@ -37,8 +37,6 @@ export async function verifyInitData(req: Request, res: Response, next: NextFunc
 
   try {
     const project = await projectService.getProject(projectId);
-    console.log("checking encrypted bot token");
-    console.log(project?.botTokenEncrypted);
     if (!project?.botTokenEncrypted) {
       // No bot token configured yet — user is set from raw initData above.
       next();
@@ -46,14 +44,9 @@ export async function verifyInitData(req: Request, res: Response, next: NextFunc
     }
 
     const botToken = decryptToken(project.botTokenEncrypted);
-
-    console.log(botToken);
     const isValid = validateTelegramInitData(initData, botToken);
-    console.log(isValid);
 
     if (!isValid) {
-      console.log(`[InitData] Hash mismatch for project ${projectId} — allowing with unverified user`);
-
       res.status(401).json({ error: "Not Authorized" });
       return;
     } else {
@@ -92,8 +85,8 @@ function validateTelegramInitData(initData: string, botToken: string): boolean {
       .update(dataCheckString)
       .digest("hex");
 
-      console.log(`${computedHash} === ${hash}`, computedHash === hash);
-    return computedHash === hash;
+    if (computedHash.length !== hash.length) return false;
+    return crypto.timingSafeEqual(Buffer.from(computedHash, "hex"), Buffer.from(hash, "hex"));
   } catch {
     return false;
   }

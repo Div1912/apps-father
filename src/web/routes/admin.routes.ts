@@ -1576,6 +1576,7 @@ router.get("/api/vouchers", async (_req: Request, res: Response) => {
       maxUses: v.maxUses,
       usedCount: v.usedCount,
       active: v.active,
+      payingOnly: v.payingOnly,
       createdAt: v.createdAt,
       link: `https://t.me/apps_father_bot?start=${v.code}`,
     })));
@@ -1586,7 +1587,7 @@ router.get("/api/vouchers", async (_req: Request, res: Response) => {
 
 router.post("/api/vouchers", async (req: Request, res: Response) => {
   try {
-    const { credits, maxUses } = req.body;
+    const { credits, maxUses, payingOnly } = req.body;
     const cr = parseInt(credits, 10);
     const uses = parseInt(maxUses, 10);
     if (isNaN(cr) || cr <= 0) { res.status(400).json({ error: "Invalid credits" }); return; }
@@ -1599,6 +1600,7 @@ router.post("/api/vouchers", async (req: Request, res: Response) => {
         amountUsd: new Decimal("0"),
         credits: cr,
         maxUses: uses,
+        payingOnly: Boolean(payingOnly),
       },
     });
     res.json({
@@ -1609,6 +1611,7 @@ router.post("/api/vouchers", async (req: Request, res: Response) => {
       maxUses: voucher.maxUses,
       usedCount: 0,
       active: true,
+      payingOnly: voucher.payingOnly,
       createdAt: voucher.createdAt,
       link: `https://t.me/apps_father_bot?start=${voucher.code}`,
     });
@@ -1624,8 +1627,9 @@ router.put("/api/vouchers/:id", async (req: Request<{id: string}>, res: Response
     if (req.body.amount !== undefined) data.amountUsd = new Decimal(parseFloat(req.body.amount).toFixed(4));
     if (req.body.maxUses !== undefined) data.maxUses = parseInt(req.body.maxUses, 10);
     if (req.body.active !== undefined) data.active = Boolean(req.body.active);
+    if (req.body.payingOnly !== undefined) data.payingOnly = Boolean(req.body.payingOnly);
     const voucher = await prisma.voucher.update({ where: { id }, data });
-    res.json({ id: voucher.id, amountUsd: Number(voucher.amountUsd), maxUses: voucher.maxUses, active: voucher.active });
+    res.json({ id: voucher.id, amountUsd: Number(voucher.amountUsd), maxUses: voucher.maxUses, active: voucher.active, payingOnly: voucher.payingOnly });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

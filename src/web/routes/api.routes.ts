@@ -128,8 +128,11 @@ async function loadProjectEntry(
 
 router.use("/:projectId/{*routePath}", verifyInitData as any);
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 router.all("/:projectId/{*routePath}", async (req: Request, res: Response) => {
   const projectId = String(req.params.projectId);
+  if (!UUID_RE.test(projectId)) { res.status(400).json({ error: "Invalid project ID" }); return; }
   const rawRoute = req.params.routePath;
   const routePath = Array.isArray(rawRoute) ? rawRoute.join("/") : String(rawRoute || "");
 

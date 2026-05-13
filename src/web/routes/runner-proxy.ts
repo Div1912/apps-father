@@ -92,9 +92,10 @@ async function proxyHttp(
       ? `/release/api${tail ? "/" + tail : ""}`
       : `/dev/api${tail ? "/" + tail : ""}`;
 
-  // Forward verified Telegram user info captured by the upstream auth
-  // middleware, since the worker no longer has the bot token to verify.
-  // This stays internal because the worker only listens on 127.0.0.1.
+  // Always clear any client-supplied x-telegram-user first, then set it from
+  // the value verified by verifyInitData. If no user was authenticated, the
+  // header is absent so the worker never sees an attacker-injected identity.
+  delete req.headers["x-telegram-user"];
   const tgUser = (req as any).telegramUser;
   if (tgUser) {
     try {
@@ -124,11 +125,19 @@ function forwardHttp(
   workerPort: number,
   targetPath: string,
 ): void {
-  // Strip headers that don't make sense to forward.
+  // Strip headers that don't make sense to forward, plus sensitive auth headers
+  // that must only be set by this proxy (never trusted from the inbound client).
+  // NOTE: x-telegram-user is NOT blocked here — the proxy already overwrites it
+  // above with the verified value from verifyInitData, so the forwarded value is
+  // always the trusted one. x-telegram-init-data is stripped so the raw initData
+  // is not passed along (the worker doesn't need it; auth is already done).
+  const BLOCKED_INBOUND = new Set([
+    "host", "connection", "content-length",
+    "x-telegram-init-data",
+  ]);
   const fwdHeaders: http.OutgoingHttpHeaders = {};
   for (const [k, v] of Object.entries(req.headers)) {
-    const lower = k.toLowerCase();
-    if (lower === "host" || lower === "connection" || lower === "content-length") continue;
+    if (BLOCKED_INBOUND.has(k.toLowerCase())) continue;
     if (v !== undefined) fwdHeaders[k] = v as any;
   }
   fwdHeaders.host = `127.0.0.1:${workerPort}`;

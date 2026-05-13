@@ -18,6 +18,10 @@
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
             <div><div class="input-label">Credits</div><input class="input" type="number" id="v-credits" step="1" placeholder="100" style="width:140px"/></div>
             <div><div class="input-label">Max uses</div><input class="input" type="number" id="v-max" step="1" value="1" style="width:120px"/></div>
+            <div style="display:flex;align-items:center;gap:6px;padding-bottom:2px">
+              <input type="checkbox" id="v-paying-only" style="width:16px;height:16px;cursor:pointer"/>
+              <label for="v-paying-only" style="cursor:pointer;font-size:13px;color:var(--admin-muted)">Paying users only</label>
+            </div>
             <button class="btn btn-primary" id="v-create">Create</button>
           </div>
         </div>
@@ -37,7 +41,7 @@
           listEl.innerHTML = `
             <div class="tbl-wrap">
               <table class="tbl">
-                <thead><tr><th>Code</th><th>Credits</th><th>Used / Max</th><th>Status</th><th>Created</th><th></th></tr></thead>
+                <thead><tr><th>Code</th><th>Credits</th><th>Used / Max</th><th>Status</th><th>Restriction</th><th>Created</th><th></th></tr></thead>
                 <tbody>
                   ${vouchers.map(v => `
                     <tr>
@@ -45,6 +49,7 @@
                       <td>${v.credits != null ? v.credits.toLocaleString() + ' cr' : (Fmt.money(v.amountUsd) + ' USD')}</td>
                       <td>${v.usedCount} / ${v.maxUses}</td>
                       <td>${v.active ? '<span class="badge success"><span class="dot"></span>active</span>' : '<span class="badge danger"><span class="dot"></span>inactive</span>'}</td>
+                      <td>${v.payingOnly ? '<span class="badge warning"><span class="dot"></span>paying only</span>' : '<span style="color:var(--admin-muted);font-size:12px">—</span>'}</td>
                       <td style="color:var(--admin-muted)">${Fmt.escapeHtml(Fmt.relativeTime(v.createdAt))}</td>
                       <td style="text-align:right;white-space:nowrap">
                         <button class="btn btn-xs" data-copy="${Fmt.escapeHtml(v.link)}">Copy link</button>
@@ -83,12 +88,14 @@
       host.querySelector("#v-create").addEventListener("click", async () => {
         const credits = host.querySelector("#v-credits").value;
         const maxUses = host.querySelector("#v-max").value || "1";
+        const payingOnly = host.querySelector("#v-paying-only").checked;
         if (!credits || parseInt(credits, 10) <= 0) { Fmt.toast("Enter a valid credits amount", "err"); return; }
         try {
-          const v = await Api.request("/vouchers", { method: "POST", body: { credits, maxUses } });
+          const v = await Api.request("/vouchers", { method: "POST", body: { credits, maxUses, payingOnly } });
           Fmt.toast("Voucher created: " + v.code, "ok");
           host.querySelector("#v-credits").value = "";
           host.querySelector("#v-max").value = "1";
+          host.querySelector("#v-paying-only").checked = false;
           refresh();
         } catch (err) { Fmt.toast(err.message || "Failed", "err"); }
       });

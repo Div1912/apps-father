@@ -4956,7 +4956,11 @@ Rules:
   });
 
   app.get("/telegram-mini-app/api/avatar/:projectId", (req, res) => {
-    const avatarPath = path.join(process.cwd(), "projects", req.params.projectId as string, "avatar.jpg");
+    const projectId = String(req.params.projectId);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectId)) {
+      res.status(400).end(); return;
+    }
+    const avatarPath = path.join(process.cwd(), "projects", projectId, "avatar.jpg");
     if (fs.existsSync(avatarPath)) {
       res.sendFile(avatarPath);
     } else {
@@ -5294,9 +5298,18 @@ Rules:
       fs.mkdirSync(assetsDir, { recursive: true });
 
       const uploaded = files.map(f => {
-        const dest = path.join(assetsDir, f.originalname);
+        // Use only the basename and strip any path separators; generate a
+        // safe name by prefixing with a random UUID to prevent overwrites
+        // and path-traversal via crafted originalname values.
+        const safeExt = path.extname(path.basename(f.originalname)).replace(/[^a-zA-Z0-9.]/g, "").slice(0, 12);
+        const safeName = crypto.randomUUID() + (safeExt ? safeExt : "");
+        const dest = path.join(assetsDir, safeName);
+        // Verify the resolved destination stays inside assetsDir
+        if (!dest.startsWith(assetsDir + path.sep) && dest !== assetsDir) {
+          throw new Error("Invalid file path");
+        }
         fs.renameSync(f.path, dest);
-        return { name: f.originalname, path: dest, type: f.mimetype };
+        return { name: f.originalname, path: dest, safeName, type: f.mimetype };
       });
 
       res.json({ files: uploaded });

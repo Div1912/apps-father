@@ -329,6 +329,7 @@ if ($checked["migrations"]) {
   $sqlLines.Add("ALTER TABLE payments ADD COLUMN IF NOT EXISTS method TEXT;")
   $sqlLines.Add("CREATE TABLE IF NOT EXISTS vouchers (id SERIAL PRIMARY KEY, code TEXT UNIQUE NOT NULL, amount_usd DECIMAL(12,4) NOT NULL, max_uses INT NOT NULL, used_count INT DEFAULT 0, active BOOLEAN DEFAULT true, created_at TIMESTAMPTZ DEFAULT NOW());")
   $sqlLines.Add("ALTER TABLE vouchers ADD COLUMN IF NOT EXISTS credits INTEGER NOT NULL DEFAULT 0;")
+  $sqlLines.Add("ALTER TABLE vouchers ADD COLUMN IF NOT EXISTS paying_only BOOLEAN NOT NULL DEFAULT false;")
   $sqlLines.Add("CREATE TABLE IF NOT EXISTS voucher_redemptions (id SERIAL PRIMARY KEY, voucher_id INT NOT NULL REFERENCES vouchers(id), user_id INT NOT NULL REFERENCES users(id), created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(voucher_id, user_id));")
   $sqlLines.Add("CREATE TABLE IF NOT EXISTS withdrawals (id SERIAL PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id), amount_usd DECIMAL(12,4) NOT NULL, ton_address TEXT NOT NULL, status TEXT DEFAULT 'pending', tx_hash TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), processed_at TIMESTAMPTZ);")
   $sqlLines.Add("CREATE TABLE IF NOT EXISTS ton_withdrawals (id SERIAL PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id), amount_ton DECIMAL(18,9) NOT NULL, ton_address TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', tx_hash TEXT, admin_note TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), processed_at TIMESTAMPTZ);")

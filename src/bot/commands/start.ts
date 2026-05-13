@@ -108,37 +108,50 @@ export async function startCommand(ctx: BotContext) {
     try {
       const voucher = await prisma.voucher.findUnique({ where: { code: startParam } });
       if (voucher && voucher.active && voucher.usedCount < voucher.maxUses) {
-        const alreadyUsed = await prisma.voucherRedemption.findUnique({
-          where: { voucherId_userId: { voucherId: voucher.id, userId: user.id } },
-        });
-        if (!alreadyUsed) {
-          const isCredits = voucher.credits > 0;
-          await prisma.$transaction(async (tx) => {
-            if (isCredits) {
-              await tx.user.update({
-                where: { id: user.id },
-                data: { credits: { increment: voucher.credits } },
-              });
-            } else {
-              await tx.user.update({
-                where: { id: user.id },
-                data: { balance: { increment: new Decimal(Number(voucher.amountUsd).toFixed(4)) } },
-              });
-            }
-            await tx.voucher.update({
-              where: { id: voucher.id },
-              data: { usedCount: { increment: 1 } },
-            });
-            await tx.voucherRedemption.create({
-              data: { voucherId: voucher.id, userId: user.id },
-            });
+        // Enforce paying-users-only restriction
+        if (voucher.payingOnly) {
+          const hasPaid = await prisma.payment.findFirst({
+            where: { userId: user.id, status: "confirmed" },
+            select: { id: true },
           });
-          voucherMsg = isCredits
-            ? `${ce(EMOJI.indicator_success, "✅")} <b>${t(lang, "voucher_redeemed")}</b>\n\n🪙 <b>+${voucher.credits.toLocaleString()} credits</b> added to your balance!`
-            : `${ce(EMOJI.indicator_success, "✅")} <b>${t(lang, "voucher_redeemed")}</b>\n\n` +
-              t(lang, "voucher_redeemed_detail", { amount: Number(voucher.amountUsd).toFixed(2) });
-        } else {
-          voucherMsg = `${ce(EMOJI.indicator_warning, "⚠️")} ${t(lang, "voucher_already_used")}`;
+          if (!hasPaid) {
+            voucherMsg = `${ce(EMOJI.indicator_error, "❌")} This voucher is available for paying users only.`;
+          }
+        }
+
+        if (!voucherMsg) {
+          const alreadyUsed = await prisma.voucherRedemption.findUnique({
+            where: { voucherId_userId: { voucherId: voucher.id, userId: user.id } },
+          });
+          if (!alreadyUsed) {
+            const isCredits = voucher.credits > 0;
+            await prisma.$transaction(async (tx) => {
+              if (isCredits) {
+                await tx.user.update({
+                  where: { id: user.id },
+                  data: { credits: { increment: voucher.credits } },
+                });
+              } else {
+                await tx.user.update({
+                  where: { id: user.id },
+                  data: { balance: { increment: new Decimal(Number(voucher.amountUsd).toFixed(4)) } },
+                });
+              }
+              await tx.voucher.update({
+                where: { id: voucher.id },
+                data: { usedCount: { increment: 1 } },
+              });
+              await tx.voucherRedemption.create({
+                data: { voucherId: voucher.id, userId: user.id },
+              });
+            });
+            voucherMsg = isCredits
+              ? `${ce(EMOJI.indicator_success, "✅")} <b>${t(lang, "voucher_redeemed")}</b>\n\n🪙 <b>+${voucher.credits.toLocaleString()} credits</b> added to your balance!`
+              : `${ce(EMOJI.indicator_success, "✅")} <b>${t(lang, "voucher_redeemed")}</b>\n\n` +
+                t(lang, "voucher_redeemed_detail", { amount: Number(voucher.amountUsd).toFixed(2) });
+          } else {
+            voucherMsg = `${ce(EMOJI.indicator_warning, "⚠️")} ${t(lang, "voucher_already_used")}`;
+          }
         }
       } else if (voucher && (!voucher.active || voucher.usedCount >= voucher.maxUses)) {
         voucherMsg = `${ce(EMOJI.indicator_error, "❌")} ${t(lang, "voucher_expired")}`;
