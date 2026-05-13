@@ -81,6 +81,62 @@
     "papaparse": {
       "minVersion": "5.4.0",
       "description": "Robust CSV parser. Use for CSV import/export features."
+    },
+    "@ton/core": {
+      "minVersion": "0.56.0",
+      "description": "TON blockchain core primitives (Address, Cell, Builder, etc.). Required for any TON-related backend logic."
+    },
+    "@ton/crypto": {
+      "minVersion": "3.2.0",
+      "description": "TON cryptographic helpers (key generation, signing). Companion to @ton/core."
+    },
+    "@ton/ton": {
+      "minVersion": "13.9.0",
+      "description": "High-level TON client (TonClient4, WalletContractV4, etc.). Use for sending transactions and querying the chain."
+    },
+    "express": {
+      "minVersion": "4.18.0",
+      "description": "Web framework. Only needed if a routes.js builds a sub-router with express.Router(); prefer the built-in req/res API otherwise."
+    },
+    "form-data": {
+      "minVersion": "4.0.0",
+      "description": "Construct multipart/form-data payloads for outbound HTTP requests (e.g. uploading files to external APIs)."
+    },
+    "node-telegram-bot-api": {
+      "minVersion": "0.66.0",
+      "description": "Telegram Bot API client. Use when a project needs to send Telegram messages from its backend."
+    },
+    "telegraf": {
+      "minVersion": "4.16.0",
+      "description": "Telegram bot framework (middleware-based). Alternative to node-telegram-bot-api for more complex bot logic."
+    },
+    "rss-parser": {
+      "minVersion": "3.13.0",
+      "description": "RSS/Atom feed parser. Use for fetching and parsing news or content feeds."
+    },
+    "pg": {
+      "minVersion": "8.11.0",
+      "description": "PostgreSQL client. Use when a project needs its own separate database (not the platform DB)."
+    },
+    "bcryptjs": {
+      "minVersion": "2.4.3",
+      "description": "Password hashing (bcrypt, pure JS). Use for hashing user passwords in project-specific auth systems."
+    },
+    "pdfkit": {
+      "minVersion": "0.14.0",
+      "description": "PDF document generation. Use for creating invoices, reports, or any printable documents."
+    },
+    "bip39": {
+      "minVersion": "3.1.0",
+      "description": "BIP39 mnemonic generation and validation. Use for TON/crypto wallet creation flows."
+    },
+    "ethers": {
+      "minVersion": "6.11.0",
+      "description": "Ethereum/EVM library. Use for projects that interact with Ethereum-compatible chains."
+    },
+    "@google/generative-ai": {
+      "minVersion": "0.15.0",
+      "description": "Google Gemini AI SDK. Use when a project needs AI text/image generation via a user-supplied Gemini API key."
     }
   }
 }

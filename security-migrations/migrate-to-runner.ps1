@@ -134,6 +134,7 @@ Write-Host ""
 # ── Run it on the server ────────────────────────────────────────────────────
 Step-Header "Running migration"
 $flag = if ($dry_run) { " --dry-run" } else { "" }
+$flag += " --hostname-skip"
 # Run from APP_DIR so the script's `process.chdir(APP_DIR)` resolves the
 # bundled @prisma/client. RUNNER_PROJECTS_ROOT defaults to /srv/apps-father/projects.
 $remoteCmd = (

@@ -5,6 +5,7 @@ import {
   validatePackages,
   listAllowedPackages,
   getAllowlistEntry,
+  autoApproveIfPopular,
 } from "../../../../runner-npm-allowlist.service";
 
 /**
@@ -74,20 +75,43 @@ export class NpmInstallTool implements AgentTool {
       percent: ctx.currentPercent,
     });
 
-    const { allowed, rejected } = validatePackages(packages);
+    let { allowed, rejected } = validatePackages(packages);
 
     if (rejected.length > 0) {
-      const allowedList = listAllowedPackages();
-      return (
-        `Error: ${rejected.length} package${rejected.length === 1 ? "" : "s"} rejected — not on the runner allowlist:\n` +
-        rejected.map((p) => `  - ${p}`).join("\n") +
-        `\n\nAllowed packages (${allowedList.length}):\n` +
-        allowedList.map((p) => `  - ${p}: ${getAllowlistEntry(p)?.description || ""}`).join("\n") +
-        `\n\nIf you genuinely need a package that is not on the list:\n` +
-        `  1. Re-design the feature using an allowlisted package or a public no-key API.\n` +
-        `  2. If that's not possible, ask_user — they can add the package to runner-npm-allowlist.json.\n` +
-        `Do NOT try to shell out to npm; that path is blocked.`
-      );
+      await ctx.progress({
+        action: "🔍 Checking npm popularity for unlisted packages",
+        detail: rejected.join(", "),
+        percent: ctx.currentPercent,
+      });
+
+      const autoResults = await autoApproveIfPopular(rejected);
+      const stillRejected: string[] = [];
+
+      for (const result of autoResults) {
+        if (result.approved) {
+          // Re-fetch the now-approved entry and move to allowed
+          const entry = getAllowlistEntry(result.pkg);
+          if (entry) allowed.push({ pkg: result.pkg, entry });
+          else allowed.push({ pkg: result.pkg, entry: { description: result.reason } });
+        } else {
+          stillRejected.push(`  - ${result.pkg}: ${result.reason}`);
+        }
+      }
+
+      if (stillRejected.length > 0) {
+        const allowedList = listAllowedPackages();
+        return (
+          `Error: ${stillRejected.length} package${stillRejected.length === 1 ? "" : "s"} could not be approved:\n` +
+          stillRejected.join("\n") +
+          `\n\n(Packages with <100k weekly npm downloads are blocked for security.)\n\n` +
+          `Allowed packages (${allowedList.length}):\n` +
+          allowedList.map((p) => `  - ${p}: ${getAllowlistEntry(p)?.description || ""}`).join("\n") +
+          `\n\nIf you genuinely need a package that is not on the list:\n` +
+          `  1. Re-design the feature using an allowlisted package or a public no-key API.\n` +
+          `  2. If that's not possible, ask_user — they can add the package to runner-npm-allowlist.json.\n` +
+          `Do NOT try to shell out to npm; that path is blocked.`
+        );
+      }
     }
 
     const summary = allowed

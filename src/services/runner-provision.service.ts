@@ -95,8 +95,8 @@ class RunnerProvisionService {
     if (await this.userExists(username)) return;
     try {
       await execFileP("useradd", [
-        "--system",
         "--no-create-home",
+        "--gid", "nogroup",
         "--shell",
         "/usr/sbin/nologin",
         username,
@@ -140,7 +140,7 @@ class RunnerProvisionService {
     if (!fs.existsSync(target)) return;
 
     try {
-      await execFileP("chown", ["-R", `${username}:${username}`, target]);
+      await execFileP("chown", ["-R", `${username}:nogroup`, target]);
     } catch (err) {
       console.warn(`[RunnerProvision] chown failed for ${target}:`, (err as Error).message);
     }

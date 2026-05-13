@@ -3,7 +3,7 @@
     "npm_allowlist":  false,
     "restart":  true,
     "agent_knowledge":  false,
-    "migrations":  true,
+    "migrations":  false,
     "build":  false,
     "mini_app":  false,
     "landing":  false,
@@ -13,6 +13,6 @@
     "runner_install":  false,
     "deps":  false,
     "playwright":  false,
-    "env_idx":  0,
+    "env_idx":  1,
     "admin":  false
 }

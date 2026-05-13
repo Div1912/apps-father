@@ -100,7 +100,7 @@ function userExists(name) {
 function ensureUser(name) {
   if (DRY_RUN) { log(`  → [dry-run] would useradd ${name}`); return; }
   if (userExists(name)) return;
-  execFileSync("useradd", ["--system", "--no-create-home", "--shell", "/usr/sbin/nologin", name]);
+  execFileSync("useradd", ["--no-create-home", "--gid", "nogroup", "--shell", "/usr/sbin/nologin", name]);
 }
 
 function copyDirRecursive(src, dest) {
@@ -191,12 +191,12 @@ function applyOwnership(projectId) {
   const username = linuxUsername(projectId);
   const target = path.join(TARGET_ROOT, projectId);
   if (DRY_RUN) {
-    log(`  → [dry-run] would chown -R ${username}:${username} ${target}`);
+    log(`  → [dry-run] would chown -R ${username}:nogroup ${target}`);
     log(`  → [dry-run] would chmod 750 + 700 on data dirs`);
     log(`  → [dry-run] would setfacl u:root:rwx (current+default)`);
     return;
   }
-  try { execFileSync("chown", ["-R", `${username}:${username}`, target]); } catch (e) {
+  try { execFileSync("chown", ["-R", `${username}:nogroup`, target]); } catch (e) {
     err(`  ! chown failed: ${e.message}`);
   }
   try { execFileSync("chmod", ["750", target]); } catch (e) {

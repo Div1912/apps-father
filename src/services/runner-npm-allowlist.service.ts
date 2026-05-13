@@ -1,5 +1,12 @@
 import fs from "fs";
 import path from "path";
+import { execFile } from "child_process";
+import { promisify } from "util";
+
+const execFileP = promisify(execFile);
+
+const NPM_DOWNLOADS_THRESHOLD = 100_000;
+const NPM_DOWNLOADS_API = "https://api.npmjs.org/downloads/point/last-week";
 
 /**
  * Runner npm allowlist — single source of truth for which npm packages
@@ -146,4 +153,104 @@ export function validatePackages(packages: string[]): {
     else rejected.push(pkg);
   }
   return { allowed, rejected };
+}
+
+export interface AutoApproveResult {
+  pkg: string;
+  approved: boolean;
+  weeklyDownloads?: number;
+  reason: string;
+}
+
+/**
+ * For packages not on the allowlist, check npm weekly downloads.
+ * If downloads >= NPM_DOWNLOADS_THRESHOLD (100k), auto-approve:
+ *   1. Write entry to runner-npm-allowlist.json
+ *   2. npm install --ignore-scripts --no-audit in the platform app dir
+ * Returns result for each package.
+ */
+export async function autoApproveIfPopular(packages: string[]): Promise<AutoApproveResult[]> {
+  const results: AutoApproveResult[] = [];
+
+  for (const raw of packages) {
+    const pkg = stripSubpath(String(raw || "").trim());
+    if (!pkg) continue;
+
+    // Already on the allowlist — shouldn't reach here, but guard anyway
+    if (isAllowed(pkg)) {
+      results.push({ pkg, approved: true, reason: "already on allowlist" });
+      continue;
+    }
+
+    let weeklyDownloads = 0;
+    try {
+      const url = `${NPM_DOWNLOADS_API}/${encodeURIComponent(pkg)}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) {
+        results.push({ pkg, approved: false, reason: `npm API returned ${res.status}` });
+        continue;
+      }
+      const data = await res.json() as { downloads?: number; error?: string };
+      if (data.error || typeof data.downloads !== "number") {
+        results.push({ pkg, approved: false, reason: data.error || "package not found on npm" });
+        continue;
+      }
+      weeklyDownloads = data.downloads;
+    } catch (err) {
+      results.push({ pkg, approved: false, weeklyDownloads: 0, reason: `npm API error: ${(err as Error).message}` });
+      continue;
+    }
+
+    if (weeklyDownloads < NPM_DOWNLOADS_THRESHOLD) {
+      results.push({
+        pkg, approved: false, weeklyDownloads,
+        reason: `only ${weeklyDownloads.toLocaleString()} weekly downloads (threshold: ${NPM_DOWNLOADS_THRESHOLD.toLocaleString()})`,
+      });
+      continue;
+    }
+
+    // Popular enough — write to allowlist JSON
+    try {
+      const filePath = resolveAllowlistPath();
+      const raw2 = fs.readFileSync(filePath, "utf-8");
+      const parsed = JSON.parse(raw2) as AllowlistFile;
+      parsed.allowedPackages[pkg] = {
+        description: `Auto-approved: ${weeklyDownloads.toLocaleString()} weekly npm downloads.`,
+      };
+      fs.writeFileSync(filePath, JSON.stringify(parsed, null, 2) + "\n", "utf-8");
+      // Invalidate in-memory cache so the new entry is picked up immediately
+      cached = null;
+      cachedMtimeMs = 0;
+    } catch (err) {
+      results.push({ pkg, approved: false, weeklyDownloads, reason: `failed to write allowlist: ${(err as Error).message}` });
+      continue;
+    }
+
+    // Install the package into the platform node_modules right now
+    try {
+      await execFileP("npm", [
+        "install",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        "--save-exact",
+        pkg,
+      ], { cwd: process.cwd(), timeout: 60_000 });
+    } catch (err) {
+      // Package is now on the allowlist but couldn't install — not fatal, operator
+      // can re-run install-runner-npms.ps1 to finish the job.
+      results.push({
+        pkg, approved: true, weeklyDownloads,
+        reason: `added to allowlist (${weeklyDownloads.toLocaleString()}/wk) but npm install failed: ${(err as Error).message}. Re-run install-runner-npms.ps1.`,
+      });
+      continue;
+    }
+
+    results.push({
+      pkg, approved: true, weeklyDownloads,
+      reason: `auto-approved (${weeklyDownloads.toLocaleString()} weekly downloads) and installed`,
+    });
+  }
+
+  return results;
 }
