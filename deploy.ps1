@@ -23,6 +23,8 @@ $STEPS = @(
   [pscustomobject]@{ id="agent_knowledge"; label="Upload agent_knowledge/ (zip)";default=$true  }
   [pscustomobject]@{ id="runner";          label="Upload runner/ (worker code)"; default=$false }
   [pscustomobject]@{ id="runner_install";  label="Run runner/install-runner.sh"; default=$false }
+  [pscustomobject]@{ id="runner_image";    label="Rebuild apps-father-runner Docker image"; default=$false }
+  [pscustomobject]@{ id="runner_recreate"; label="Recreate worker containers (apply new image)"; default=$false }
   [pscustomobject]@{ id="npm_allowlist";   label="Sync runner-npm-allowlist.json";default=$true }
   [pscustomobject]@{ id="restart";         label="Restart PM2";                  default=$true  }
 )
@@ -511,6 +513,31 @@ if ($checked["runner_install"]) {
   ssh $SERVER ("APP_DIR=" + $APP_DIR + " bash " + $APP_DIR + "/runner/install-runner.sh")
   if ($LASTEXITCODE -ne 0) { Step-Err "runner install failed" }
   Step-OK "runner installed"
+}
+
+# ---- runner_image ----
+# Rebuild the apps-father-runner Docker image on the server so changes to
+# runner/worker-entry.js, runner/lib/*, runner/package.json or runner/Dockerfile
+# actually take effect. The image bakes worker-entry.js into /runner/worker-entry.js;
+# uploading the host-side runner/ folder alone does NOT update running containers.
+if ($checked["runner_image"]) {
+  Step-Header "Rebuilding apps-father-runner:latest on server"
+  ssh -t $SERVER ("cd " + $APP_DIR + "/runner && docker build --tag apps-father-runner:latest --file Dockerfile . 2>&1 | tail -20")
+  if ($LASTEXITCODE -ne 0) { Step-Err "docker build failed" }
+  Step-OK "runner image rebuilt"
+}
+
+# ---- runner_recreate ----
+# Force-remove all running worker containers so the platform respawns them
+# from the freshly-built image on the next inbound request. We do NOT stop
+# them via the admin API here — direct `docker rm -f` is faster and avoids
+# needing an admin token in the deploy script. The DockerRunnerService will
+# lazy-spawn replacements with the new image.
+if ($checked["runner_recreate"]) {
+  Step-Header "Recreating worker containers (docker rm -f afp-*)"
+  ssh $SERVER "docker ps -a --filter 'name=^afp-' --format '{{.Names}}' | xargs -r docker rm -f"
+  if ($LASTEXITCODE -ne 0) { Step-Err "container recreate failed" }
+  Step-OK "containers removed (will respawn on next request)"
 }
 
 # ---- runner-npm-allowlist.json ----

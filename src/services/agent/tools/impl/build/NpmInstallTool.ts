@@ -6,7 +6,9 @@ import {
   listAllowedPackages,
   getAllowlistEntry,
   autoApproveIfPopular,
+  installInProjectContainer,
 } from "../../../../runner-npm-allowlist.service";
+import { config } from "../../../../../config";
 
 /**
  * Allowlisted npm package installation for user routes.js.
@@ -114,15 +116,44 @@ export class NpmInstallTool implements AgentTool {
       }
     }
 
+    // In docker mode each project owns its own node_modules under /workspace.
+    // Install allowlisted packages directly into the project's container so
+    // routes.js can require() them on the next worker reload. In legacy
+    // worker / in-process mode the platform's install-runner-npms.ps1 step
+    // handles this server-side after deploy, so we only declare here.
+    let installNote = "";
+    if (config.runtimeMode === "docker" && allowed.length > 0) {
+      await ctx.progress({
+        action: "📦 Installing into project container",
+        detail: allowed.map((a) => a.pkg).join(", "),
+        percent: ctx.currentPercent,
+      });
+      try {
+        const results = await installInProjectContainer(
+          ctx.projectId,
+          allowed.map(({ pkg }) => pkg),
+        );
+        const failed = results.filter((r) => !r.installed);
+        if (failed.length > 0) {
+          installNote =
+            `\n\nNote: ${failed.length} package${failed.length === 1 ? "" : "s"} failed to install in the project container:\n` +
+            failed.map((r) => `  - ${r.pkg}: ${r.reason}`).join("\n");
+        } else {
+          installNote = `\n\nInstalled into /workspace/node_modules.`;
+        }
+      } catch (err) {
+        installNote = `\n\nWarning: per-project install failed (${(err as Error).message}). Try again or restart the worker.`;
+      }
+    }
+
     const summary = allowed
       .map(({ pkg, entry }) => `  ${pkg}${entry.minVersion ? ` (>=${entry.minVersion})` : ""} — ${entry.description}`)
       .join("\n");
 
     return (
       `OK: ${allowed.length} package${allowed.length === 1 ? "" : "s"} declared and available to require():\n` +
-      `${summary}\n\n` +
-      `Use them with require() at the top of backend/routes.js. The platform pre-installs ` +
-      `allowlisted packages, so no waiting is needed.`
+      `${summary}${installNote}\n\n` +
+      `Use them with require() at the top of backend/routes.js.`
     );
   }
 

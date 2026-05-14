@@ -51,6 +51,20 @@ function generateToken(): string {
   return token;
 }
 
+/**
+ * Validate an admin bearer token. Used by non-Express call sites that can't
+ * route through {@link authMiddleware} — primarily the WebSocket console
+ * upgrade path in `console-ws.ts`, where the browser supplies the token as
+ * `?token=…` because the WebSocket constructor cannot set custom headers.
+ *
+ * Tokens live in-memory only (stored at `/admin/api/login` time), so this
+ * is a constant-time membership check on a `Set<string>`.
+ */
+export function isValidAdminToken(token: string | undefined | null): boolean {
+  if (!token || typeof token !== "string") return false;
+  return activeTokens.has(token);
+}
+
 function authMiddleware(req: Request, res: Response, next: NextFunction) {
   // Accept the token from either an Authorization header (preferred — used by
   // the SPA's fetch calls) or a `?token=` query string (needed for plain
@@ -2574,22 +2588,22 @@ router.post("/api/ton-withdrawals/:id/refund", async (req: Request<{ id: string 
 // plus a Workers tab in the admin SPA.
 
 router.get("/api/workers", (_req: Request, res: Response) => {
-  if (config.runtimeMode !== "worker") {
+  if (!config.isWorkerRuntime) {
     res.json({ mode: "in-process", workers: [] });
     return;
   }
-  res.json({ mode: "worker", workers: runnerManager.list() });
+  res.json({ mode: config.runtimeMode, workers: runnerManager.list() });
 });
 
 // stop-all defined BEFORE :id routes so Express does not interpret "stop-all"
 // as a project id.
 router.post("/api/workers/stop-all", async (_req: Request, res: Response) => {
-  if (config.runtimeMode !== "worker") {
+  if (!config.isWorkerRuntime) {
     res.status(409).json({ error: "not_in_worker_mode" });
     return;
   }
   try {
-    await runnerManager.stopAll();
+    await runnerManager.killAll();
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: "stop_all_failed", message: err.message });
@@ -2597,7 +2611,7 @@ router.post("/api/workers/stop-all", async (_req: Request, res: Response) => {
 });
 
 router.get("/api/workers/:id", (req: Request<{ id: string }>, res: Response) => {
-  if (config.runtimeMode !== "worker") {
+  if (!config.isWorkerRuntime) {
     res.status(409).json({ error: "not_in_worker_mode" });
     return;
   }
@@ -2613,7 +2627,7 @@ router.get("/api/workers/:id", (req: Request<{ id: string }>, res: Response) => 
 });
 
 router.post("/api/workers/:id/stop", async (req: Request<{ id: string }>, res: Response) => {
-  if (config.runtimeMode !== "worker") {
+  if (!config.isWorkerRuntime) {
     res.status(409).json({ error: "not_in_worker_mode" });
     return;
   }
@@ -2626,7 +2640,7 @@ router.post("/api/workers/:id/stop", async (req: Request<{ id: string }>, res: R
 });
 
 router.post("/api/workers/:id/restart", async (req: Request<{ id: string }>, res: Response) => {
-  if (config.runtimeMode !== "worker") {
+  if (!config.isWorkerRuntime) {
     res.status(409).json({ error: "not_in_worker_mode" });
     return;
   }
@@ -2639,7 +2653,7 @@ router.post("/api/workers/:id/restart", async (req: Request<{ id: string }>, res
 });
 
 router.post("/api/workers/:id/reload", async (req: Request<{ id: string }>, res: Response) => {
-  if (config.runtimeMode !== "worker") {
+  if (!config.isWorkerRuntime) {
     res.status(409).json({ error: "not_in_worker_mode" });
     return;
   }

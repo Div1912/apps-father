@@ -160,12 +160,12 @@ class CommitService {
     bustCache(devDir);
     console.log(`[Commit] Synced to development/ for project ${projectId.substring(0, 8)}`);
 
-    // Worker mode: push new backend + frontend files to /srv, re-chown, then
-    // reload. If the worker is stopped (Phase 1 lazy-start default) reloadIfRunning
-    // is a no-op — the next inbound request lazy-spawns with the new code.
-    // Frontend is pushed because /app and /dev routes serve from /srv in
-    // worker mode (see app.routes.ts / dev.routes.ts).
-    if (config.runtimeMode === "worker") {
+    // Worker / docker mode: push new backend + frontend files to /srv, re-chown,
+    // then reload. If the worker is stopped (Phase 1 lazy-start default)
+    // reloadIfRunning is a no-op — the next inbound request lazy-spawns with the
+    // new code. Frontend is pushed because /app and /dev routes serve from /srv
+    // in both isolated runtime modes (see app.routes.ts / dev.routes.ts).
+    if (config.isWorkerRuntime) {
       pushProjectToWorkerPath(projectId, "development", path.join(PROJECTS_DIR, projectId))
         .then(() =>
           runnerProvisionService
@@ -268,7 +268,7 @@ class CommitService {
 
     console.log(`[Release] Project ${projectId.substring(0, 8)} → released commit #${commitNum}`);
 
-    if (config.runtimeMode === "worker") {
+    if (config.isWorkerRuntime) {
       pushProjectToWorkerPath(projectId, "release", path.join(PROJECTS_DIR, projectId))
         .then(() =>
           runnerProvisionService

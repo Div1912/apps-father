@@ -43,6 +43,10 @@ function loadRuntime(opts) {
 
   const routesFile = path.join(backendDir, "routes.js");
 
+  // Ensure the data directory exists before SQLite tries to open the file.
+  // SQLite can create the .sqlite file but cannot mkdir the parent directory.
+  try { fs.mkdirSync(path.dirname(dbPath), { recursive: true }); } catch {}
+
   // Always create the db wrapper — even broken routes.js can be reloaded with
   // a working db once the user fixes the file. Helper exposes `db.bucket.upload`
   // backed by the worker's local /bucket/:id/upload proxy.

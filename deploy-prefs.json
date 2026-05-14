@@ -2,6 +2,7 @@
     "prisma":  false,
     "npm_allowlist":  false,
     "restart":  true,
+    "runner_recreate":  true,
     "agent_knowledge":  false,
     "migrations":  false,
     "build":  true,
@@ -10,9 +11,10 @@
     "dist":  true,
     "runner":  false,
     "env":  false,
+    "runner_image":  false,
     "runner_install":  false,
     "deps":  false,
     "playwright":  false,
-    "env_idx":  1,
+    "env_idx":  0,
     "admin":  false
 }

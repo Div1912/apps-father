@@ -132,15 +132,21 @@ class RunnerProvisionService {
    * the install-runner.sh step is supposed to install it.
    */
   async fixupOwnership(projectId: string, subPath?: string): Promise<void> {
-    const username = this.linuxUsername(projectId);
     const target = subPath
       ? path.join(this.projectRoot(projectId), subPath)
       : this.projectRoot(projectId);
 
     if (!fs.existsSync(target)) return;
 
+    // In Docker mode the container runs as the `node` user (uid=1000, gid=1000).
+    // The legacy Linux users (afp_<hash>) don't exist on the host in this mode,
+    // so we chown to the numeric uid/gid instead.
+    const owner = config.runtimeMode === "docker"
+      ? "1000:1000"
+      : `${this.linuxUsername(projectId)}:nogroup`;
+
     try {
-      await execFileP("chown", ["-R", `${username}:nogroup`, target]);
+      await execFileP("chown", ["-R", owner, target]);
     } catch (err) {
       console.warn(`[RunnerProvision] chown failed for ${target}:`, (err as Error).message);
     }

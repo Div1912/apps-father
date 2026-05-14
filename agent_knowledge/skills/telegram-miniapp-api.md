@@ -188,7 +188,7 @@ padding-top: max(12px, calc(
   var(--tg-content-safe-area-inset-top, 0px) +
   var(--tg-safe-area-inset-top, 0px)
 ));
-padding-bottom: max(10px, env(safe-area-inset-bottom, 0px));
+padding-bottom: max(0px, env(safe-area-inset-bottom, 0px));
 ```
 
 ```js

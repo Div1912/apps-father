@@ -163,11 +163,16 @@ export interface AutoApproveResult {
 }
 
 /**
- * For packages not on the allowlist, check npm weekly downloads.
- * If downloads >= NPM_DOWNLOADS_THRESHOLD (100k), auto-approve:
- *   1. Write entry to runner-npm-allowlist.json
- *   2. npm install --ignore-scripts --no-audit in the platform app dir
- * Returns result for each package.
+ * For packages not on the allowlist, check npm weekly downloads. If a package
+ * has >= {@link NPM_DOWNLOADS_THRESHOLD} weekly downloads, write it into
+ * `runner-npm-allowlist.json` so future calls find it via {@link isAllowed}.
+ *
+ * This function does NOT install anything anymore — installation is the
+ * caller's job. NpmInstallTool decides where the package physically lands:
+ *   - docker mode → `docker exec npm install` inside the project's container
+ *                   (per-project /workspace/node_modules)
+ *   - worker / in-process mode → platform-wide install via
+ *                   {@link installPlatformWide} (legacy path, kept for rollback)
  */
 export async function autoApproveIfPopular(packages: string[]): Promise<AutoApproveResult[]> {
   const results: AutoApproveResult[] = [];
@@ -176,7 +181,6 @@ export async function autoApproveIfPopular(packages: string[]): Promise<AutoAppr
     const pkg = stripSubpath(String(raw || "").trim());
     if (!pkg) continue;
 
-    // Already on the allowlist — shouldn't reach here, but guard anyway
     if (isAllowed(pkg)) {
       results.push({ pkg, approved: true, reason: "already on allowlist" });
       continue;
@@ -209,7 +213,6 @@ export async function autoApproveIfPopular(packages: string[]): Promise<AutoAppr
       continue;
     }
 
-    // Popular enough — write to allowlist JSON
     try {
       const filePath = resolveAllowlistPath();
       const raw2 = fs.readFileSync(filePath, "utf-8");
@@ -226,7 +229,31 @@ export async function autoApproveIfPopular(packages: string[]): Promise<AutoAppr
       continue;
     }
 
-    // Install the package into the platform node_modules right now
+    results.push({
+      pkg, approved: true, weeklyDownloads,
+      reason: `auto-approved (${weeklyDownloads.toLocaleString()} weekly downloads)`,
+    });
+  }
+
+  return results;
+}
+
+export interface InstallResult {
+  pkg: string;
+  installed: boolean;
+  reason: string;
+}
+
+/**
+ * Install allowlisted packages into the **platform's** node_modules. Used in
+ * legacy worker / in-process mode where every project shares the same set of
+ * platform-installed deps via NODE_PATH.
+ */
+export async function installPlatformWide(packages: string[]): Promise<InstallResult[]> {
+  const out: InstallResult[] = [];
+  for (const raw of packages) {
+    const pkg = stripSubpath(String(raw || "").trim());
+    if (!pkg) continue;
     try {
       await execFileP("npm", [
         "install",
@@ -235,22 +262,80 @@ export async function autoApproveIfPopular(packages: string[]): Promise<AutoAppr
         "--no-fund",
         "--save-exact",
         pkg,
-      ], { cwd: process.cwd(), timeout: 60_000 });
+      ], { cwd: process.cwd(), timeout: 120_000 });
+      out.push({ pkg, installed: true, reason: "installed in platform node_modules" });
     } catch (err) {
-      // Package is now on the allowlist but couldn't install — not fatal, operator
-      // can re-run install-runner-npms.ps1 to finish the job.
-      results.push({
-        pkg, approved: true, weeklyDownloads,
-        reason: `added to allowlist (${weeklyDownloads.toLocaleString()}/wk) but npm install failed: ${(err as Error).message}. Re-run install-runner-npms.ps1.`,
-      });
-      continue;
+      out.push({ pkg, installed: false, reason: `npm install failed: ${(err as Error).message}` });
     }
-
-    results.push({
-      pkg, approved: true, weeklyDownloads,
-      reason: `auto-approved (${weeklyDownloads.toLocaleString()} weekly downloads) and installed`,
-    });
   }
+  return out;
+}
 
-  return results;
+/**
+ * Install allowlisted packages into a single project's container, writing to
+ * `/workspace/node_modules` (host: `<runnerProjectsRoot>/<id>/node_modules`).
+ *
+ * Spawns/uses the container via {@link dockerRunnerService.exec}, runs
+ * `npm install --ignore-scripts --save-exact <pkgs>` as the unprivileged
+ * `node` user. The container has `--network apps-father-runners` (outbound
+ * internet open) so the registry fetch works.
+ *
+ * Caller (NpmInstallTool) is expected to seed `/workspace/package.json` first
+ * if missing, so npm has somewhere to record the dependency.
+ */
+export async function installInProjectContainer(
+  projectId: string,
+  packages: string[],
+): Promise<InstallResult[]> {
+  // Late require — avoids a circular import via runner-types since the
+  // allowlist module is also pulled by the agent build chain.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { dockerRunnerService } = require("./docker-runner.service") as typeof import("./docker-runner.service");
+
+  const out: InstallResult[] = [];
+  const cleaned = packages
+    .map((p) => stripSubpath(String(p || "").trim()))
+    .filter((p) => p.length > 0);
+  if (cleaned.length === 0) return out;
+
+  // Make sure /workspace/package.json exists so `npm install --save-exact`
+  // can record the dep instead of just dropping it into node_modules. Run
+  // this inside the container so the file ends up node-owned.
+  await dockerRunnerService.exec(projectId,
+    `[ -f /workspace/package.json ] || echo '{"name":"workspace","version":"1.0.0","private":true}' > /workspace/package.json`,
+    { timeoutMs: 5_000 },
+  ).catch(() => { /* container will surface the error on the actual install */ });
+
+  // Single npm install with all packages — faster than one-at-a-time.
+  const cmd =
+    "npm install --ignore-scripts --no-audit --no-fund --save-exact " +
+    cleaned.map((p) => JSON.stringify(p)).join(" ");
+
+  const { exitCode, stdout, stderr } = await dockerRunnerService.exec(projectId, cmd, {
+    timeoutMs: 180_000,
+    maxBytes: 256 * 1024,
+  });
+
+  if (exitCode === 0) {
+    for (const pkg of cleaned) out.push({ pkg, installed: true, reason: "installed in /workspace/node_modules" });
+  } else {
+    // npm prints the most useful error context (EACCES paths, ETARGET versions,
+    // network errors, etc.) somewhere in stderr — often not in the last 3 lines
+    // because npm appends a generic "see ... for more info" footer. Surface a
+    // longer slice to the agent and dump the full stderr to the platform log
+    // so operators can debug install failures without console-shelling.
+    console.error(
+      `[npm-allowlist] install failed for project=${projectId.slice(0, 8)} ` +
+      `pkgs=${cleaned.join(",")} exit=${exitCode}\nstderr:\n${stderr}\nstdout:\n${stdout}`,
+    );
+    const tail = stderr
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !l.startsWith("npm notice") && !l.startsWith("npm warn"))
+      .slice(-8)
+      .join(" | ");
+    const reason = `npm install failed (exit ${exitCode}): ${tail || "unknown error — check server logs"}`;
+    for (const pkg of cleaned) out.push({ pkg, installed: false, reason });
+  }
+  return out;
 }

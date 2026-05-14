@@ -365,6 +365,7 @@
           <button class="btn" id="wk-act-restart">↺ Restart</button>
           <button class="btn" id="wk-act-reload">⟳ Reload routes</button>
           <button class="btn btn-ghost" id="wk-act-files">📂 Files</button>
+          ${data.containerName || (data.username || "").startsWith("afp-") ? `<button class="btn" id="wk-act-console">▣ Console</button>` : ""}
         </div>
 
         <!-- Logs -->
@@ -407,6 +408,15 @@
           );
         } else {
           toast("File browser not available", "error");
+        }
+      });
+
+      const consoleBtn = overlay.querySelector("#wk-act-console");
+      if (consoleBtn) consoleBtn.addEventListener("click", () => {
+        if (window.ConsoleModal) {
+          window.ConsoleModal.open(projectId, name);
+        } else {
+          toast("Console module not loaded", "error");
         }
       });
     }
@@ -469,12 +479,15 @@
           return;
         }
 
-        if (data.mode !== "worker") {
+        if (data.mode !== "worker" && data.mode !== "docker") {
           modeWarn.style.display = "";
           content.innerHTML = "";
           return;
         }
         modeWarn.style.display = "none";
+        // Stash the mode on the page so the modal can decide whether to
+        // expose the docker-only "Console" button.
+        host.dataset.runtimeMode = data.mode;
 
         const workers = data.workers || [];
         if (sub) sub.textContent = workers.length + " worker" + (workers.length !== 1 ? "s" : "") + " in registry";

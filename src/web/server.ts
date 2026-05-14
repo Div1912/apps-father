@@ -754,11 +754,12 @@ export function createWebServer() {
         res.status(403).json({ error: "Forbidden" }); return;
       }
 
-      const metrics = config.runtimeMode === "worker" ? runnerManager.getMetrics(projectId) : null;
+      const metrics = config.isWorkerRuntime ? runnerManager.getMetrics(projectId) : null;
 
-      // App size: sum of the project directory under /srv (worker mode) or projects/
+      // App size: sum of the project directory under /srv (worker / docker mode)
+      // or projects/<id> (in-process legacy).
       const { runnerProvisionService } = await import("../services/runner-provision.service");
-      const workerRoot = config.runtimeMode === "worker"
+      const workerRoot = config.isWorkerRuntime
         ? runnerProvisionService.projectRoot(projectId)
         : path.join(process.cwd(), "projects", projectId);
       const appSizeBytes = dirSizeBytes(workerRoot);
@@ -768,7 +769,7 @@ export function createWebServer() {
       const bucketSizeBytes = dirSizeBytes(bucketDir);
 
       res.json({
-        workerMode: config.runtimeMode === "worker",
+        workerMode: config.isWorkerRuntime,
         state: metrics?.state ?? "not_tracked",
         uptimeMs: metrics?.uptimeMs ?? null,
         memRssBytes: metrics?.memRssBytes ?? null,
@@ -799,7 +800,7 @@ export function createWebServer() {
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) {
         res.status(403).json({ error: "Forbidden" }); return;
       }
-      if (config.runtimeMode !== "worker") {
+      if (!config.isWorkerRuntime) {
         res.json({ logs: [] }); return;
       }
       const n = req.query.n ? Math.min(500, Math.max(1, parseInt(String(req.query.n), 10))) : 200;
@@ -822,7 +823,7 @@ export function createWebServer() {
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) {
         res.status(403).json({ error: "Forbidden" }); return;
       }
-      if (config.runtimeMode !== "worker") {
+      if (!config.isWorkerRuntime) {
         res.status(409).json({ error: "not_in_worker_mode" }); return;
       }
       const handle = await runnerManager.ensureRunning(projectId);
@@ -844,7 +845,7 @@ export function createWebServer() {
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) {
         res.status(403).json({ error: "Forbidden" }); return;
       }
-      if (config.runtimeMode !== "worker") {
+      if (!config.isWorkerRuntime) {
         res.status(409).json({ error: "not_in_worker_mode" }); return;
       }
       await runnerManager.stop(projectId);
@@ -866,7 +867,7 @@ export function createWebServer() {
       if (!project || (project.userId !== user.id && !isAdminTelegramId(auth.telegramId))) {
         res.status(403).json({ error: "Forbidden" }); return;
       }
-      if (config.runtimeMode !== "worker") {
+      if (!config.isWorkerRuntime) {
         res.status(409).json({ error: "not_in_worker_mode" }); return;
       }
       const handle = await runnerManager.restart(projectId);
@@ -5994,13 +5995,14 @@ Rules:
   // anything it doesn't recognise, which would shadow /api/store/*.
   app.use("/api/store", appStoreRoutes);
 
-  // ── Runner proxy (DEV-only worker mode) ─────────────────────────────────
-  // When RUNTIME_MODE=worker, /app/:id/api/*, /dev/:id/api/*, /api/:id/*,
-  // and /devapi/:id/* are proxied into the per-project worker process. The
-  // legacy in-process api/devapi routers are skipped.
-  if (config.runtimeMode === "worker") {
+  // ── Runner proxy (worker / docker modes) ────────────────────────────────
+  // When RUNTIME_MODE=worker or RUNTIME_MODE=docker, /app/:id/api/*,
+  // /dev/:id/api/*, /api/:id/*, and /devapi/:id/* are proxied into the
+  // per-project worker (process or container). The legacy in-process
+  // api/devapi routers are skipped.
+  if (config.isWorkerRuntime) {
     app.use(createRunnerProxyRouter());
-    console.log("[Runtime] Worker mode active — user routes execute in per-project workers");
+    console.log(`[Runtime] ${config.runtimeMode} mode active — user routes execute in per-project workers`);
   } else {
     app.use("/api", apiRoutes);
     app.use("/devapi", devApiRoutes);

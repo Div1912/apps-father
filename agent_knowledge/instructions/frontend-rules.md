@@ -5,7 +5,7 @@ RULES FOR FRONTEND:
    <script src="/af-sdk.js"></script>
 3. SAFE AREA PADDING — always apply to the outermost app container:
    padding-top: max(0px, calc(var(--tg-content-safe-area-inset-top, 0px) + var(--tg-safe-area-inset-top, 0px)));
-   padding-bottom: max(10px, env(safe-area-inset-bottom, 0px));
+   padding-bottom: max(0px, env(safe-area-inset-bottom, 0px));
    NEVER use var(--tg-safe-area-inset-bottom) alone for bottom padding — use the env() form above.
 4. ALWAYS initialize via AF.init() — never call Telegram.WebApp methods manually:
    AF.init({

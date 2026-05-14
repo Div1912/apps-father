@@ -25,7 +25,7 @@ export class ServerLogsTool implements AgentTool {
   async execute(args: Record<string, any>, ctx: RunContext): Promise<string> {
     const n = Math.min(args.lines || 50, 200);
 
-    if (config.runtimeMode !== "worker") {
+    if (!config.isWorkerRuntime) {
       return "(server_logs: worker mode is not active on this server — no worker logs available)";
     }
 

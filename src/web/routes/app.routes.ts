@@ -19,7 +19,7 @@ const PROJECTS_DIR = path.join(process.cwd(), "projects");
  * fallback for projects that haven't been migrated to /srv yet.
  */
 function resolveReleaseFrontendDir(projectId: string): string {
-  if (config.runtimeMode === "worker") {
+  if (config.isWorkerRuntime) {
     const srvDir = runnerProvisionService.frontendDir(projectId, "release");
     if (fs.existsSync(srvDir)) return srvDir;
   }

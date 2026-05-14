@@ -70,12 +70,13 @@ async function main() {
   console.log("[2/4] Starting web server...");
   await startWebServer();
 
-  // Worker mode: enable the per-project runner. Registry stays empty until
-  // the first inbound request lazy-spawns a worker. In-process bot runner is
-  // bypassed entirely — webhooks are forwarded to workers by BotForwarderService.
-  if (config.runtimeMode === "worker") {
+  // Worker / docker mode: enable the per-project runner. Registry stays empty
+  // until the first inbound request lazy-spawns a worker. In-process bot
+  // runner is bypassed entirely — webhooks are forwarded to workers by
+  // BotForwarderService.
+  if (config.isWorkerRuntime) {
     runnerManager.enable();
-    console.log("[3/4] Worker runtime enabled — managed bots will be served by per-project workers");
+    console.log(`[3/4] ${config.runtimeMode} runtime enabled — managed bots will be served by per-project workers`);
   } else {
     console.log("[3/4] Loading managed bots...");
     await botRunnerService.loadAllBots();
@@ -154,8 +155,8 @@ async function gracefulShutdown(signal: string) {
     console.log("[Shutdown] All agents finished. Exiting.");
   }
 
-  // Worker mode: gracefully drain every per-project worker before exit.
-  if (config.runtimeMode === "worker") {
+  // Worker / docker mode: gracefully drain every per-project worker before exit.
+  if (config.isWorkerRuntime) {
     try {
       console.log("[Shutdown] Stopping all project workers...");
       await runnerManager.stopAll();

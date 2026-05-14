@@ -10,11 +10,19 @@ const _internalSecret = process.env.AF_INTERNAL_SECRET || crypto.randomBytes(32)
 // Workers verify this on every /__worker/* request via X-Runner-Secret header.
 const _runnerSecret = process.env.RUNNER_SECRET || crypto.randomBytes(32).toString("hex");
 
-// Detect runtime mode: "worker" splits user routes.js into per-project worker
-// processes; "in-process" keeps the legacy bot-runner in main. PROD stays
-// in-process until a separate cutover.
-const _runtimeMode: "worker" | "in-process" =
-  process.env.RUNTIME_MODE === "worker" ? "worker" : "in-process";
+// Detect runtime mode:
+//   "in-process" → legacy bot-runner inside main (PROD baseline).
+//   "worker"     → per-project Node.js child + Linux user isolation (Phase 1).
+//   "docker"     → per-project Docker container (Phase 2; current).
+// "docker" implies all "worker"-mode behaviour (proxy, lazy spawn, server
+// control endpoints, ServerLogsTool, etc.) — the only difference is the
+// supervisor implementation behind the IRunnerManager interface.
+const _runtimeMode: "worker" | "docker" | "in-process" = (() => {
+  const v = (process.env.RUNTIME_MODE || "").toLowerCase();
+  if (v === "docker") return "docker";
+  if (v === "worker") return "worker";
+  return "in-process";
+})();
 
 // ── Production safety checks ─────────────────────────────────────────────────
 if (process.env.NODE_ENV === "production") {
@@ -70,8 +78,24 @@ export const config = {
   internalSecret: _internalSecret,
 
   // ── Runner runtime (per-project worker isolation) ─────────────────────
-  /** "worker" = spawn a Node.js child per project; "in-process" = legacy bot-runner. */
+  /**
+   * Runner backend:
+   *   - "in-process" → legacy bot-runner in main (no per-project isolation)
+   *   - "worker"     → child_process per project, dropped to a Linux user
+   *   - "docker"     → Docker container per project
+   * Use `isWorkerRuntime` (below) for any "is the runner-proxy / Server
+   * Control / ServerLogsTool active?" check.
+   */
   runtimeMode: _runtimeMode,
+  /**
+   * True for any runtime mode where worker isolation is active. Both
+   * "worker" and "docker" expose the same runner-proxy + Server Control
+   * surface; "in-process" disables them. Prefer this over comparing
+   * `runtimeMode === "worker"` directly.
+   */
+  get isWorkerRuntime(): boolean {
+    return _runtimeMode === "worker" || _runtimeMode === "docker";
+  },
   /** Shared secret for worker /__worker/* internal endpoints (X-Runner-Secret). */
   runnerSecret: _runnerSecret,
   /** Filesystem root holding /srv/apps-father/projects/<id>/{release,development}. */

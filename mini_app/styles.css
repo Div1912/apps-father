@@ -18152,6 +18152,9 @@ body.dark .bnav-label,
     overflow-y: auto;
     white-space: pre-wrap;
     word-break: break-all;
+    background-color: #121212;
+    border: 1px solid #292929;
+    border-radius: 14px;
 }
 .sc-log-stderr { color: #f87171; }
 

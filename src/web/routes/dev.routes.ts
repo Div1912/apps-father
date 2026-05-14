@@ -17,7 +17,7 @@ const PROJECTS_DIR = path.join(process.cwd(), "projects");
  * fallback for projects not yet migrated to /srv.
  */
 function resolveDevelopmentFrontendDir(projectId: string): string {
-  if (config.runtimeMode === "worker") {
+  if (config.isWorkerRuntime) {
     const srvDir = runnerProvisionService.frontendDir(projectId, "development");
     if (fs.existsSync(srvDir)) return srvDir;
   }

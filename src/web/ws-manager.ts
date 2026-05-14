@@ -9,6 +9,7 @@ import { decryptToken } from "../services/crypto.service";
 import { runWithProject } from "../services/console-tagger.service";
 import { config } from "../config";
 import { proxyWebSocketUpgrade } from "./routes/runner-proxy";
+import { handleConsoleUpgrade } from "./routes/console-ws";
 
 const PROJECTS_DIR = path.join(process.cwd(), "projects");
 
@@ -240,9 +241,23 @@ export function setupWebSocket(server: import("http").Server, miniAppWss?: impor
       return;
     }
 
-    // ── Worker mode: proxy /app/:id/ws, /dev/:id/ws, /ws/:id, /devws/:id
-    //    into the per-project worker before falling through to in-process WS.
-    if (config.runtimeMode === "worker") {
+    // ── Admin console (docker mode only): /admin/api/projects/:id/console/ws
+    //    Auth via ?token=<adminToken> against admin.routes.ts activeTokens.
+    if (url.startsWith("/admin/api/projects/")) {
+      try {
+        const handled = await handleConsoleUpgrade(request, socket as any, head);
+        if (handled) return;
+      } catch (err) {
+        console.error("[WS] console upgrade failed:", err);
+        try { socket.destroy(); } catch {}
+        return;
+      }
+    }
+
+    // ── Worker / docker mode: proxy /app/:id/ws, /dev/:id/ws, /ws/:id,
+    //    /devws/:id into the per-project worker before falling through to
+    //    in-process WS.
+    if (config.isWorkerRuntime) {
       try {
         const handled = await proxyWebSocketUpgrade(request, socket as any, head);
         if (handled) return;

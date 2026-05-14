@@ -8,6 +8,19 @@ import { config } from "../config";
 import { prisma } from "../db";
 import { runnerProvisionService } from "./runner-provision.service";
 import { decryptToken } from "./crypto.service";
+import type {
+  IRunnerManager,
+  LogLine,
+  RuntimeKind,
+  RuntimeStatus,
+  WorkerHandle,
+  WorkerHealth,
+  WorkerSummary,
+} from "./runner-types";
+
+// Re-export legacy names so existing imports `import { WorkerSummary } from "./runner-manager.service"`
+// continue to compile; new code should import from "./runner-types" directly.
+export type { LogLine, RuntimeKind, RuntimeStatus, WorkerHandle, WorkerHealth, WorkerSummary };
 
 /**
  * Runner Manager — supervises one Node.js worker process per project.
@@ -45,40 +58,6 @@ const RELOAD_DRAIN_MS = 5_000;     // shorter drain for supervisor-initiated rel
 const BACKOFF_STEPS_MS = [1000, 2000, 4000, 8000, 16000];
 const BACKOFF_WINDOW_MS = 5 * 60_000;
 
-export type RuntimeKind = "release" | "development";
-
-interface RuntimeStatus {
-  loaded: boolean;
-  error?: string | null;
-}
-
-interface WorkerHealth {
-  ok: boolean;
-  uptimeMs?: number;
-  release?: RuntimeStatus;
-  development?: RuntimeStatus;
-  mem?: {
-    rssBytes: number;
-    heapUsedBytes: number;
-    heapTotalBytes: number;
-  };
-  cpuPercent?: number;
-}
-
-interface WorkerHandle {
-  projectId: string;
-  pid: number;
-  port: number;
-  /** Only set after the first /__worker/health check succeeds. */
-  startedAt: number;
-}
-
-interface LogLine {
-  ts: number;
-  stream: "stdout" | "stderr";
-  text: string;
-}
-
 interface RegistryEntry {
   projectId: string;
   port: number;
@@ -110,25 +89,7 @@ interface RegistryEntry {
   username: string;
 }
 
-export interface WorkerSummary {
-  projectId: string;
-  port: number;
-  pid: number | null;
-  state: RegistryEntry["state"];
-  uptimeMs: number | null;
-  username: string | null;
-  restartCount: number;
-  crashCount: number;
-  lastError: string | null;
-  release: RuntimeStatus | null;
-  development: RuntimeStatus | null;
-  /** RSS memory in bytes from the most recent stats poll, or null if unknown. */
-  memRssBytes: number | null;
-  /** CPU usage % averaged over the last stats poll interval, or null if unknown. */
-  cpuPercent: number | null;
-}
-
-class RunnerManager {
+class RunnerManager implements IRunnerManager {
   private registry = new Map<string, RegistryEntry>();
   private shuttingDown = false;
   /** Set to true once main is fully booted; spawn() refuses if false. */
@@ -333,6 +294,11 @@ class RunnerManager {
     this.shuttingDown = true;
     const ids = Array.from(this.registry.keys());
     await Promise.all(ids.map((id) => this.stop(id).catch(() => {})));
+  }
+
+  /** Legacy mode: same as stopAll (child processes must be killed on shutdown). */
+  async killAll(): Promise<void> {
+    return this.stopAll();
   }
 
   // ── Internal ────────────────────────────────────────────────────────────
@@ -820,4 +786,20 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-export const runnerManager = new RunnerManager();
+const legacyRunnerManager = new RunnerManager();
+
+/**
+ * Active runner manager — selects the backend based on `config.runtimeMode`:
+ *   - "docker" → {@link DockerRunnerService} (container per project)
+ *   - "worker" or anything else → {@link RunnerManager} (Linux user per project)
+ *
+ * Imports of `runnerManager` from this file therefore transparently switch
+ * implementations when `RUNTIME_MODE=docker` is set in `.env`. The old
+ * `runtimeMode === "worker"` checks across the codebase still work because
+ * `config.isWorkerRuntime` returns true for both modes.
+ */
+export const runnerManager: IRunnerManager =
+  config.runtimeMode === "docker"
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    ? (require("./docker-runner.service").dockerRunnerService as IRunnerManager)
+    : legacyRunnerManager;

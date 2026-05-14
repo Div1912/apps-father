@@ -8,10 +8,10 @@ const router = Router();
 router.post("/:tokenHash", (req: Request, res: Response) => {
   const tokenHash = String(req.params.tokenHash);
 
-  // Worker mode: forward to the per-project worker via /__worker/bot-update.
+  // Worker / docker mode: forward to the per-project worker via /__worker/bot-update.
   // In-process mode: dispatch via the legacy in-process bot runner.
   const handler =
-    config.runtimeMode === "worker"
+    config.isWorkerRuntime
       ? botForwarderService.getWebhookHandler(tokenHash)
       : botRunnerService.getWebhookHandler(tokenHash);
 

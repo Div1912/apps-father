@@ -50,6 +50,11 @@ const DEVELOPMENT_BACKEND_DIR= process.env.DEVELOPMENT_BACKEND_DIR|| path.join(P
 const DEVELOPMENT_DATA_DIR   = process.env.DEVELOPMENT_DATA_DIR   || path.join(PROJECT_ROOT, "development", "data");
 const DEVELOPMENT_DB_PATH    = process.env.DEVELOPMENT_DB_PATH    || path.join(DEVELOPMENT_DATA_DIR, "db.sqlite");
 const PORT                   = parseInt(process.env.PORT || "0", 10);
+// In Docker mode the supervisor passes BIND_HOST=0.0.0.0 so Docker's
+// port proxy (host:N → container_eth0:8080) can reach the listener.
+// In legacy child-process mode we keep 127.0.0.1 so only the host
+// loopback can connect (no Docker isolation layer to rely on).
+const BIND_HOST              = process.env.BIND_HOST || "127.0.0.1";
 const BASE_URL               = process.env.BASE_URL || "";
 const RUNNER_SECRET          = process.env.RUNNER_SECRET || "";
 const AF_INTERNAL_SECRET     = process.env.AF_INTERNAL_SECRET || "";
@@ -225,13 +230,14 @@ app.post("/__worker/bot-update", requireRunnerSecret, async (req, res) => {
 //      captured AF_INTERNAL_SECRET as x-af-internal.
 //   3. Pipes the upstream response back to the caller.
 const { proxyBucket } = require("./lib/bucket-proxy");
-app.all("/bucket/:projectId/*splat", (req, res) => proxyBucket(req, res, {
+// Express 4 wildcard: plain * matches any number of path segments.
+app.all("/bucket/:projectId/*", (req, res) => proxyBucket(req, res, {
   ownProjectId: PROJECT_ID,
   baseUrl: BASE_URL,
   afInternalSecret: AF_INTERNAL_SECRET,
 }));
-// Express 5 wildcard syntax differs across versions; mount a fallback:
-app.all("/bucket/*splat", (req, res) => proxyBucket(req, res, {
+// Fallback covers paths without a trailing segment (e.g. /bucket/<id>)
+app.all("/bucket/*", (req, res) => proxyBucket(req, res, {
   ownProjectId: PROJECT_ID,
   baseUrl: BASE_URL,
   afInternalSecret: AF_INTERNAL_SECRET,
@@ -332,9 +338,9 @@ process.on("unhandledRejection", (reason) => {
   console.error("[worker] unhandledRejection:", reason);
 });
 
-server.listen(PORT, "127.0.0.1", () => {
+server.listen(PORT, BIND_HOST, () => {
   console.log(
-    `[worker] project=${PROJECT_ID.slice(0, 8)} listening on 127.0.0.1:${PORT}` +
+    `[worker] project=${PROJECT_ID.slice(0, 8)} listening on ${BIND_HOST}:${PORT}` +
     ` release=${release.loaded} development=${development.loaded}`
   );
 });
