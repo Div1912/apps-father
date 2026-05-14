@@ -274,6 +274,20 @@ export function createWebServer() {
   }
   app.use("/telegram-mini-app/api", attachAttribution);
 
+  // Service mode middleware — when service mode is ON, block ALL mini-app API
+  // requests from non-admin users. Admins (ADMIN_TELEGRAM_IDS) always pass through.
+  // /init is exempted so the mini_app can still receive serviceMode:true and
+  // display the maintenance page correctly.
+  // Admin bypass is checked via validateAuth() which does full HMAC verification
+  // against the platform bot token — no unverified header parsing.
+  app.use("/telegram-mini-app/api", (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!runtimeConfig.isServiceMode()) return next();
+    if (req.path === "/init") return next();
+    const auth = validateAuth(req);
+    if (auth.valid && auth.telegramId && config.adminTelegramIds.has(String(auth.telegramId))) return next();
+    res.status(503).json({ error: "service_mode", message: "Apps Father is under maintenance. Please check back soon." });
+  });
+
   // Helper: any handler that needs to materialize the authenticated user
   // should call this instead of projectService.getOrCreateUser directly. It
   // forwards req.attribution (set by attachAttribution above) so source /

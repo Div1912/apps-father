@@ -49,6 +49,11 @@ export const config = {
   openPanelClientSecret: process.env.OPENPANEL_CLIENT_SECRET || "",
   elevenLabsApiKey: process.env.ELEVENLABS_API_KEY || "",
   apiPassKey: process.env.APIPASS_KEY || "",
+  /** Comma-separated Telegram IDs of platform admins who bypass maintenance mode. */
+  adminTelegramIds: new Set(
+    (process.env.ADMIN_TELEGRAM_IDS || "")
+      .split(",").map(s => s.trim()).filter(Boolean)
+  ),
 
   get baseUrl(): string {
     if (this.nodeEnv === "development") {
@@ -79,7 +84,7 @@ export const config = {
   /** Polling interval for /__worker/health during spawn. */
   runnerHealthIntervalMs: parseInt(process.env.RUNNER_HEALTH_INTERVAL_MS || "200", 10),
   /** Default heap cap (MB) passed to worker via --max-old-space-size. */
-  runnerHeapMb: parseInt(process.env.RUNNER_HEAP_MB || "256", 10),
+  runnerHeapMb: parseInt(process.env.RUNNER_HEAP_MB || "512", 10),
   /** 0 = unlimited concurrent workers. Future Phase 2 knob. */
   runnerMaxConcurrent: parseInt(process.env.RUNNER_MAX_CONCURRENT || "0", 10),
 };

@@ -1,7 +1,9 @@
 import { spawn, ChildProcess } from "child_process";
 import * as path from "path";
+import * as fs from "fs";
 import * as http from "http";
 import * as crypto from "crypto";
+import * as dotenv from "dotenv";
 import { config } from "../config";
 import { prisma } from "../db";
 import { runnerProvisionService } from "./runner-provision.service";
@@ -30,6 +32,15 @@ import { decryptToken } from "./crypto.service";
 
 const LOG_RING_LIMIT = 500;        // lines kept in memory per worker
 const DRAIN_MS = 30_000;           // SIGTERM drain budget for graceful manual stop
+
+/** Platform-owned env keys that user .env files must not override. */
+const RESERVED_ENV_KEYS = new Set([
+  "NODE_ENV", "PROJECT_ID", "PROJECT_ROOT",
+  "RELEASE_BACKEND_DIR", "RELEASE_DATA_DIR", "RELEASE_DB_PATH",
+  "DEVELOPMENT_BACKEND_DIR", "DEVELOPMENT_DATA_DIR", "DEVELOPMENT_DB_PATH",
+  "PORT", "BASE_URL", "RUNNER_SECRET", "AF_INTERNAL_SECRET",
+  "NODE_PATH", "PATH", "BOT_TOKEN", "BOT_USERNAME",
+]);
 const RELOAD_DRAIN_MS = 5_000;     // shorter drain for supervisor-initiated reloads
 const BACKOFF_STEPS_MS = [1000, 2000, 4000, 8000, 16000];
 const BACKOFF_WINDOW_MS = 5 * 60_000;
@@ -469,6 +480,25 @@ class RunnerManager {
       // /opt/apps-father[-dev]/node_modules, so without this they can't find anything.
       NODE_PATH: path.join(process.cwd(), "node_modules"),
     };
+
+    // Per-project user-defined env vars from <projectRoot>/<runtime>/backend/.env.
+    // Loaded for both release and development so routes.js can access custom keys.
+    // Platform-reserved keys (PORT, PROJECT_ID, RUNNER_SECRET, etc.) cannot be
+    // overridden — user vars are merged first, then platform vars overwrite.
+    for (const runtime of ["release", "development"] as const) {
+      const envFile = path.join(projectRoot, runtime, "backend", ".env");
+      if (fs.existsSync(envFile)) {
+        try {
+          const parsed = dotenv.parse(fs.readFileSync(envFile));
+          for (const [k, v] of Object.entries(parsed)) {
+            // Skip keys that are reserved for platform use
+            if (!RESERVED_ENV_KEYS.has(k)) env[k] = v;
+          }
+        } catch {
+          // Malformed .env — ignore, don't block worker startup
+        }
+      }
+    }
 
     // Per-project bot token (release runtime only). Decrypted inside main and
     // handed to the worker; the worker scrubs it from process.env before

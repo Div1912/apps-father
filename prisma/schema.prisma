@@ -49,9 +49,10 @@ model User {
   adminNotes      AdminUserNote[]
   taskCompletions TaskCompletion[]
   agentFeedback   AgentFeedback[]
-  tonTopups       TonTopup[]
-  balanceLedger   BalanceLedger[]
-  tonWithdrawals  TonWithdrawal[]
+  tonTopups            TonTopup[]
+  balanceLedger        BalanceLedger[]
+  tonWithdrawals       TonWithdrawal[]
+  voucherRedemptions   VoucherRedemption[]
 
   @@map("users")
 }
@@ -448,6 +449,7 @@ model VoucherRedemption {
   createdAt  DateTime @default(now()) @map("created_at")
 
   voucher Voucher @relation(fields: [voucherId], references: [id])
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([voucherId, userId])
   @@map("voucher_redemptions")
@@ -463,7 +465,7 @@ model Withdrawal {
   createdAt   DateTime  @default(now()) @map("created_at")
   processedAt DateTime? @map("processed_at")
 
-  user User @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("withdrawals")
 }
@@ -480,7 +482,7 @@ model TonWithdrawal {
   createdAt   DateTime  @default(now()) @map("created_at")
   processedAt DateTime? @map("processed_at")
 
-  user User @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("ton_withdrawals")
 }
@@ -741,7 +743,7 @@ model TonTopup {
   confirmedAt DateTime? @map("confirmed_at")
   createdAt   DateTime  @default(now()) @map("created_at")
 
-  user User @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([status])

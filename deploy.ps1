@@ -395,6 +395,32 @@ if ($checked["migrations"]) {
   $sqlLines.Add("CREATE INDEX IF NOT EXISTS balance_ledger_user_created_idx ON balance_ledger(user_id, created_at DESC);")
   $sqlLines.Add("CREATE INDEX IF NOT EXISTS balance_ledger_created_idx ON balance_ledger(created_at DESC);")
 
+  # ── Fix missing ON DELETE CASCADE on user FK constraints ───────────────────
+  $sqlLines.Add(@"
+DO `$`$ BEGIN
+  -- ton_withdrawals
+  IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name='ton_withdrawals_user_id_fkey') THEN
+    ALTER TABLE ton_withdrawals DROP CONSTRAINT ton_withdrawals_user_id_fkey;
+  END IF;
+  ALTER TABLE ton_withdrawals ADD CONSTRAINT ton_withdrawals_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+  -- withdrawals
+  IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name='withdrawals_user_id_fkey') THEN
+    ALTER TABLE withdrawals DROP CONSTRAINT withdrawals_user_id_fkey;
+  END IF;
+  ALTER TABLE withdrawals ADD CONSTRAINT withdrawals_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+  -- voucher_redemptions
+  IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name='voucher_redemptions_user_id_fkey') THEN
+    ALTER TABLE voucher_redemptions DROP CONSTRAINT voucher_redemptions_user_id_fkey;
+  END IF;
+  ALTER TABLE voucher_redemptions ADD CONSTRAINT voucher_redemptions_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+  -- ton_topups
+  IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name='ton_topups_user_id_fkey') THEN
+    ALTER TABLE ton_topups DROP CONSTRAINT ton_topups_user_id_fkey;
+  END IF;
+  ALTER TABLE ton_topups ADD CONSTRAINT ton_topups_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+END `$`$;
+"@)
+
   # ── TON Top-ups ────────────────────────────────────────────────────────────
   $sqlLines.Add("CREATE TABLE IF NOT EXISTS ton_topups (id TEXT PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id), amount_ton DECIMAL(18,9) NOT NULL, amount_nano TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', tx_hash TEXT, confirmed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());")
   $sqlLines.Add("CREATE INDEX IF NOT EXISTS ton_topups_user_id_idx ON ton_topups(user_id);")
@@ -506,7 +532,7 @@ if ($checked["npm_allowlist"]) {
 # ---- Restart PM2 ----
 if ($checked["restart"]) {
   Step-Header "Restarting PM2"
-  ssh $SERVER ("cd " + $APP_DIR + " && (pm2 restart " + $PM2 + " --update-env --kill-timeout 300000 2>/dev/null || pm2 start dist/index.js --name " + $PM2 + " --max-memory-restart 16G && pm2 save)")
+  ssh $SERVER ("cd " + $APP_DIR + " && (pm2 restart " + $PM2 + " --update-env --kill-timeout 300000 --node-args='--max-old-space-size=8192' 2>/dev/null || pm2 start dist/index.js --name " + $PM2 + " --node-args='--max-old-space-size=8192' --max-memory-restart 16G && pm2 save)")
   if ($LASTEXITCODE -ne 0) { Step-Err "PM2 restart failed" }
   Step-OK "PM2 restarted"
 }
