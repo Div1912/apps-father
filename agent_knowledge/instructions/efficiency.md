@@ -15,6 +15,11 @@ If you make 20 tiny edit_file calls for string replacements, that is 20 wasted i
    WRONG: iter1: edit_file("Good day"→"Добрый день") → iter2: edit_file("Loading"→"Загрузка") → iter3: edit_file("No matches"→"Ничего не найдено") ...
    RIGHT: iter1: read_file(app.js) + write_file(app.js, <full updated content>)
 
+   For files >300 lines, write_file's content can hit max_tokens and get truncated. Use chunked appends instead — do NOT fall back to shell:
+     write_file({ path, content: "<first ~200 lines>" })
+     write_file({ path, content: "<next ~200 lines>", append: true })
+     write_file({ path, content: "<final lines>", append: true })
+
 4. TRUST PASSPORT LINE NUMBERS — do NOT grep code the passport already locates.
 
 5. USE shell FOR MULTI-PATTERN GREP — shell("grep -n 'a\|b' file") instead of two grep calls.

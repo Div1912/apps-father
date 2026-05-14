@@ -349,6 +349,28 @@ export class AgentRunner {
           argsTruncated = true;
         }
 
+        // Short-circuit truncated tool calls before they hit the tool. Most
+        // tools can't recover meaningfully from empty args, and write_file in
+        // particular used to suggest the wrong escape hatch (shell heredoc)
+        // when its content was cut off. Inject a precise retry instruction
+        // here so the agent's next turn restarts on the right foot.
+        if (argsTruncated) {
+          const retryHint =
+            name === "write_file"
+              ? `Error: write_file's arguments were truncated by max_tokens (the response body did not fit in one tool call).
+DO NOT retry with the full file. Split the content into chunks using the append flag:
+
+  write_file({ path: "<your/path>", content: "<first ~200 lines>" })
+  write_file({ path: "<your/path>", content: "<next ~200 lines>", append: true })
+  write_file({ path: "<your/path>", content: "<final ~200 lines>", append: true })
+
+The first call overwrites; every subsequent call with append:true extends the file. Continue until the file is complete. Do NOT use shell — shell writes to a different filesystem than the build directory.`
+              : `Error: tool '${name}' was truncated by max_tokens. The arguments JSON did not finish streaming. Retry with a smaller payload, or break the work into multiple tool calls.`;
+          this._messages.push({ role: "tool", tool_call_id: id, content: retryHint } as any);
+          console.warn(`[Agent] ⚠️ Tool '${name}' args truncated by max_tokens — injected retry hint, skipping execution.`);
+          continue;
+        }
+
         // Canonicalize inline-argument calls (e.g. load_skill("frontend"))
         const inlineArgMatch = name?.match(/^(\w+)\("([^"]+)"\)$/);
         if (inlineArgMatch) {

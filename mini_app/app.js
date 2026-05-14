@@ -3670,8 +3670,9 @@ function handleWSMessage(data) {
     const msg = data.message;
     if (!msg) return;
     if (msg.type === 'error') {
-      el.className = 'chat-bubble chat-bubble--error';
-      el.innerHTML = `<div class="chat-bubble-content">${esc(msg.content)}</div>${renderRefundBlock(msg.metadata)}<div class="chat-bubble-time">${timeStr(msg.timestamp)}</div>`;
+      el.className = 'chat-bubble chat-bubble--result';
+      el.removeAttribute('style');
+      el.innerHTML = `${renderRefundBlock(msg.metadata, msg.content, data.messageId)}<div class="chat-bubble-time">${timeStr(msg.timestamp)}</div>`;
       bindRefundRetry(el, msg.metadata);
       el.id = `msg-${msg.id}`;
       setInputDisabled(false);
@@ -4723,26 +4724,74 @@ async function loadChatHistory(projectId) {
   }
 }
 
-// Refund block rendered under an error bubble when the agent failed and
-// we already credited the user back. Surfaces a Try-again CTA wired to
-// the same call (build / update) the user originally made.
-function renderRefundBlock(metadata) {
-  if (!metadata?.refunded) return '';
-  const credits = Number(metadata.creditsRefunded || 0);
+const RESULT_CROSS_SVG = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+
+// Full failure card mirroring the success completion-card. Used inside an
+// .chat-bubble--result wrapper so the bubble is transparent and the card
+// owns all visual chrome.
+function failCardHtml({ errorText, metadata, stepCount, durationMs } = {}) {
+  const refunded = !!metadata?.refunded;
+  const credits  = Number(metadata?.creditsRefunded || 0);
   const retryLabel = t('btn_try_again') || 'Try again';
-  return `
-    <div class="error-refund-block" data-refund-block>
-      <div class="refund-line">
-        <span class="refund-icon" aria-hidden="true">${coinSvg(13, 9, '#22c55e')}</span>
-        <span class="refund-amount">+${credits}</span>
-        <span class="refund-suffix">${esc(t('error_credits_refunded_suffix') || 'refunded')}</span>
+  const titleLabel = t('chat_update_failed') || 'Update failed';
+
+  // Sub line: "X steps · 2.1s · 1 error"
+  const subParts = [];
+  if (stepCount > 0) subParts.push(`${stepCount} ${stepCount === 1 ? 'step' : 'steps'}`);
+  if (durationMs > 0) subParts.push(`${(durationMs / 1000).toFixed(1)}s`);
+  subParts.push(`1 ${t('chat_error_count') || 'error'}`);
+  const subLine = `<div class="fail-sub" data-step-count="${stepCount || 0}" data-duration-ms="${durationMs || 0}">${subParts.join(' · ')}</div>`;
+
+  // Error detail block (terminal-style)
+  const detailHtml = errorText
+    ? `<div class="fail-detail-block">
+         <span class="fail-detail-tag">ERROR</span>
+         <span class="fail-detail-text">${esc(errorText)}</span>
+       </div>`
+    : '';
+
+  // Refund line (full-width row with REFUNDED badge on the right)
+  const refundHtml = refunded
+    ? `<div class="fail-refund">
+         <span class="fail-refund-icon" aria-hidden="true">${coinSvg(13, 9, '#4ade80')}</span>
+         <span class="fail-refund-text"><strong>+${credits}</strong> ${esc(t('error_credits_refunded_suffix') || 'credits returned')}</span>
+         <span class="fail-refund-badge">REFUNDED</span>
+       </div>`
+    : '';
+
+  // Action row: full-width Retry CTA
+  const retryHtml = refunded
+    ? `<div class="fail-actions">
+         <button type="button" class="fail-retry-btn" data-refund-retry>
+           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+           <span>${esc(retryLabel)}</span>
+         </button>
+       </div>`
+    : '';
+
+  return `<div class="fail-card" data-refund-block>
+    <div class="fail-glow"></div>
+    <div class="fail-head">
+      <div class="fail-icon">${RESULT_CROSS_SVG}</div>
+      <div class="fail-head-text">
+        <div class="fail-title">${esc(titleLabel)}</div>
+        ${subLine}
       </div>
-      <button type="button" class="btn-retry" data-refund-retry>
-        <svg class="btn-retry-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
-        <span>${esc(retryLabel)}</span>
-      </button>
     </div>
-  `;
+    ${detailHtml}
+    ${refundHtml}
+    ${retryHtml}
+  </div>`;
+}
+
+// Backwards-compat shim: existing call sites pass (metadata, errorText). We
+// pull step count / duration from the existing progress bubble state when
+// available so the fail card shows the same metadata as the success card.
+function renderRefundBlock(metadata, errorText, messageId) {
+  const _proc = messageId ? agentProcState.get(messageId) : null;
+  const stepCount = _proc ? ((_proc.steps?.length || 0) + (_proc.narrations?.length || 0)) : 0;
+  const durationMs = Number(metadata?.durationMs || 0);
+  return failCardHtml({ errorText, metadata, stepCount, durationMs });
 }
 
 function bindRefundRetry(el, metadata) {
@@ -4760,13 +4809,36 @@ function bindRefundRetry(el, metadata) {
         await approvePlan();
       } else if (retry.kind === 'update' && retry.text) {
         await refireUpdate(retry.text);
+      } else if (retry.kind === 'execute-proposal' && retry.proposalId) {
+        await executeProposal(retry.proposalId, null, false);
+      } else {
+        console.warn('[refund-retry] unsupported retry kind:', retry.kind);
+        btn.disabled = false;
+        return;
       }
-      // Drop the error bubble once the retry is dispatched so the chat
-      // shows only the fresh progress entry. The new pre-charge happens
-      // server-side automatically.
-      el.style.transition = 'opacity 0.2s';
-      el.style.opacity = '0';
-      setTimeout(() => el.remove(), 200);
+      // Drop only the fail card (and its sibling time stamp) so a merged
+      // proposal bubble keeps its top "proposal" half visible while the new
+      // progress bubble lands fresh below.
+      const failCard = el.querySelector('.fail-card');
+      if (failCard) {
+        const next = failCard.nextElementSibling;
+        const fade = (node) => {
+          node.style.transition = 'opacity 0.2s';
+          node.style.opacity = '0';
+          setTimeout(() => node.remove(), 200);
+        };
+        fade(failCard);
+        if (next && next.classList.contains('chat-bubble-time')) fade(next);
+        // If the bubble is now empty (standalone fail card, not merged),
+        // drop the whole bubble too.
+        if (!el.querySelector('.proposal-card')) {
+          setTimeout(() => { if (!el.children.length || el.children.length === 0) el.remove(); }, 220);
+        }
+      } else {
+        el.style.transition = 'opacity 0.2s';
+        el.style.opacity = '0';
+        setTimeout(() => el.remove(), 200);
+      }
     } catch (err) {
       console.error('[refund-retry] failed:', err);
       btn.disabled = false;
@@ -4874,8 +4946,35 @@ function appendMessage(msg, animate = true) {
     setInputFinalizing(true);
     return;
   } else if (msg.type === 'error') {
-    el.className = 'chat-bubble chat-bubble--error';
-    el.innerHTML = `<div class="chat-bubble-content">${esc(msg.content)}</div>${renderRefundBlock(msg.metadata)}`;
+    // When this error was spawned by a proposal card, merge the fail card
+    // into the proposal bubble (mirrors the success card flow above).
+    const srcProposalId = msg.metadata?.sourceProposalId || msg.metadata?.retry?.proposalId;
+    const proposalEl = srcProposalId
+      ? document.getElementById(`msg-${srcProposalId}`)
+      : null;
+
+    const failHtml = renderRefundBlock(msg.metadata, msg.content, msg.id)
+      + `<div class="chat-bubble-time">${timeStr(msg.timestamp)}</div>`;
+
+    if (proposalEl) {
+      const proposalCard = proposalEl.querySelector('.proposal-card');
+      if (proposalCard) {
+        proposalCard.classList.add('proposal-card--merged-top');
+        const actions = proposalCard.querySelector('.proposal-actions');
+        if (actions) actions.remove();
+      }
+      const proposalTime = proposalEl.querySelector('.chat-bubble-time');
+      if (proposalTime) proposalTime.remove();
+      proposalEl.className = 'chat-bubble chat-bubble--result';
+      proposalEl.insertAdjacentHTML('beforeend', failHtml);
+      bindRefundRetry(proposalEl, msg.metadata);
+      if (!animate) proposalEl.style.animation = 'none';
+      return;
+    }
+
+    el.className = 'chat-bubble chat-bubble--result';
+    el.removeAttribute('style');
+    el.innerHTML = failHtml;
     bindRefundRetry(el, msg.metadata);
     if (isProcessing) {
       setProcessing(false);

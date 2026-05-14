@@ -442,13 +442,13 @@ class DockerRunnerService implements IRunnerManager {
       "--cpus", "0.5",
       "--pids-limit", "100",
       "--read-only",
-      "--tmpfs", "/tmp:rw,size=64m,mode=1777",
+      "--tmpfs", "/tmp:rw,size=256m,mode=1777",
       // Owned by uid/gid 1000 (the `node` user) so npm install can write to
       // its cache. Without uid=1000 the tmpfs is owned by root (default) and
       // mode=0755 leaves the unprivileged `node` user with read-only access,
       // breaking every `npm install` (both from the agent's npm_install tool
       // and from the interactive worker console).
-      "--tmpfs", "/home/node/.npm:rw,size=64m,mode=0755,uid=1000,gid=1000",
+      "--tmpfs", "/home/node/.npm:rw,size=512m,mode=0755,uid=1000,gid=1000",
       "-v", `${projectRoot}:/workspace`,
       "-p", `127.0.0.1:0:${CONTAINER_PORT}`,  // Docker auto-assigns host port
       "--restart", "no",
@@ -799,14 +799,16 @@ class DockerRunnerService implements IRunnerManager {
       const out = await execFileP("docker", [
         "ps",
         "--filter", "label=afp.runner=worker",
-        "--format", "{{.ID}}|{{.Names}}|{{.Label \"afp.project\"}}",
+        "--format", "{{.ID}}|{{.Names}}|{{.Label \"afp.project\"}}|{{.RunningFor}}",
       ], { timeout: 5_000 });
       stdout = out.stdout;
     } catch {
       return;
     }
     for (const line of stdout.split(/\r?\n/)) {
-      const [id, name, projectId] = line.split("|");
+      const parts = line.split("|");
+      const [id, name, projectId] = parts;
+      const runningFor = parts[3] ?? "";
       if (!id || !name || !projectId) continue;
       if (this.registry.has(projectId)) continue;
       const entry = this.makeEntry(projectId);
@@ -821,7 +823,10 @@ class DockerRunnerService implements IRunnerManager {
         if (match) entry.port = parseInt(match.split(":")[1], 10);
       } catch { /* not exposed yet */ }
       entry.state = "ready";
-      entry.startedAt = Date.now(); // best-effort; we don't know the real start time
+      // Parse Docker's "X minutes ago" / "X hours ago" / "X days ago" string into
+      // an approximate epoch so the admin UI shows real container uptime instead of
+      // "time since last PM2 restart".
+      entry.startedAt = parseDockerRunningFor(runningFor);
       this.attachLogStreamer(entry);
       this.registry.set(projectId, entry);
       console.log(`[DockerRunner] adopted container ${name} (project ${projectId.slice(0, 8)}, port ${entry.port})`);
@@ -860,6 +865,31 @@ class DockerRunnerService implements IRunnerManager {
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Convert Docker's `--format {{.RunningFor}}` string (e.g. "3 hours ago",
+ * "2 days ago", "47 minutes ago", "About a minute ago") into a `Date.now()`-
+ * compatible epoch so we can show real container uptime after a PM2 restart.
+ * Falls back to `Date.now()` if the string can't be parsed.
+ */
+function parseDockerRunningFor(s: string): number {
+  if (!s) return Date.now();
+  const lower = s.toLowerCase();
+  const num = (unit: string) => {
+    const m = lower.match(new RegExp(`(\\d+)\\s+${unit}`));
+    return m ? parseInt(m[1], 10) : null;
+  };
+  const seconds =
+    (num("second") ?? (lower.includes("second") ? 1 : null)) ??
+    ((lower.includes("minute") && !num("minute")) ? 60 : null) ??
+    (num("minute") !== null ? (num("minute")! * 60) : null) ??
+    (num("hour") !== null ? (num("hour")! * 3600) : null) ??
+    (num("day") !== null ? (num("day")! * 86400) : null) ??
+    (num("week") !== null ? (num("week")! * 604800) : null) ??
+    (num("month") !== null ? (num("month")! * 2592000) : null);
+  if (seconds === null) return Date.now();
+  return Date.now() - seconds * 1_000;
 }
 
 /**

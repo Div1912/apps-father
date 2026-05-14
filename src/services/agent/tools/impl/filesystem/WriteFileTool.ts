@@ -10,12 +10,20 @@ export class WriteFileTool implements AgentTool {
       type: "function",
       function: {
         name: "write_file",
-        description: "Create or overwrite a file with complete content. Use for new files or full rewrites. For small changes, prefer edit_file. WARNING: do NOT use for files longer than ~300 lines — the content will be cut off by max_tokens mid-generation, corrupting the file. For large files use the shell tool with a heredoc, or write a short skeleton and fill sections with edit_file.",
+        description:
+          "Create, overwrite, or extend a file. " +
+          "For small in-place edits, prefer edit_file. " +
+          "If the file is too large to fit in one tool call (≳300 lines), write the first chunk with append=false (or omitted), then call write_file again with append=true to add the next chunks until the file is complete. " +
+          "Use this same append-chunking approach if a previous write_file was truncated by max_tokens — never use shell to write file content.",
         parameters: {
           type: "object",
           properties: {
             path: { type: "string", description: "File path relative to project root" },
-            content: { type: "string", description: "Complete file content" },
+            content: { type: "string", description: "Content to write (one chunk)" },
+            append: {
+              type: "boolean",
+              description: "If true, append `content` to the end of the existing file instead of overwriting. Use this to continue a multi-chunk write. Defaults to false (overwrite).",
+            },
           },
           required: ["path", "content"],
         },
@@ -35,18 +43,17 @@ export class WriteFileTool implements AgentTool {
     if (!args.path || typeof args.path !== "string") {
       return `Error: write_file args were truncated by max_tokens — 'path' is missing. The file content was too large to fit in one tool call.
 
-DO NOT retry write_file with the full file. Split the work:
+DO NOT retry write_file with the full file. Split the content into chunks and use the append flag:
 
-OPTION 1 — shell heredoc (best for files >300 lines):
-  shell("cat > frontend/yourfile.js << 'EOF'\\n...content in chunks...\\nEOF")
+  write_file({ path: "<your/path>", content: "<first ~200 lines>" })
+  write_file({ path: "<your/path>", content: "<next ~200 lines>", append: true })
+  write_file({ path: "<your/path>", content: "<final ~200 lines>", append: true })
 
-OPTION 2 — skeleton + edit_file:
-  write_file(path, "// skeleton with // TODO: sectionA markers")
-  edit_file(path, "// TODO: sectionA", "...actual code...")
+The first call (no append) creates/overwrites the file with the first chunk. Each subsequent call with append:true adds more content to the end. Continue until the file is complete.
 
-OPTION 3 — split into multiple smaller files.
+Do NOT use shell to write file content — shell may run against a different filesystem than the build directory.
 
-Pick one and proceed immediately.`;
+Pick path + first chunk and proceed immediately.`;
     }
 
     if (this._isProtectedPath(args.path)) {
@@ -58,45 +65,55 @@ Pick one and proceed immediately.`;
     if (typeof args.content !== "string" || args.content.length === 0) {
       return `Error: write_file received empty content for '${args.path}' — the model hit max_tokens while generating the file body. This will happen again if you retry the same way.
 
-DO NOT retry write_file with the full file. Split the work:
+DO NOT retry write_file with the full file. Split the content into chunks and use the append flag:
 
-OPTION 1 — shell heredoc (best for files >300 lines):
-  shell("cat > ${args.path} << 'HEREDOC_EOF'\\n...content...\\nHEREDOC_EOF")
+  write_file({ path: "${args.path}", content: "<first ~200 lines>" })
+  write_file({ path: "${args.path}", content: "<next ~200 lines>", append: true })
+  write_file({ path: "${args.path}", content: "<final ~200 lines>", append: true })
 
-OPTION 2 — skeleton + edit_file:
-  write_file("${args.path}", "// skeleton ~50 lines with // TODO: sectionA markers")
-  edit_file("${args.path}", "// TODO: sectionA", "...actual code...")
+The first call (no append) creates/overwrites the file. Each subsequent call with append:true adds more content to the end. Continue until the file is complete.
 
-OPTION 3 — split into multiple smaller files.
+Do NOT use shell to write file content.
 
-Pick one and proceed immediately.`;
+Proceed with the first chunk now.`;
     }
 
+    const append = args.append === true;
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, args.content, "utf-8");
+    if (append) {
+      fs.appendFileSync(filePath, args.content, "utf-8");
+    } else {
+      fs.writeFileSync(filePath, args.content, "utf-8");
+    }
     const lineCount = args.content.split("\n").length;
 
     // Diagnostic — log every write so we can correlate with validator failures
     const hasOpenWS = /AF\.openWS\s*\(/.test(args.content);
-    console.log(`[WriteFileTool] wrote ${args.path} → ${lineCount} lines, ${Buffer.byteLength(args.content, "utf-8")} bytes, contains AF.openWS=${hasOpenWS}, fullPath=${filePath}`);
+    const mode = append ? "appended" : "wrote";
+    console.log(`[WriteFileTool] ${mode} ${args.path} → ${lineCount} lines, ${Buffer.byteLength(args.content, "utf-8")} bytes, contains AF.openWS=${hasOpenWS}, fullPath=${filePath}`);
     ctx.wroteFiles = true;
-    await ctx.progress({ action: "✏️ Writing", detail: args.path, percent: ctx.currentPercent });
+    await ctx.progress({ action: append ? "➕ Appending" : "✏️ Writing", detail: args.path, percent: ctx.currentPercent });
 
-    // Early-warning: if writing frontend/app.js and the plan has WS but the file lacks AF.openWS
-    const normalizedWritePath = args.path.replace(/\\/g, "/").replace(/^\/+/, "");
-    const planHasWs = Array.isArray(ctx.technicalPlan?.wsMessages) && ctx.technicalPlan.wsMessages.length > 0;
-    if (normalizedWritePath === "frontend/app.js" && planHasWs) {
-      const hasWsCall = /AF\.openWS\s*\(|new\s+WebSocket\s*\(/.test(args.content);
-      if (!hasWsCall) {
-        return `OK: Written ${lineCount} lines to ${args.path}. ` +
-          `WARNING: Your technical plan includes WebSocket messages, but this app.js does not contain AF.openWS(). ` +
-          `deploy_to_dev WILL FAIL with a validator error. ` +
-          `You MUST add WebSocket connection code before deploying. ` +
-          `Add a connectWS() function that calls: ws = AF.openWS({ onOpen: () => { ws.send(JSON.stringify({type:'auth',initData:AF.tg.initData||''})); }, onMessage: (data) => { handleWSMessage(data); }, onClose: () => { setTimeout(connectWS, 3000); } });`;
+    // Early-warning only fires on full overwrites — for append calls we don't
+    // know what the rest of the file looks like yet (AF.openWS may live in a
+    // later chunk), so the WS check would false-positive on the first chunk.
+    if (!append) {
+      const normalizedWritePath = args.path.replace(/\\/g, "/").replace(/^\/+/, "");
+      const planHasWs = Array.isArray(ctx.technicalPlan?.wsMessages) && ctx.technicalPlan.wsMessages.length > 0;
+      if (normalizedWritePath === "frontend/app.js" && planHasWs) {
+        const hasWsCall = /AF\.openWS\s*\(|new\s+WebSocket\s*\(/.test(args.content);
+        if (!hasWsCall) {
+          return `OK: Written ${lineCount} lines to ${args.path}. ` +
+            `WARNING: Your technical plan includes WebSocket messages, but this app.js does not contain AF.openWS(). ` +
+            `deploy_to_dev WILL FAIL with a validator error. ` +
+            `You MUST add WebSocket connection code before deploying. ` +
+            `Add a connectWS() function that calls: ws = AF.openWS({ onOpen: () => { ws.send(JSON.stringify({type:'auth',initData:AF.tg.initData||''})); }, onMessage: (data) => { handleWSMessage(data); }, onClose: () => { setTimeout(connectWS, 3000); } });`;
+        }
       }
     }
 
-    return `OK: Written ${lineCount} lines to ${args.path}`;
+    const verb = append ? "Appended" : "Written";
+    return `OK: ${verb} ${lineCount} lines to ${args.path}`;
   }
 
   getStepMeta(args: Record<string, any>): Record<string, any> {

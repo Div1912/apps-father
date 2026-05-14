@@ -604,7 +604,9 @@ export function createWebServer() {
   // Performance-tier endpoint removed — tiers are replaced by Agent Session Configuration.
 
   // ── Project .env variables editor ──
-  const _PROJECTS_DIR_ENV = path.join(process.cwd(), "projects");
+  const _PROJECTS_DIR_ENV = config.isWorkerRuntime
+    ? config.runnerProjectsRoot
+    : path.join(process.cwd(), "projects");
 
   app.get("/telegram-mini-app/api/project-env/:projectId", async (req, res) => {
     try {
@@ -2843,7 +2845,12 @@ export function createWebServer() {
           const errMsg = chatService.addMessage(projectId, {
             role: "assistant", type: "error",
             content: `${t(lang, "sys_update_failed")}: ${err?.message || "Unknown error"}`,
-            metadata: refunded > 0 ? { refunded: true, creditsRefunded: refunded, retry: { kind: "execute-proposal", proposalId } } : undefined,
+            metadata: {
+              // Tells the client to merge the failure card into the proposal bubble,
+              // matching the visual flow used for the completion card on success.
+              sourceProposalId: proposalId,
+              ...(refunded > 0 ? { refunded: true, creditsRefunded: refunded, retry: { kind: "execute-proposal", proposalId } } : {}),
+            },
           });
           broadcastToProject(projectId, { type: "message", message: errMsg });
           broadcastToProject(projectId, { type: "status", projectId, status: "error", messageId: errMsg.id });
@@ -4059,11 +4066,31 @@ Rules:
     }
   });
 
-  // ── Real TON price (CoinGecko, 60 s cache) ──────────────────────────────
-  let _tonPriceCache: { usd: number; fetchedAt: number } = { usd: 5.50, fetchedAt: 0 };
+  // ── Real TON price (multi-source, 60 s cache) ───────────────────────────
+  // fetchedAt: 0 means "never fetched" — initial usd is only used if ALL
+  // sources fail on the very first call. Set to a sane recent default.
+  let _tonPriceCache: { usd: number; fetchedAt: number } = { usd: 3.20, fetchedAt: 0 };
   async function getTonPriceUsd(): Promise<number> {
     const now = Date.now();
     if (now - _tonPriceCache.fetchedAt < 60_000) return _tonPriceCache.usd;
+
+    // Source 1: tonapi.io — official TON ecosystem API, no key needed
+    try {
+      const r = await fetch("https://tonapi.io/v2/rates?tokens=ton&currencies=usd", {
+        headers: { "Accept": "application/json" },
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (r.ok) {
+        const d = await r.json() as any;
+        const usd = d?.rates?.TON?.prices?.USD;
+        if (typeof usd === "number" && usd > 0) {
+          _tonPriceCache = { usd, fetchedAt: now };
+          return usd;
+        }
+      }
+    } catch { /* try next source */ }
+
+    // Source 2: CoinGecko free (often rate-limited but worth trying)
     try {
       const r = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd", {
         headers: { "Accept": "application/json" },
@@ -4072,9 +4099,15 @@ Rules:
       if (r.ok) {
         const d = await r.json() as any;
         const usd = d?.["the-open-network"]?.usd;
-        if (typeof usd === "number" && usd > 0) _tonPriceCache = { usd, fetchedAt: now };
+        if (typeof usd === "number" && usd > 0) {
+          _tonPriceCache = { usd, fetchedAt: now };
+          return usd;
+        }
       }
     } catch { /* keep cached */ }
+
+    // All sources failed — return last known good value without updating fetchedAt
+    // so we retry on the next request instead of waiting another 60 s.
     return _tonPriceCache.usd;
   }
 
