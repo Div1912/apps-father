@@ -1923,15 +1923,26 @@ async function _wal2FetchPortfolio() {
   } catch { return []; }
 }
 
-// Live TON/USD rate — fetched on wallet open, falls back to last known value.
-let WAL2_TON_USD = 5.50;
+// Live TON/USD rate — fetched on wallet open. Initial value is only used
+// during the (very brief) window between page load and the first fetch
+// resolving; the real rate comes from the backend's multi-source resolver.
+let WAL2_TON_USD = 2.50;
 async function _wal2FetchTonPrice() {
   try {
     const r = await fetch(`${API_BASE}/wallet/ton-price`);
-    if (!r.ok) return;
+    if (!r.ok) {
+      console.warn('[wal2] ton-price endpoint returned', r.status);
+      return;
+    }
     const d = await r.json();
-    if (d.usd && d.usd > 0) WAL2_TON_USD = d.usd;
-  } catch {}
+    if (d.usd && d.usd > 0) {
+      WAL2_TON_USD = d.usd;
+    } else {
+      console.warn('[wal2] ton-price endpoint returned bad shape', d);
+    }
+  } catch (err) {
+    console.warn('[wal2] ton-price fetch failed', err);
+  }
 }
 
 // ── Top-up modal ────────────────────────────────────────────────────────────

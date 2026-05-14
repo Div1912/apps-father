@@ -5,16 +5,16 @@
     "runner_recreate":  false,
     "agent_knowledge":  false,
     "migrations":  false,
-    "build":  false,
-    "mini_app":  false,
-    "landing":  false,
-    "dist":  false,
+    "build":  true,
+    "mini_app":  true,
+    "landing":  true,
+    "dist":  true,
     "runner":  false,
-    "env":  true,
+    "env":  false,
     "runner_image":  false,
     "runner_install":  false,
     "deps":  false,
     "playwright":  false,
     "env_idx":  1,
-    "admin":  false
+    "admin":  true
 }

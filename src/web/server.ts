@@ -2,6 +2,7 @@ import http from "http";
 import express from "express";
 import path from "path";
 import fs from "fs";
+import os from "os";
 import crypto from "crypto";
 import multer from "multer";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
@@ -4066,48 +4067,96 @@ Rules:
     }
   });
 
-  // ── Real TON price (multi-source, 60 s cache) ───────────────────────────
+  // ── Real TON price (multi-source, 60 s cache, persisted to disk) ────────
   // fetchedAt: 0 means "never fetched" — initial usd is only used if ALL
-  // sources fail on the very first call. Set to a sane recent default.
-  let _tonPriceCache: { usd: number; fetchedAt: number } = { usd: 3.20, fetchedAt: 0 };
+  // sources fail on the very first call AND no persisted value exists.
+  const TON_PRICE_CACHE_FILE = path.join(os.tmpdir(), "apps-father-ton-price.json");
+  let _tonPriceCache: { usd: number; fetchedAt: number } = { usd: 2.50, fetchedAt: 0 };
+
+  // Hydrate from disk so PM2 restarts don't reset to the hardcoded fallback.
+  try {
+    if (fs.existsSync(TON_PRICE_CACHE_FILE)) {
+      const persisted = JSON.parse(fs.readFileSync(TON_PRICE_CACHE_FILE, "utf8"));
+      if (typeof persisted?.usd === "number" && persisted.usd > 0) {
+        _tonPriceCache = { usd: persisted.usd, fetchedAt: 0 }; // refetch on next call
+      }
+    }
+  } catch { /* first run, file missing or corrupt */ }
+
+  function persistTonPrice(usd: number): void {
+    try {
+      fs.writeFileSync(TON_PRICE_CACHE_FILE, JSON.stringify({ usd, ts: Date.now() }));
+    } catch (err) {
+      console.warn("[TonPrice] failed to persist cache:", (err as Error).message);
+    }
+  }
+
+  async function fetchTonPriceFromSource(
+    name: string,
+    url: string,
+    pick: (d: any) => unknown,
+  ): Promise<number | null> {
+    try {
+      const r = await fetch(url, {
+        headers: { "Accept": "application/json", "User-Agent": "AppsFather/1.0" },
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!r.ok) {
+        console.warn(`[TonPrice] ${name} returned HTTP ${r.status}`);
+        return null;
+      }
+      const d = await r.json();
+      const raw = pick(d);
+      const usd = typeof raw === "string" ? parseFloat(raw) : (raw as number);
+      if (typeof usd === "number" && isFinite(usd) && usd > 0) {
+        return usd;
+      }
+      console.warn(`[TonPrice] ${name} returned unexpected shape`);
+      return null;
+    } catch (err) {
+      console.warn(`[TonPrice] ${name} failed:`, (err as Error).message);
+      return null;
+    }
+  }
+
   async function getTonPriceUsd(): Promise<number> {
     const now = Date.now();
     if (now - _tonPriceCache.fetchedAt < 60_000) return _tonPriceCache.usd;
 
-    // Source 1: tonapi.io — official TON ecosystem API, no key needed
-    try {
-      const r = await fetch("https://tonapi.io/v2/rates?tokens=ton&currencies=usd", {
-        headers: { "Accept": "application/json" },
-        signal: AbortSignal.timeout(5_000),
-      });
-      if (r.ok) {
-        const d = await r.json() as any;
-        const usd = d?.rates?.TON?.prices?.USD;
-        if (typeof usd === "number" && usd > 0) {
-          _tonPriceCache = { usd, fetchedAt: now };
-          return usd;
-        }
-      }
-    } catch { /* try next source */ }
+    // Source 1: Binance — the most reliable public crypto API, no auth needed
+    let usd = await fetchTonPriceFromSource(
+      "binance",
+      "https://api.binance.com/api/v3/ticker/price?symbol=TONUSDT",
+      (d) => d?.price,
+    );
 
-    // Source 2: CoinGecko free (often rate-limited but worth trying)
-    try {
-      const r = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd", {
-        headers: { "Accept": "application/json" },
-        signal: AbortSignal.timeout(5_000),
-      });
-      if (r.ok) {
-        const d = await r.json() as any;
-        const usd = d?.["the-open-network"]?.usd;
-        if (typeof usd === "number" && usd > 0) {
-          _tonPriceCache = { usd, fetchedAt: now };
-          return usd;
-        }
-      }
-    } catch { /* keep cached */ }
+    // Source 2: tonapi.io — official TON ecosystem API
+    if (usd == null) {
+      usd = await fetchTonPriceFromSource(
+        "tonapi",
+        "https://tonapi.io/v2/rates?tokens=ton&currencies=usd",
+        (d) => d?.rates?.TON?.prices?.USD,
+      );
+    }
 
-    // All sources failed — return last known good value without updating fetchedAt
-    // so we retry on the next request instead of waiting another 60 s.
+    // Source 3: CoinGecko free (often rate-limited but worth trying)
+    if (usd == null) {
+      usd = await fetchTonPriceFromSource(
+        "coingecko",
+        "https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd",
+        (d) => d?.["the-open-network"]?.usd,
+      );
+    }
+
+    if (usd != null) {
+      _tonPriceCache = { usd, fetchedAt: now };
+      persistTonPrice(usd);
+      return usd;
+    }
+
+    // All sources failed — keep the last known good value but don't update
+    // fetchedAt so we retry on the next request instead of waiting 60 s.
+    console.warn(`[TonPrice] all sources failed, returning cached $${_tonPriceCache.usd}`);
     return _tonPriceCache.usd;
   }
 

@@ -1,5 +1,55 @@
 [
   {
+    "version": "4.1.0",
+    "date": "2026-05-14",
+    "title": "Security Update",
+    "image": "assets/updates/6.png",
+    "sections": [
+      {
+        "label": "Project Isolation",
+        "items": [
+          "Every user app now runs in its own isolated container — no project can see another's data or code",
+          "Network isolation — containers cannot reach internal platform services; inter-container communication is disabled at the bridge level",
+          "Read-only container filesystem — user code can only write to its designated project workspace",
+          "Process isolation — each container has a hard cap on the number of processes it can spawn, preventing fork bomb attacks",
+          "Localhost-only container ports — worker containers are never directly reachable from the internet"
+        ]
+      },
+      {
+        "label": "Identity & Access",
+        "items": [
+          "Telegram identity verification — all Mini App requests are verified with HMAC-SHA256 using constant-time comparison to prevent timing attacks",
+          "Verified identity forwarding — the raw Telegram initData is stripped and replaced with the verified user identity before requests reach your app's container",
+          "Shell tool restrictions — the AI agent's shell runs as an unprivileged user inside the container; raw package manager commands are blocked"
+        ]
+      },
+      {
+        "label": "Encryption & Secrets",
+        "items": [
+          "Encrypted credentials at rest — bot tokens and sensitive project credentials are stored AES-encrypted in the database and decrypted only at container startup",
+          "Platform secret isolation — infrastructure credentials (database, API keys, etc.) are never passed into user containers",
+          "Environment cleanup — all platform-level secrets are deleted from the process environment and frozen before your routes.js code loads",
+          "Encryption key rotation — built-in migration to re-encrypt all stored credentials with a new key without downtime"
+        ]
+      },
+      {
+        "label": "Supply Chain",
+        "items": [
+          "npm package allowlist — only pre-approved packages can be installed in project containers",
+          "Postinstall scripts are always blocked to prevent supply-chain attacks"
+        ]
+      },
+      {
+        "label": "New Controls",
+        "items": [
+          "Server Control per app — start, stop, restart, and toggle maintenance mode for each of your apps individually",
+          "Revoke Bot Token — instantly invalidate and rotate your Telegram bot token from the project settings if it's ever compromised",
+          "Platform service mode — operators can take the platform offline for all non-admin users instantly while admin access remains fully functional"
+        ]
+      }
+    ]
+  },
+  {
     "version": "4.0.0",
     "date": "2026-05-10",
     "title": "Agent v4",

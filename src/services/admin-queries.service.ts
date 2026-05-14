@@ -595,35 +595,72 @@ interface TimeseriesParams {
 }
 
 /** Generate dense buckets so charts always have a continuous x-axis even
- *  when no events occurred in a given period. */
+ *  when no events occurred in a given period.
+ *  All arithmetic uses UTC methods to match PostgreSQL date_trunc output,
+ *  which always returns UTC-midnight timestamps regardless of server locale. */
 function denseBuckets(from: Date, to: Date, interval: TimeseriesInterval): Date[] {
   const buckets: Date[] = [];
   const cur = new Date(from);
-  // Snap `cur` to the start of the interval to match SQL date_trunc output.
-  if (interval === "hour")  cur.setMinutes(0, 0, 0);
-  else if (interval === "day")   cur.setHours(0, 0, 0, 0);
-  else if (interval === "week") {
-    cur.setHours(0, 0, 0, 0);
-    const dow = (cur.getDay() + 6) % 7; // Monday=0
-    cur.setDate(cur.getDate() - dow);
+  // Snap `cur` to the start of the interval using UTC to match date_trunc.
+  if (interval === "hour") {
+    cur.setUTCMinutes(0, 0, 0);
+  } else if (interval === "day") {
+    cur.setUTCHours(0, 0, 0, 0);
+  } else if (interval === "week") {
+    cur.setUTCHours(0, 0, 0, 0);
+    const dow = (cur.getUTCDay() + 6) % 7; // Monday=0
+    cur.setUTCDate(cur.getUTCDate() - dow);
   } else if (interval === "month") {
-    cur.setHours(0, 0, 0, 0);
-    cur.setDate(1);
+    cur.setUTCHours(0, 0, 0, 0);
+    cur.setUTCDate(1);
   }
   while (cur < to) {
     buckets.push(new Date(cur));
-    if (interval === "hour")  cur.setHours(cur.getHours() + 1);
-    else if (interval === "day")   cur.setDate(cur.getDate() + 1);
-    else if (interval === "week")  cur.setDate(cur.getDate() + 7);
-    else if (interval === "month") cur.setMonth(cur.getMonth() + 1);
+    if (interval === "hour")       cur.setUTCHours(cur.getUTCHours() + 1);
+    else if (interval === "day")   cur.setUTCDate(cur.getUTCDate() + 1);
+    else if (interval === "week")  cur.setUTCDate(cur.getUTCDate() + 7);
+    else if (interval === "month") cur.setUTCMonth(cur.getUTCMonth() + 1);
   }
   return buckets;
+}
+
+/** For "all time" (no from param), find the earliest relevant record so the
+ *  chart covers the full history rather than defaulting to the last 30 days. */
+async function resolveTimeseriesFrom(metric: TimeseriesMetric): Promise<Date> {
+  type MinRow = Array<{ min_date: Date | null }>;
+  const fallback = new Date(Date.now() - 365 * 86400_000);
+  try {
+    let sql: string;
+    switch (metric) {
+      case "new_users":
+      case "conversion":
+        sql = "SELECT MIN(created_at) AS min_date FROM users";
+        break;
+      case "paying_users":
+      case "revenue":
+        sql = "SELECT MIN(created_at) AS min_date FROM payments WHERE status = 'confirmed'";
+        break;
+      case "new_projects":
+        sql = "SELECT MIN(created_at) AS min_date FROM projects";
+        break;
+      case "service_costs":
+      case "dau":
+        sql = "SELECT MIN(created_at) AS min_date FROM usage_logs";
+        break;
+      default:
+        return fallback;
+    }
+    const [row] = await prisma.$queryRawUnsafe<MinRow>(sql);
+    return row?.min_date ? new Date(row.min_date) : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export async function getTimeseries(params: TimeseriesParams) {
   const metric   = params.metric;
   const interval = (params.interval || "day") as TimeseriesInterval;
-  const fromDate = params.from || new Date(Date.now() - 30 * 86400_000);
+  const fromDate = params.from ?? await resolveTimeseriesFrom(metric);
   const toDate   = params.to   || new Date();
 
   // SQL expressions per metric — all return rows of (bucket, value).
