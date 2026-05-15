@@ -1,14 +1,14 @@
 {
     "prisma":  false,
     "npm_allowlist":  false,
-    "restart":  true,
+    "restart":  false,
     "runner_recreate":  false,
     "agent_knowledge":  false,
     "migrations":  false,
-    "build":  true,
-    "mini_app":  true,
+    "build":  false,
+    "mini_app":  false,
     "landing":  true,
-    "dist":  true,
+    "dist":  false,
     "runner":  false,
     "env":  false,
     "runner_image":  false,
@@ -16,5 +16,5 @@
     "deps":  false,
     "playwright":  false,
     "env_idx":  1,
-    "admin":  true
+    "admin":  false
 }
