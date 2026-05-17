@@ -67,9 +67,16 @@ if (!PROJECT_ID || !PORT || !RUNNER_SECRET) {
 }
 
 // ── 2. Scrub secrets from process.env BEFORE loading user code ───────────────
-for (const k of ["RUNNER_SECRET", "AF_INTERNAL_SECRET", "BOT_TOKEN"]) {
+// RUNNER_SECRET and BOT_TOKEN are deleted entirely.
+// AF_INTERNAL_SECRET is replaced with "<hidden>" so legacy projects that
+// check for the key's existence (e.g. `if (process.env.AF_INTERNAL_SECRET)`)
+// still pass that check — but the real value is never exposed to user code.
+// Bucket uploads must go through INTERNAL_BASE_URL which injects the real
+// secret automatically via the worker-local proxy.
+for (const k of ["RUNNER_SECRET", "BOT_TOKEN"]) {
   delete process.env[k];
 }
+process.env.AF_INTERNAL_SECRET = "<hidden>";
 // Best-effort freeze; some user code may try to overwrite process.env in tests.
 // If freeze() fails (some Node builds), it's no big deal — keys are already deleted.
 try { Object.freeze(process.env); } catch {}

@@ -45,7 +45,7 @@ import { prisma } from "../db";
 import { runtimeConfig, LINK_BOT_FEE_CREDITS } from "../services/runtime-config.service";
 import { Decimal } from "@prisma/client/runtime/library";
 import { t, Lang } from "../bot/i18n";
-import { notifyProcessDone } from "../services/notify.service";
+import { notifyProcessDone, adsgramPostback } from "../services/notify.service";
 import { sendBotWelcome } from "../services/welcome.service";
 import { writeLedger } from "../services/ledger.service";
 import { sendTon } from "../services/wallet.service";
@@ -431,6 +431,7 @@ export function createWebServer() {
           telegram_id: auth.telegramId,
           backfilled: attributedNow && !isNew ? true : undefined,
         });
+        if (isNew) adsgramPostback(auth.telegramId!, 1);
       }
 
       if (isNew) {

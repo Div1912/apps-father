@@ -3,6 +3,8 @@
 
 const fs = require("fs");
 const path = require("path");
+const vm = require("vm");
+const Module = require("module");
 const dotenv = require("dotenv");
 const express = require("express");
 const { WebSocketServer } = require("ws");
@@ -79,6 +81,10 @@ function loadRuntime(opts) {
   envVars.BASE_URL = baseEnv.BASE_URL;
   envVars.PROJECT_ID = baseEnv.PROJECT_ID;
   envVars.INTERNAL_BASE_URL = baseEnv.INTERNAL_BASE_URL;
+  // Placeholder so legacy projects that check `if (env.AF_INTERNAL_SECRET)`
+  // pass the guard. The real secret is never exposed — bucket uploads must go
+  // through INTERNAL_BASE_URL which injects the real secret via the local proxy.
+  envVars.AF_INTERNAL_SECRET = "<hidden>";
 
   // Default state — replaced once routes.js loads cleanly.
   let loaded = false;
@@ -91,12 +97,35 @@ function loadRuntime(opts) {
     return wrap();
   }
 
-  // require(routesFile) — runs in worker process, so any throws are caught here.
-  // We deliberately do NOT clear require.cache: every reload restarts the
-  // whole worker, so cache cleanup is a non-issue.
+  // Load routes.js in an isolated VM context so each runtime (release /
+  // development) gets its own `global` object. This prevents shared singletons
+  // like `global._crashGame` from bleeding between runtimes.
+  //
+  // We seed the context with `{ ...global }` so every built-in (fetch,
+  // setTimeout, Buffer, TextEncoder, crypto, …) is available without
+  // enumerating them manually. Only `global` itself is replaced with a
+  // fresh empty object to provide the isolation we need.
   let mod;
   try {
-    mod = require(routesFile);
+    const sandboxRequire = Module.createRequire(routesFile);
+    const fakeModule = { exports: {} };
+    const ctx = vm.createContext({
+      ...global,
+      global: Object.create(null),   // isolated per-runtime global
+      require: sandboxRequire,
+      module: fakeModule,
+      exports: fakeModule.exports,
+      __filename: routesFile,
+      __dirname: path.dirname(routesFile),
+    });
+    const src = fs.readFileSync(routesFile, "utf8");
+    // Wrap in a function so `return` works at top level (common pattern).
+    vm.runInContext(
+      `(function(module, exports, require, __filename, __dirname) {\n${src}\n})(module, module.exports, require, __filename, __dirname)`,
+      ctx,
+      { filename: routesFile }
+    );
+    mod = fakeModule.exports;
   } catch (err) {
     error = `require_failed: ${err && err.message}`;
     console.error(`[worker:${kind}] require(routes.js) failed:`, err && err.stack || err);

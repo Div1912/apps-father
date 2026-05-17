@@ -213,6 +213,29 @@ export function notifyDeposit(
   })();
 }
 
+// ── Adsgram conversion postbacks ─────────────────────────────────────────────
+const ADSGRAM_TOKEN = "7e5e9e0276d447d8a3384f0fceb6aeb2";
+const ADSGRAM_BASE  = "https://api.adsgram.ai/confirm_conversion";
+
+/**
+ * Send an Adsgram conversion postback (fire-and-forget).
+ *
+ * goalType:
+ *   1 — new registered (once per user)
+ *   2 — first payment
+ *   3 — repeated payment (every payment after the first)
+ */
+export function adsgramPostback(telegramId: number | bigint, goalType: 1 | 2 | 3): void {
+  const tgid = String(telegramId);
+  const url = `${ADSGRAM_BASE}?token=${ADSGRAM_TOKEN}&tgid=${tgid}&goaltype=${goalType}`;
+  fetch(url, { signal: AbortSignal.timeout(8_000) })
+    .then((r) => {
+      if (!r.ok) console.warn(`[Adsgram] postback goal=${goalType} tgid=${tgid} → HTTP ${r.status}`);
+      else console.log(`[Adsgram] postback goal=${goalType} tgid=${tgid} → ok`);
+    })
+    .catch((err) => console.warn(`[Adsgram] postback goal=${goalType} tgid=${tgid} failed:`, (err as Error).message));
+}
+
 export function notifyProcessDone(
   telegramId: number,
   appName: string,

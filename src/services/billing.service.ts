@@ -7,7 +7,7 @@ import { Cell } from "@ton/core";
 import { runtimeConfig } from "./runtime-config.service";
 import type { AgentSessionType, AgentComplexity } from "./runtime-config.service";
 import { getModelPricing } from "./openrouter.service";
-import { notifyDeposit, notifyReferralBonus } from "./notify.service";
+import { notifyDeposit, notifyReferralBonus, adsgramPostback } from "./notify.service";
 import { trackEvent } from "./analytics.service";
 
 export interface TokenUsage {
@@ -696,6 +696,7 @@ export class BillingService {
 
       notifyDeposit(Number(user.telegramId), user.username ?? undefined, amountUsd, creditsToGrant, bonus, isFirstPurchase, "ton", bundleName, await this.getUserCredits(user.id));
       void trackEvent(Number(user.telegramId), "payment", { amount: amountUsd, method: "ton" });
+      adsgramPostback(user.telegramId, isFirstPurchase ? 2 : 3);
 
       await this.creditReferralBonus(user, amountUsd, creditsToGrant);
     }
@@ -761,6 +762,7 @@ export class BillingService {
 
       notifyDeposit(Number(user.telegramId), user.username ?? undefined, amountUsd, creditsToGrant, bonus, isFirstPurchase, "stars", bundleName, await this.getUserCredits(user.id));
       void trackEvent(Number(user.telegramId), "payment", { amount: amountUsd, method: "stars" });
+      adsgramPostback(user.telegramId, isFirstPurchase ? 2 : 3);
 
       await this.creditReferralBonus(user, amountUsd, creditsToGrant);
     }
@@ -861,6 +863,7 @@ export class BillingService {
 
           notifyDeposit(Number(user.telegramId), user.username ?? undefined, amountUsd, creditsToGrant, bonus, isFirstPurchase, "crypto", bundleName, await this.getUserCredits(user.id));
           void trackEvent(Number(user.telegramId), "payment", { amount: amountUsd, method: "crypto" });
+          adsgramPostback(user.telegramId, isFirstPurchase ? 2 : 3);
 
           await this.creditReferralBonus(user, amountUsd, creditsToGrant);
         }
