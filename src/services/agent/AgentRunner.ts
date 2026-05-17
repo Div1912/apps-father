@@ -120,6 +120,22 @@ export class AgentRunner {
     let iterations = 0;
 
     while (iterations < maxIterations) {
+      // ── Budget guardrail (Layer 3) ──────────────────────────────────────────────────
+      const budgetAction = this._checkBudgetGuardrail(ctx, iterations);
+      if (budgetAction === "abort") {
+        ctx.summary = ctx.summary || "Build stopped: credit budget exhausted. Your partial work has been saved.";
+        console.warn(`[Agent] 💰 Budget abort at iter ${iterations} | cost=$${ctx.liveCostUsd.toFixed(4)} budget=$${ctx.creditBudgetUsd.toFixed(4)}`);
+        ctx.writeDetailedLog("budget_abort");
+        break;
+      }
+      if (budgetAction === "downgrade") {
+        this._tryDowngrade(ctx, iterations);
+      }
+
+      // ── Mid-run escalation check (Layer 2) ───────────────────────────────────────
+      if (iterations > 0) {
+        this._checkEscalation(ctx, iterations);
+      }
       // ── Abort check ───────────────────────────────────────────────────────
       if (abortedProjects.has(ctx.projectId)) {
         abortedProjects.delete(ctx.projectId);
@@ -407,6 +423,11 @@ The first call overwrites; every subsequent call with append:true extends the fi
           console.error(`[Agent] ❌ Tool ${name} error:`, err.message);
         }
 
+        // Track tool errors for escalation signal
+        if (result.startsWith("Error")) {
+          ctx.toolErrorCount++;
+        }
+
         ctx.logger.toolResult(name, result);
         console.log(`[Agent] 📥 ${name}(${argsSummary}) -> ${result.substring(0, 200).replace(/\n/g, "\\n")}${result.length > 200 ? "..." : ""}`);
         toolResults.push({ role: "tool", tool_call_id: id, content: result });
@@ -447,7 +468,108 @@ The first call overwrites; every subsequent call with append:true extends the fi
     return null as unknown as AgentResult;
   }
 
-  // ── Private helpers ───────────────────────────────────────────────────────
+  // ── Private helpers ───────────────────────────────────────────────────────────
+
+  /**
+   * Layer 2: Mid-run escalation.
+   * Checks quality signals every N iterations and upgrades the model when the
+   * agent appears stuck. The upgrade is in-place — ctx.tierConfig.modelId is
+   * mutated so the next API call picks up the new model automatically.
+   */
+  private _checkEscalation(ctx: any, iteration: number): void {
+    const cfg = ctx.escalationConfig;
+    if (!cfg) return;
+
+    const checkEvery = cfg.checkEveryNIterations ?? 5;
+    if (iteration % checkEvery !== 0) return;
+
+    const ladder: string[] = cfg.modelLadder ?? [];
+    const currentModel: string = ctx.tierConfig.modelId;
+    const currentIdx = ladder.indexOf(currentModel);
+    if (currentIdx < 0 || currentIdx >= ladder.length - 1) return; // already at top or not in ladder
+
+    // Collect all triggered reasons
+    const reasons: string[] = [];
+
+    const noWriteThreshold = cfg.noWriteThreshold ?? 3;
+    if (ctx.consecutiveNoWrite >= noWriteThreshold) {
+      reasons.push(`no_write_${ctx.consecutiveNoWrite}`);
+    }
+
+    const toolErrorThreshold = cfg.toolErrorThreshold ?? 6;
+    if (ctx.toolErrorCount >= toolErrorThreshold) {
+      reasons.push(`tool_errors_${ctx.toolErrorCount}`);
+    }
+
+    const validationFailThreshold = cfg.validationFailThreshold ?? 3;
+    if (ctx.consecutiveValidationFails >= validationFailThreshold) {
+      reasons.push(`validation_fails_${ctx.consecutiveValidationFails}`);
+    }
+
+    if (reasons.length === 0) return;
+
+    const nextModel = ladder[currentIdx + 1];
+    ctx.tierConfig.modelId = nextModel;
+
+    const entry = { iteration, fromModel: currentModel, toModel: nextModel, reason: reasons.join(",") };
+    ctx.escalationHistory.push(entry);
+    // Reset error counters after escalation so the next tier gets a clean slate
+    ctx.toolErrorCount = 0;
+    ctx.consecutiveValidationFails = 0;
+    ctx.consecutiveNoWrite = 0;
+
+    console.log(
+      `[Agent] 📈 ESCALATED iter=${iteration} ${currentModel} → ${nextModel} | reasons: ${reasons.join(", ")}`,
+    );
+    // Best-effort: narrate the escalation to the user via the existing progress event
+    void ctx.progress({ event: undefined, action: `⚡ Switching to more powerful AI model`, detail: "", percent: ctx.currentPercent }).catch(() => {});
+  }
+
+  /**
+   * Layer 3: Budget guardrail.
+   * Returns:
+   *   "ok"        — within budget, continue normally
+   *   "downgrade" — approaching limit, downgrade model if possible
+   *   "abort"     — budget exhausted, stop the run
+   */
+  private _checkBudgetGuardrail(ctx: any, iteration: number): "ok" | "downgrade" | "abort" {
+    const budgetUsd = ctx.creditBudgetUsd as number;
+    if (!budgetUsd || budgetUsd <= 0) return "ok"; // 0 = unlimited
+    if (iteration === 0) return "ok"; // no cost yet on first iter
+
+    const cfg = ctx.escalationConfig;
+    const warnFraction = cfg?.budgetWarnFraction ?? 0.80;
+    const abortFraction = cfg?.budgetAbortFraction ?? 1.00;
+
+    const spent = ctx.liveCostUsd as number;
+    const fraction = spent / budgetUsd;
+
+    if (fraction >= abortFraction) return "abort";
+    if (fraction >= warnFraction) return "downgrade";
+    return "ok";
+  }
+
+  /**
+   * Attempt to downgrade the model by one tier (budget warn path).
+   * Silently skips if already at the bottom of the ladder.
+   */
+  private _tryDowngrade(ctx: any, iteration: number): void {
+    const cfg = ctx.escalationConfig;
+    if (!cfg) return;
+    const ladder: string[] = cfg.modelLadder ?? [];
+    const currentModel: string = ctx.tierConfig.modelId;
+    const currentIdx = ladder.indexOf(currentModel);
+    if (currentIdx <= 0) return; // already at cheapest
+
+    const prevModel = ladder[currentIdx - 1];
+    ctx.tierConfig.modelId = prevModel;
+
+    const entry = { iteration, fromModel: currentModel, toModel: prevModel, reason: "budget_warn" };
+    ctx.escalationHistory.push(entry);
+    console.log(
+      `[Agent] 💸 DOWNGRADED iter=${iteration} ${currentModel} → ${prevModel} (budget at ${Math.round((ctx.liveCostUsd / ctx.creditBudgetUsd) * 100)}%)`,
+    );
+  }
 
   private _getProviderRouting(modelId: string, provider?: string): any | undefined {
     const sel = provider?.trim();

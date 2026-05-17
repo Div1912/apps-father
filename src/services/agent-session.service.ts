@@ -16,7 +16,7 @@ import OpenAI from "openai";
 
 import { prisma } from "../db";
 import { projectService } from "./project.service";
-import { runtimeConfig, type AgentComplexity } from "./runtime-config.service";
+import { runtimeConfig, type AgentComplexity, type AgentTaskType } from "./runtime-config.service";
 import { commitService } from "./commit.service";
 import { runWithProject } from "./console-tagger.service";
 import { decryptToken } from "./crypto.service";
@@ -90,6 +90,8 @@ export interface SessionExtras {
   complexity?: AgentComplexity | string | null;
   /** Explicit session kind — lets callers like bug-fix override the default build/update config. */
   sessionKind?: "build" | "update" | "bug-fix" | "update-plan";
+  /** Task-type classification from the router. Drives starting model selection. */
+  taskType?: AgentTaskType | null;
 }
 
 /**
@@ -503,8 +505,15 @@ class AgentSessionService {
     const sessionCfg = runtimeConfig.getEffectiveSessionConfig(sessionType, isMaxMode);
     const creditsCharged = extras.creditsCharged;
     const complexity = (typeof extras.complexity === "string" && extras.complexity) || null;
+    const taskType = extras.taskType ?? null;
 
-    console.log(`[Agent] task_id=${taskId} user=${agentTelegramId ?? "?"} (mode=${mode}${isMaxMode ? " · MAX" : ""}, ${systemPrompt.length} chars)`);
+    // ── Dynamic starting model (Layer 1: Task-Type Routing) ─────────────────
+    // Pick the cheapest model that can handle this task type. Falls back to
+    // the session default when taskType is absent or has no override.
+    const startingModel = runtimeConfig.resolveStartingModel(sessionType, isMaxMode, taskType);
+    const escalationCfg = runtimeConfig.getEscalationConfig();
+
+    console.log(`[Agent] task_id=${taskId} user=${agentTelegramId ?? "?"} (mode=${mode}${isMaxMode ? " · MAX" : ""}${taskType ? ` · ${taskType}` : ""}, startModel=${startingModel}, ${systemPrompt.length} chars)`);
     projectService.updateProjectLastTaskId(projectId, taskId).catch(() => {});
 
     const projectRootDir = path.join(PROJECTS_DIR, projectId);
@@ -522,7 +531,7 @@ class AgentSessionService {
     } catch {}
 
     const tierConfig = {
-      modelId: sessionCfg.model,
+      modelId: startingModel,          // ← dynamic starting model
       provider: sessionCfg.provider,
       maxTokens: sessionCfg.max_tokens,
       maxIterations: sessionCfg.iterations,
@@ -539,6 +548,14 @@ class AgentSessionService {
       cache_write: liveModelPricing ? (liveModelPricing.cacheWritePerToken || baseInputPrice * 1.25) : 0,
       cache_read: liveModelPricing ? (liveModelPricing.cacheReadPerToken || baseInputPrice * 0.1) : 0,
     };
+
+    // Credit budget in USD for the budget guardrail (Layer 3).
+    // creditsCharged is the server-authoritative figure; divide by creditsPerDollar
+    // to get the USD ceiling. 0 = unlimited (legacy callers without credits).
+    const creditsPerDollar = runtimeConfig.getCreditsPerDollar();
+    const creditBudgetUsd = creditsCharged && creditsCharged > 0 && creditsPerDollar > 0
+      ? creditsCharged / creditsPerDollar
+      : 0;
 
     // Build initial messages with optional vision attachments
     const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
@@ -586,6 +603,8 @@ class AgentSessionService {
       logger,
       onAskUser,
       rawProgress: onProgress || (async () => {}),
+      creditBudgetUsd,
+      escalationConfig: escalationCfg,
     }, userBalance);
     (ctx as any)._agentPricing = agentPricing;
     (ctx as any)._telegramId = agentTelegramId;
@@ -630,6 +649,9 @@ class AgentSessionService {
         complexity,
         isMaxMode,
       });
+      if (ctx.escalationHistory.length > 0) {
+        console.log(`[Agent] 📈 Escalation history for task ${taskId}:`, JSON.stringify(ctx.escalationHistory));
+      }
       return runnerResult;
     }
 

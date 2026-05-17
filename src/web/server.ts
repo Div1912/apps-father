@@ -2410,6 +2410,7 @@ export function createWebServer() {
             prefilledPrompt?: string;
             creditsCost: number;
             complexity?: string;
+            taskType?: string;
             maxModeMultiplier?: number;
             featureId?: string;
           }) {
@@ -2427,6 +2428,7 @@ export function createWebServer() {
                 prefilledPrompt: p.prefilledPrompt,
                 creditsCost: p.creditsCost,
                 complexity: p.complexity,
+                taskType: p.taskType,
                 maxModeMultiplier: p.maxModeMultiplier,
                 featureId: p.featureId,
                 // Carry attachments from the user's initial message into the proposal
@@ -2586,6 +2588,9 @@ export function createWebServer() {
       const proposalComplexity = typeof proposalMsg.metadata.complexity === "string"
         ? proposalMsg.metadata.complexity
         : undefined;
+      const proposalTaskType = typeof proposalMsg.metadata.taskType === "string"
+        ? proposalMsg.metadata.taskType
+        : undefined;
       // Find the user message that triggered this proposal (last user msg before proposal in history)
       const proposalIndex = history.findIndex(m => m.id === proposalId);
       const triggerMsg = proposalIndex > 0
@@ -2734,6 +2739,7 @@ export function createWebServer() {
             creditsCharged: preCharge.creditsCharged,
             maxMode,
             complexity: proposalComplexity,
+            taskType: (proposalTaskType as any) ?? null,
             sessionKind: (kind === "build" || kind === "update" || kind === "bug-fix" || kind === "update-plan") ? kind as "build" | "update" | "bug-fix" | "update-plan" : undefined,
           };
           if (kind === "build") {

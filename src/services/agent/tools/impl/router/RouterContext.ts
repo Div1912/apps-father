@@ -1,5 +1,5 @@
 import type { AskContext } from "../ask/AskContext";
-import type { AgentComplexity } from "../../../../runtime-config.service";
+import type { AgentComplexity, AgentTaskType } from "../../../../runtime-config.service";
 
 /**
  * The kind of action the proposal card asks the user to confirm.
@@ -54,6 +54,11 @@ export interface RouterChatHooks {
      * free kinds (answer / suggestions).
      */
     complexity?: ProposalComplexity;
+    /**
+     * Task-type classification from the router. Used server-side to select
+     * the cheapest starting model that can handle the work.
+     */
+    taskType?: AgentTaskType;
     /**
      * Markup applied to creditsCost when the user toggles MAX MODE on the
      * card. Frontend uses this to render the live "with-MAX" price; the

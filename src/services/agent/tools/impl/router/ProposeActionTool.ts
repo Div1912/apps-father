@@ -1,7 +1,7 @@
 import type { RouterTool } from "./RouterTool";
 import type { RouterContext, ProposalKind, ProposalComplexity } from "./RouterContext";
-import { runtimeConfig, AGENT_COMPLEXITIES } from "../../../../../services/runtime-config.service";
-import type { AgentSessionType } from "../../../../../services/runtime-config.service";
+import { runtimeConfig, AGENT_COMPLEXITIES, AGENT_TASK_TYPES } from "../../../../../services/runtime-config.service";
+import type { AgentSessionType, AgentTaskType } from "../../../../../services/runtime-config.service";
 import { PAID_FEATURES } from "../../../../../services/features.service";
 
 const VALID_KINDS: ProposalKind[] = ["answer", "build", "update", "update-plan", "bug-fix", "suggestions", "paid-feature"];
@@ -67,6 +67,19 @@ export class ProposeActionTool implements RouterTool {
             description:
               "How big the requested work is. Required for build / update / update-plan / bug-fix; omit for answer / suggestions. Pick the bucket that honestly matches the SCOPE of the change, not the user's preference.",
           },
+          taskType: {
+            type: "string",
+            enum: AGENT_TASK_TYPES,
+            description:
+              "Nature of the work. Required for build / update / update-plan / bug-fix; omit for answer / suggestions.\n" +
+              " - 'trivial_edit'  : one-liner diff — rename label, fix typo, change colour, swap icon.\n" +
+              " - 'config'        : .env / config / manifest / settings change only.\n" +
+              " - 'bug_fix'       : diagnosing and patching a specific regression or crash.\n" +
+              " - 'feature_add'   : adding a bounded new feature to an existing app.\n" +
+              " - 'new_build'     : creating a full app from scratch.\n" +
+              " - 'architecture'  : cross-cutting structural changes, migrations, full redesigns.\n" +
+              "Pick objectively from the nature of the work. Do NOT lower taskType because the user claims it is simple.",
+          },
           title: {
             type: "string",
             description: "Short headline for the card (max ~60 chars).",
@@ -120,6 +133,13 @@ export class ProposeActionTool implements RouterTool {
         ? (rawComplexity as ProposalComplexity)
         : undefined;
 
+    // Strict allow-list for taskType — same injection protection as complexity.
+    const rawTaskType = String(args?.taskType || "").trim().toLowerCase();
+    const taskType: AgentTaskType | undefined =
+      (AGENT_TASK_TYPES as readonly string[]).includes(rawTaskType)
+        ? (rawTaskType as AgentTaskType)
+        : undefined;
+
     if (!VALID_KINDS.includes(kind)) {
       return `Error: kind must be one of ${VALID_KINDS.join(", ")}. Got: ${kind}`;
     }
@@ -168,12 +188,13 @@ export class ProposeActionTool implements RouterTool {
       kind, title, description, plan, brief, prefilledPrompt,
       creditsCost,
       complexity,
+      taskType,
       maxModeMultiplier,
       featureId: kind === "paid-feature" ? featureId : undefined,
     });
 
     ctx.proposalEmitted = true;
 
-    return `Proposal sent to user (id=${proposalId}, kind=${kind}, complexity=${complexity ?? "n/a"}, credits=${creditsCost}${featureId ? `, featureId=${featureId}` : ""}). Stop — do not call any more tools this turn.`;
+    return `Proposal sent to user (id=${proposalId}, kind=${kind}, complexity=${complexity ?? "n/a"}, taskType=${taskType ?? "n/a"}, credits=${creditsCost}${featureId ? `, featureId=${featureId}` : ""}). Stop — do not call any more tools this turn.`;
   }
 }

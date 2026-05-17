@@ -3,6 +3,7 @@ import fs from "fs";
 import type { AgentLogger } from "../agent-logger";
 import type { AgentMode } from "./types";
 import type { AgentProgress, AgentResult, AgentStepKind } from "../agent.service";
+import type { EscalationConfig } from "../runtime-config.service";
 
 export interface RunContextParams {
   projectId: string;
@@ -18,6 +19,10 @@ export interface RunContextParams {
   logger: AgentLogger;
   onAskUser?: (question: string, options: string[]) => Promise<string>;
   rawProgress: (p: AgentProgress) => Promise<void>;
+  /** Credit budget in USD for this run. Used by budget guardrail. */
+  creditBudgetUsd?: number;
+  /** Escalation thresholds loaded from runtimeConfig at run start. */
+  escalationConfig?: EscalationConfig;
 }
 
 export class RunContext {
@@ -56,6 +61,18 @@ export class RunContext {
   shortSummary = "";
   contextDiff = "";
   consecutiveNoWrite = 0;
+
+  // ── Escalation tracking ──────────────────────────────────────────────────
+  /** Total tool-call errors accumulated this session. */
+  toolErrorCount = 0;
+  /** Consecutive validation failures (reset on any passing validation). */
+  consecutiveValidationFails = 0;
+  /** Credit budget for this run (USD). 0 = unlimited. */
+  readonly creditBudgetUsd: number;
+  /** Escalation thresholds (copied from runtimeConfig at run start). */
+  readonly escalationConfig: EscalationConfig | null;
+  /** Log of every model switch: { iteration, fromModel, toModel, reason } */
+  escalationHistory: Array<{ iteration: number; fromModel: string; toModel: string; reason: string }> = [];
 
   // ── Billing / cost ───────────────────────────────────────────────────────
   totalInputTokens = 0;
@@ -104,6 +121,8 @@ export class RunContext {
     this._rawProgress = params.rawProgress;
     this.technicalPlanSubmitted = params.mode === "update";
     this.startBalance = userBalance ?? 0;
+    this.creditBudgetUsd = params.creditBudgetUsd ?? 0;
+    this.escalationConfig = params.escalationConfig ?? null;
   }
 
   // ── Event emitters ───────────────────────────────────────────────────────
