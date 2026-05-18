@@ -35,6 +35,57 @@ export interface AgentSessionConfig {
 }
 
 /**
+ * Classifies the nature of the work the router chose.
+ * Used (alongside complexity) to pick the cheapest model that can realistically
+ * handle the task without escalation.
+ *   trivial_edit  → pure text / style changes (1-liner diffs)
+ *   config        → .env / config / manifest changes
+ *   bug_fix       → diagnosing and patching a specific regression
+ *   feature_add   → adding a bounded new feature to an existing codebase
+ *   new_build     → creating a full app from scratch
+ *   architecture  → cross-cutting structural changes, migrations, full redesigns
+ */
+export type AgentTaskType =
+  | "trivial_edit"
+  | "config"
+  | "bug_fix"
+  | "feature_add"
+  | "new_build"
+  | "architecture";
+
+export const AGENT_TASK_TYPES: AgentTaskType[] = [
+  "trivial_edit", "config", "bug_fix", "feature_add", "new_build", "architecture",
+];
+
+/**
+ * Defines when/how the agent escalates to a more powerful model mid-run.
+ * All fields are admin-tunable from runtime-config.json → agentEscalation.
+ */
+export interface EscalationConfig {
+  /** Models in ascending cost order. Agent starts at index 0 and climbs. */
+  modelLadder: string[];
+  /** Escalate after this many consecutive iterations with no file writes. */
+  noWriteThreshold: number;
+  /** Escalate after this many tool errors (start-of-run resets). */
+  toolErrorThreshold: number;
+  /** Escalate after this many repeated validation failures. */
+  validationFailThreshold: number;
+  /** Check escalation every N iterations. */
+  checkEveryNIterations: number;
+  /** When liveCostUsd exceeds (creditBudgetUsd * this), downgrade model. */
+  budgetWarnFraction: number;
+  /** When liveCostUsd exceeds (creditBudgetUsd * this), abort gracefully. */
+  budgetAbortFraction: number;
+}
+
+/**
+ * Per-taskType starting model overrides.
+ * Maps AgentTaskType → model string (OpenRouter model ID).
+ * Falls back to the session-type default when a key is absent.
+ */
+export type TaskTypeModelMap = Partial<Record<AgentTaskType, string>>;
+
+/**
  * Complexity bucket emitted by the router's `propose_action` tool.
  * The router classifies how big the requested change is; the bucket selects
  * the credit price for that session type.
@@ -156,6 +207,16 @@ export interface RuntimeConfig {
 
   agentSessions: Record<AgentSessionType, AgentSessionConfig>;
 
+  /**
+   * Per-task-type starting model overrides, keyed by session type.
+   * e.g. { build: { trivial_edit: "anthropic/claude-haiku-4-5" }, update: { ... } }
+   * Falls back to agentSessions[type].model when a task type is not listed.
+   */
+  taskTypeModels: Partial<Record<AgentSessionType, TaskTypeModelMap>>;
+
+  /** Mid-run escalation / budget-guardrail configuration. */
+  agentEscalation: EscalationConfig;
+
   // Complexity-bucketed credit price matrix. Router picks `complexity`,
   // pricing engine looks it up here.
   agentPricing: AgentComplexityPricing;
@@ -238,6 +299,63 @@ const DEFAULT_AGENT_SESSIONS: Record<AgentSessionType, AgentSessionConfig> = {
     thinking: 8000,
     iterations: 100,
   },
+};
+
+/**
+ * Default per-task-type starting model overrides.
+ *
+ * Strategy:
+ *  - trivial_edit / config → always Haiku (cheap enough, capable enough)
+ *  - bug_fix → Haiku for update; Sonnet for build (new app bugs are rare but complex)
+ *  - feature_add / new_build / architecture → Sonnet (default; escalates to Opus if needed)
+ *
+ * Admins can override any cell via runtime-config.json → taskTypeModels.
+ */
+const DEFAULT_TASK_TYPE_MODELS: Partial<Record<AgentSessionType, TaskTypeModelMap>> = {
+  update: {
+    trivial_edit:  "anthropic/claude-haiku-4-5",
+    config:        "anthropic/claude-haiku-4-5",
+    bug_fix:       "anthropic/claude-haiku-4-5",
+    feature_add:   "anthropic/claude-sonnet-4-5",
+    new_build:     "anthropic/claude-sonnet-4-5",
+    architecture:  "anthropic/claude-sonnet-4-5",
+  },
+  "bug-fix": {
+    trivial_edit:  "anthropic/claude-haiku-4-5",
+    config:        "anthropic/claude-haiku-4-5",
+    bug_fix:       "anthropic/claude-haiku-4-5",
+    feature_add:   "anthropic/claude-sonnet-4-5",
+    new_build:     "anthropic/claude-sonnet-4-5",
+    architecture:  "anthropic/claude-sonnet-4-5",
+  },
+  // build always goes Sonnet — new apps are complex by nature
+  build: {
+    trivial_edit:  "anthropic/claude-sonnet-4-5",
+    config:        "anthropic/claude-sonnet-4-5",
+    bug_fix:       "anthropic/claude-sonnet-4-5",
+    feature_add:   "anthropic/claude-sonnet-4-5",
+    new_build:     "anthropic/claude-sonnet-4-5",
+    architecture:  "anthropic/claude-sonnet-4-5",
+  },
+};
+
+/**
+ * Default escalation config.
+ * All values are admin-tunable from runtime-config.json → agentEscalation.
+ */
+const DEFAULT_ESCALATION: EscalationConfig = {
+  // Haiku → Sonnet → Opus
+  modelLadder: [
+    "anthropic/claude-haiku-4-5",
+    "anthropic/claude-sonnet-4-5",
+    "anthropic/claude-opus-4-5",
+  ],
+  noWriteThreshold: 3,         // 3 consecutive no-write iters → escalate
+  toolErrorThreshold: 6,       // 6 tool errors in session → escalate
+  validationFailThreshold: 3,  // 3 consecutive validation failures → escalate
+  checkEveryNIterations: 5,    // check every 5 iters
+  budgetWarnFraction: 0.80,    // at 80% budget → downgrade if possible
+  budgetAbortFraction: 1.00,   // at 100% budget → graceful abort
 };
 
 // Default credit prices. The medium column matches the previous flat rates so
@@ -345,6 +463,8 @@ const DEFAULTS: RuntimeConfig = {
   agentSessions: DEFAULT_AGENT_SESSIONS,
   agentPricing: DEFAULT_AGENT_PRICING,
   maxModeMultiplier: 3,
+  taskTypeModels: DEFAULT_TASK_TYPE_MODELS,
+  agentEscalation: DEFAULT_ESCALATION,
 
   appStore: {
     publishFeeTon: 0.5,
@@ -535,6 +655,36 @@ class RuntimeConfigService {
   getEffectiveSessionConfig(type: AgentSessionType, maxMode: boolean): AgentSessionConfig {
     if (maxMode) return this.getSessionConfig("max-mode");
     return this.getSessionConfig(type);
+  }
+
+  /**
+   * Resolve the starting model for a session, considering task type.
+   * Returns the cheapest model that can realistically handle `taskType`.
+   * Falls back to the session-type default when:
+   *   - maxMode is on (always use max-mode model)
+   *   - taskType is absent
+   *   - no override row exists for this session/task combination
+   */
+  resolveStartingModel(
+    type: AgentSessionType,
+    maxMode: boolean,
+    taskType?: AgentTaskType | null,
+  ): string {
+    if (maxMode) return this.getSessionConfig("max-mode").model;
+    const sessionDefault = this.getSessionConfig(type).model;
+    if (!taskType) return sessionDefault;
+    const overrideMap = this.config.taskTypeModels?.[type];
+    return overrideMap?.[taskType] ?? sessionDefault;
+  }
+
+  /** Returns the escalation config (thresholds, model ladder). */
+  getEscalationConfig(): EscalationConfig {
+    return { ...DEFAULT_ESCALATION, ...(this.config.agentEscalation || {}) };
+  }
+
+  /** Returns the per-session-type task-type model overrides map. */
+  getTaskTypeModels(): Partial<Record<AgentSessionType, TaskTypeModelMap>> {
+    return { ...this.config.taskTypeModels };
   }
 }
 

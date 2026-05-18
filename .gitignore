@@ -1,5 +1,24 @@
+
+# Dependencies
 node_modules/
 dist/
+
+# Environment / credentials — never commit these
 .env
+.env.*
+*.env
+dev.env
+secrets/
+
+# Project runtime data
 projects/
+data/runtime-config.json
+
+# Logs
 *.log
+logs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/settings.json
