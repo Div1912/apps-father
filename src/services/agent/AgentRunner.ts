@@ -119,6 +119,10 @@ export class AgentRunner {
     const maxIterations = tierConfig.maxIterations ?? 60;
     let iterations = 0;
 
+    // Log starting model
+    const shortInitial = tierConfig.modelId.split('/').pop() || tierConfig.modelId;
+    console.log(`[Model] 🎯 Starting model: ${shortInitial} | mode=${ctx.mode} | budget=$${ctx.creditBudgetUsd.toFixed(2)}`);
+
     while (iterations < maxIterations) {
       // ── Budget guardrail (Layer 3) ──────────────────────────────────────────────────
       const budgetAction = this._checkBudgetGuardrail(ctx, iterations);
@@ -136,6 +140,10 @@ export class AgentRunner {
       if (iterations > 0) {
         this._checkEscalation(ctx, iterations);
       }
+      // ── Auto-downgrade check (Layer 2b) ───────────────────────────────────────
+      if (iterations > 0 && ctx.isEscalated) {
+        this._checkAutoDowngrade(ctx, iterations);
+      }
       // ── Abort check ───────────────────────────────────────────────────────
       if (abortedProjects.has(ctx.projectId)) {
         abortedProjects.delete(ctx.projectId);
@@ -152,6 +160,7 @@ export class AgentRunner {
       }
 
       iterations++;
+      ctx.iterationToolNames = []; // reset tool tracking for this iteration
 
       // ── Build request payload ─────────────────────────────────────────────
       const thinkingBudget = tierConfig.thinkingBudget ?? 0;
@@ -313,10 +322,13 @@ export class AgentRunner {
       }
       if (assistantText?.trim()) {
         ctx.logger.claudeMessage(assistantText);
-        console.log(`[Agent] 💬 Claude says: ${assistantText.substring(0, 500)}`);
+        console.log(`[Agent] 💬 AI says: ${assistantText.substring(0, 500)}`);
       }
       if (assistantToolCalls.length > 0) {
         const toolNames = assistantToolCalls.map((tc: any) => tc.function?.name).join(", ");
+        const shortModel = tierConfig.modelId.split('/').pop() || tierConfig.modelId;
+        const escalateTag = ctx.isInTestingPhase ? ' 💰' : ctx.isEscalated ? ' ⬆️' : '';
+        console.log(`[Model] 🤖 Iter ${iterations} | ${shortModel}${escalateTag} | Cost: $${ctx.liveCostUsd.toFixed(4)} | Errors: ${ctx.consecutiveToolErrors}/${ctx.toolErrorCount}`);
         console.log(`[Agent] 🔧 Iteration ${iterations} | Tools: [${toolNames}] | in=${ctx.totalInputTokens} out=${ctx.totalOutputTokens} | finish=${response.choices?.[0]?.finish_reason}`);
       }
 
@@ -426,8 +438,17 @@ The first call overwrites; every subsequent call with append:true extends the fi
         // Track tool errors for escalation signal
         if (result.startsWith("Error")) {
           ctx.toolErrorCount++;
+          ctx.consecutiveToolErrors++;
+          console.log(`[Model] ⚠️ Tool error #${ctx.consecutiveToolErrors} consecutive (${ctx.toolErrorCount} total) | tool=${name}`);
+        } else {
+          // Successful tool call — reset consecutive error counter
+          if (ctx.consecutiveToolErrors > 0) {
+            console.log(`[Model] ✅ Tool success — consecutive error streak reset (was ${ctx.consecutiveToolErrors})`);
+          }
+          ctx.consecutiveToolErrors = 0;
         }
 
+        ctx.iterationToolNames.push(name);
         ctx.logger.toolResult(name, result);
         console.log(`[Agent] 📥 ${name}(${argsSummary}) -> ${result.substring(0, 200).replace(/\n/g, "\\n")}${result.length > 200 ? "..." : ""}`);
         toolResults.push({ role: "tool", tool_call_id: id, content: result });
@@ -459,6 +480,12 @@ The first call overwrites; every subsequent call with append:true extends the fi
 
       for (const tr of toolResults) this._messages.push(tr as any);
 
+      // ── Tool-aware model switch (Layer 2c) ──────────────────────────────
+      // If this iteration used only lightweight tools (e.g. simulate_api),
+      // temporarily switch to a cheaper model. If it used complex tools and
+      // we were in a testing phase, restore the original model.
+      this._checkToolAwareSwitch(ctx, iterations);
+
       const msgSize = JSON.stringify(this._messages).length;
       const estimatedTokens = Math.round(msgSize / 4);
       console.log(`[Agent] 📊 Iter ${iterations} | Messages: ${this._messages.length} | ~${estimatedTokens} tokens | Cost: $${ctx.liveCostUsd.toFixed(4)}`);
@@ -472,57 +499,175 @@ The first call overwrites; every subsequent call with append:true extends the fi
 
   /**
    * Layer 2: Mid-run escalation.
-   * Checks quality signals every N iterations and upgrades the model when the
-   * agent appears stuck. The upgrade is in-place — ctx.tierConfig.modelId is
-   * mutated so the next API call picks up the new model automatically.
+   * Checks quality signals and upgrades the model when the agent struggles.
+   * Uses both consecutive errors (responsive) and total errors (fallback).
+   * The upgrade is in-place — ctx.tierConfig.modelId is mutated so the next
+   * API call picks up the new model automatically.
    */
   private _checkEscalation(ctx: any, iteration: number): void {
     const cfg = ctx.escalationConfig;
     if (!cfg) return;
 
-    const checkEvery = cfg.checkEveryNIterations ?? 5;
+    const checkEvery = cfg.checkEveryNIterations ?? 1;
     if (iteration % checkEvery !== 0) return;
 
     const ladder: string[] = cfg.modelLadder ?? [];
     const currentModel: string = ctx.tierConfig.modelId;
     const currentIdx = ladder.indexOf(currentModel);
-    if (currentIdx < 0 || currentIdx >= ladder.length - 1) return; // already at top or not in ladder
+    if (currentIdx < 0 || currentIdx >= ladder.length - 1) return; // at top or not in ladder
 
     // Collect all triggered reasons
     const reasons: string[] = [];
 
+    // Consecutive tool errors (most responsive trigger)
+    const consecThreshold = cfg.consecutiveErrorThreshold ?? 2;
+    if (ctx.consecutiveToolErrors >= consecThreshold) {
+      reasons.push(`consecutive_errors_${ctx.consecutiveToolErrors}`);
+    }
+
+    // Total tool errors (fallback trigger)
+    const totalThreshold = cfg.toolErrorThreshold ?? 6;
+    if (ctx.toolErrorCount >= totalThreshold) {
+      reasons.push(`total_errors_${ctx.toolErrorCount}`);
+    }
+
+    // No-write threshold
     const noWriteThreshold = cfg.noWriteThreshold ?? 3;
     if (ctx.consecutiveNoWrite >= noWriteThreshold) {
       reasons.push(`no_write_${ctx.consecutiveNoWrite}`);
     }
 
-    const toolErrorThreshold = cfg.toolErrorThreshold ?? 6;
-    if (ctx.toolErrorCount >= toolErrorThreshold) {
-      reasons.push(`tool_errors_${ctx.toolErrorCount}`);
-    }
-
-    const validationFailThreshold = cfg.validationFailThreshold ?? 3;
-    if (ctx.consecutiveValidationFails >= validationFailThreshold) {
+    // Validation failures
+    const valThreshold = cfg.validationFailThreshold ?? 3;
+    if (ctx.consecutiveValidationFails >= valThreshold) {
       reasons.push(`validation_fails_${ctx.consecutiveValidationFails}`);
     }
 
     if (reasons.length === 0) return;
 
     const nextModel = ladder[currentIdx + 1];
+    const prevModel = currentModel;
     ctx.tierConfig.modelId = nextModel;
+    ctx.isEscalated = true;
+    ctx.cleanItersAfterEscalation = 0;
 
-    const entry = { iteration, fromModel: currentModel, toModel: nextModel, reason: reasons.join(",") };
-    ctx.escalationHistory.push(entry);
-    // Reset error counters after escalation so the next tier gets a clean slate
+    // Reset counters so the new model gets a clean slate
     ctx.toolErrorCount = 0;
+    ctx.consecutiveToolErrors = 0;
     ctx.consecutiveValidationFails = 0;
     ctx.consecutiveNoWrite = 0;
 
-    console.log(
-      `[Agent] 📈 ESCALATED iter=${iteration} ${currentModel} → ${nextModel} | reasons: ${reasons.join(", ")}`,
-    );
-    // Best-effort: narrate the escalation to the user via the existing progress event
+    const shortPrev = prevModel.split('/').pop();
+    const shortNext = nextModel.split('/').pop();
+    const entry = { iteration, fromModel: prevModel, toModel: nextModel, reason: reasons.join(",") };
+    ctx.escalationHistory.push(entry);
+
+    console.log(`[Model] ⬆️ UPGRADE: ${shortPrev} → ${shortNext} | reason: ${reasons.join(", ")} | iter=${iteration}`);
     void ctx.progress({ event: undefined, action: `⚡ Switching to more powerful AI model`, detail: "", percent: ctx.currentPercent }).catch(() => {});
+  }
+
+  /**
+   * Layer 2b: Auto-downgrade after escalation.
+   * If the escalated model has been running cleanly (no tool errors) for N
+   * consecutive iterations, downgrade back to the initial starting model
+   * to save cost. The quality stays the same because the hard part is done.
+   */
+  private _checkAutoDowngrade(ctx: any, iteration: number): void {
+    const cfg = ctx.escalationConfig;
+    if (!cfg) return;
+
+    // Count clean iterations = iterations where consecutiveToolErrors stayed 0
+    if (ctx.consecutiveToolErrors === 0) {
+      ctx.cleanItersAfterEscalation++;
+    } else {
+      ctx.cleanItersAfterEscalation = 0;
+      return;
+    }
+
+    const downgradeThreshold = cfg.autoDowngradeAfterClean ?? 2;
+    if (ctx.cleanItersAfterEscalation < downgradeThreshold) return;
+
+    const currentModel: string = ctx.tierConfig.modelId;
+    const targetModel: string = ctx.initialModelId;
+
+    // Don't downgrade if already at or below initial model
+    const ladder: string[] = cfg.modelLadder ?? [];
+    const currentIdx = ladder.indexOf(currentModel);
+    const targetIdx = ladder.indexOf(targetModel);
+    if (currentIdx <= targetIdx) return;
+
+    ctx.tierConfig.modelId = targetModel;
+    ctx.isEscalated = false;
+    ctx.cleanItersAfterEscalation = 0;
+
+    const shortCurrent = currentModel.split('/').pop();
+    const shortTarget = targetModel.split('/').pop();
+    const entry = { iteration, fromModel: currentModel, toModel: targetModel, reason: "auto_downgrade_clean" };
+    ctx.escalationHistory.push(entry);
+
+    console.log(`[Model] ⬇️ DOWNGRADE: ${shortCurrent} → ${shortTarget} | ${downgradeThreshold} clean iterations — switching back to save cost | iter=${iteration}`);
+    void ctx.progress({ event: undefined, action: `💰 Switching to efficient model — issue resolved`, detail: "", percent: ctx.currentPercent }).catch(() => {});
+  }
+
+  /**
+   * Layer 2c: Tool-aware model switching.
+   * Temporarily downgrades to a cheap model when the agent enters a
+   * "testing phase" (all tools in the iteration are lightweight, e.g.
+   * simulate_api, visual_test). Restores the original model when the
+   * agent moves back to complex tools (write_file, edit_file, etc.).
+   *
+   * This saves significant cost — testing iterations are trivial work
+   * that Haiku handles perfectly at ~10x less cost than the standard model.
+   */
+  private _checkToolAwareSwitch(ctx: any, iteration: number): void {
+    const cfg = ctx.escalationConfig;
+    if (!cfg) return;
+
+    const lightweightTools: string[] = cfg.lightweightTools ?? ["simulate_api", "visual_test"];
+    const lightweightModel: string = cfg.lightweightModel ?? "anthropic/claude-haiku-4-5";
+    const toolNames: string[] = ctx.iterationToolNames || [];
+
+    // Skip if no tools were called this iteration
+    if (toolNames.length === 0) return;
+
+    const allLightweight = toolNames.every((t: string) => lightweightTools.includes(t));
+    const currentModel: string = ctx.tierConfig.modelId;
+    const shortCurrent = currentModel.split('/').pop();
+
+    if (allLightweight && !ctx.isInTestingPhase) {
+      // ── ENTER testing phase: downgrade to cheap model ──────────────────
+      // Only downgrade if we're on a more expensive model than the lightweight one
+      const ladder: string[] = cfg.modelLadder ?? [];
+      const currentIdx = ladder.indexOf(currentModel);
+      const lightIdx = ladder.indexOf(lightweightModel);
+
+      if (currentIdx > lightIdx) {
+        ctx.preTestingModelId = currentModel;
+        ctx.isInTestingPhase = true;
+        ctx.tierConfig.modelId = lightweightModel;
+
+        const shortLight = lightweightModel.split('/').pop();
+        const toolList = toolNames.join(", ");
+        const entry = { iteration, fromModel: currentModel, toModel: lightweightModel, reason: `testing_phase(${toolList})` };
+        ctx.escalationHistory.push(entry);
+
+        console.log(`[Model] 💰 TEMP DOWNGRADE: ${shortCurrent} → ${shortLight} | reason: testing phase (${toolList}) — saving cost`);
+        void ctx.progress({ event: undefined, action: `💰 Switching to efficient model for testing`, detail: "", percent: ctx.currentPercent }).catch(() => {});
+      }
+    } else if (!allLightweight && ctx.isInTestingPhase && ctx.preTestingModelId) {
+      // ── EXIT testing phase: restore original model ─────────────────────
+      const restoreModel = ctx.preTestingModelId;
+      ctx.tierConfig.modelId = restoreModel;
+      ctx.isInTestingPhase = false;
+      ctx.preTestingModelId = null;
+
+      const shortRestore = restoreModel.split('/').pop();
+      const entry = { iteration, fromModel: currentModel, toModel: restoreModel, reason: "testing_phase_complete" };
+      ctx.escalationHistory.push(entry);
+
+      console.log(`[Model] 🔄 RESTORE: ${shortCurrent} → ${shortRestore} | testing phase complete — resuming build model`);
+      void ctx.progress({ event: undefined, action: `🔄 Resuming powerful model — testing done`, detail: "", percent: ctx.currentPercent }).catch(() => {});
+    }
   }
 
   /**
@@ -564,10 +709,12 @@ The first call overwrites; every subsequent call with append:true extends the fi
     const prevModel = ladder[currentIdx - 1];
     ctx.tierConfig.modelId = prevModel;
 
+    const shortCurrent = currentModel.split('/').pop();
+    const shortPrev = prevModel.split('/').pop();
     const entry = { iteration, fromModel: currentModel, toModel: prevModel, reason: "budget_warn" };
     ctx.escalationHistory.push(entry);
     console.log(
-      `[Agent] 💸 DOWNGRADED iter=${iteration} ${currentModel} → ${prevModel} (budget at ${Math.round((ctx.liveCostUsd / ctx.creditBudgetUsd) * 100)}%)`,
+      `[Model] 💸 BUDGET DOWNGRADE: ${shortCurrent} → ${shortPrev} | budget at ${Math.round((ctx.liveCostUsd / ctx.creditBudgetUsd) * 100)}% | iter=${iteration}`,
     );
   }
 

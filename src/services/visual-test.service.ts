@@ -1,5 +1,5 @@
 import { chromium } from "playwright";
-import Anthropic from "@anthropic-ai/sdk";
+import { getOpenRouterClient } from "./openrouter.service";
 import { config } from "../config";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -45,7 +45,7 @@ export interface VisualTestResult {
   finalUrl: string;
   /** Whether Playwright considered the page fully loaded */
   loadedSuccessfully: boolean;
-  /** AI verdict from Claude */
+  /** AI verdict from vision model */
   verdict: VisualVerdict;
   /** Raw ms taken for the browser session */
   durationMs: number;
@@ -334,7 +334,7 @@ export async function runVisualTest(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Claude Vision analysis
+// Vision analysis via OpenRouter (provider-agnostic)
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function analyzeWithClaude(input: {
@@ -347,7 +347,7 @@ async function analyzeWithClaude(input: {
   url: string;
   scenario?: ScenarioStep[];
 }): Promise<VisualVerdict> {
-  const client = new Anthropic({ apiKey: config.anthropicApiKey });
+  const client = getOpenRouterClient();
 
   const errorSummary = [
     input.consoleErrors.length > 0
@@ -434,19 +434,17 @@ Scoring:
 - "fail" = elements clipped/broken, blank screen, critical overlap, 401/403, app is unusable or looks unfinished`;
 
   try {
-    const response = await client.messages.create({
-      model: "claude-opus-4-5",
+    const response = await client.chat.completions.create({
+      model: "google/gemini-3.5-flash",
       max_tokens: 2048,
       messages: [
         {
           role: "user",
           content: [
             {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: "image/png",
-                data: input.screenshotBase64,
+              type: "image_url",
+              image_url: {
+                url: `data:image/png;base64,${input.screenshotBase64}`,
               },
             },
             {
@@ -458,16 +456,16 @@ Scoring:
       ],
     });
 
-    const raw = (response.content[0] as any)?.text || "";
+    const raw = response.choices?.[0]?.message?.content || "";
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("No JSON in Claude response");
+    if (!jsonMatch) throw new Error("No JSON in AI response");
 
     const parsed = JSON.parse(jsonMatch[0]) as VisualVerdict;
     if (!Array.isArray(parsed.issues)) parsed.issues = [];
     if (!Array.isArray(parsed.suggestions)) parsed.suggestions = [];
     return parsed;
   } catch (err: any) {
-    console.error("[VisualTest] Claude analysis failed:", err.message);
+    console.error("[VisualTest] AI analysis failed:", err.message);
     const hasErrors =
       input.consoleErrors.length > 0 ||
       input.networkErrors.length > 0 ||
@@ -476,7 +474,7 @@ Scoring:
     return {
       status: hasErrors ? "warn" : "pass",
       headline: "AI analysis unavailable — manual review needed",
-      analysis: `Claude vision analysis failed: ${err.message}`,
+      analysis: `Vision analysis failed: ${err.message}`,
       issues: [...input.pageErrors, ...input.scenarioErrors],
       suggestions: [],
     };

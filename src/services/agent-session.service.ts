@@ -507,13 +507,13 @@ class AgentSessionService {
     const complexity = (typeof extras.complexity === "string" && extras.complexity) || null;
     const taskType = extras.taskType ?? null;
 
-    // ── Dynamic starting model (Layer 1: Task-Type Routing) ─────────────────
-    // Pick the cheapest model that can handle this task type. Falls back to
-    // the session default when taskType is absent or has no override.
-    const startingModel = runtimeConfig.resolveStartingModel(sessionType, isMaxMode, taskType);
+    // ── Dynamic starting model (Layer 1: Difficulty-Based Routing) ────────────
+    // Pick the best model based on task difficulty (complexity) first, then
+    // fall back to task type mapping, then session default.
+    const startingModel = runtimeConfig.resolveStartingModel(sessionType, isMaxMode, taskType, complexity);
     const escalationCfg = runtimeConfig.getEscalationConfig();
 
-    console.log(`[Agent] task_id=${taskId} user=${agentTelegramId ?? "?"} (mode=${mode}${isMaxMode ? " · MAX" : ""}${taskType ? ` · ${taskType}` : ""}, startModel=${startingModel}, ${systemPrompt.length} chars)`);
+    console.log(`[Agent] task_id=${taskId} user=${agentTelegramId ?? "?"} (mode=${mode}${isMaxMode ? " · MAX" : ""}${taskType ? ` · ${taskType}` : ""}${complexity ? ` · difficulty=${complexity}` : ""}, startModel=${startingModel}, ${systemPrompt.length} chars)`);
     projectService.updateProjectLastTaskId(projectId, taskId).catch(() => {});
 
     const projectRootDir = path.join(PROJECTS_DIR, projectId);

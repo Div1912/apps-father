@@ -150,8 +150,8 @@ $prefs | ConvertTo-Json | Set-Content $PREFS_FILE
 # Resolve server config
 if ($env_idx -eq 0) {
   $ENV_NAME = "DEV"
-  $SERVER   = "root@62.238.2.16"
-  $APP_DIR  = "/opt/apps-father-dev"
+  $SERVER   = "root@89.167.51.255"
+  $APP_DIR  = "/root/app-father-dev/apps-father"
   $PM2      = "apps-father-dev"
   $DB_CTR   = "apps_father_dev_db"
   $DB_USER  = "apps_father"

@@ -4474,7 +4474,8 @@ function escAttr(s) {
 }
 
 async function handleLinkBotClick(projectId, btnEl, onLinked) {
-  const isDev = location.hostname === 'dev.apps-father.com';
+  const h = location.hostname;
+  const isDev = h === 'dev.apps-father.com' || h === 'stage.apps-father.com';
   const fatherBot = isDev ? 'apps_father_dev_bot' : 'apps_father_bot';
   const newbotUrl = `https://t.me/newbot/${fatherBot}/username_bot`;
 
@@ -6152,10 +6153,35 @@ function openTestPreview(projectId) {
 }
 
 function launchPlayer(projectId) {
-  const isDev = location.hostname === 'dev.apps-father.com';
-  const env = isDev ? 'dev' : 'prod';
-  const startapp = `${env}-${projectId}`;
-  tg?.openTelegramLink(`https://t.me/apps_father_player_bot/player?startapp=${startapp}`);
+  const h = location.hostname;
+  const isDev = h === 'dev.apps-father.com' || h === 'stage.apps-father.com';
+
+  // Production: use the player bot (works correctly on apps-father.com)
+  if (!isDev) {
+    const startapp = `prod-${projectId}`;
+    tg?.openTelegramLink(`https://t.me/apps_father_player_bot/player?startapp=${startapp}`);
+    return;
+  }
+
+  // Staging / dev: open inline iframe overlay to avoid player bot domain mismatch
+  const appUrl = `${location.origin}/dev/${projectId}/`;
+  let overlay = document.getElementById('app-player-overlay');
+  if (overlay) overlay.remove();
+
+  overlay = document.createElement('div');
+  overlay.id = 'app-player-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:999998;background:#000;display:flex;flex-direction:column;';
+  overlay.innerHTML = `
+    <div style="display:flex;align-items:center;padding:8px 12px;background:#1c1c1e;gap:8px;flex-shrink:0">
+      <button id="app-player-back" style="background:none;border:none;color:#fff;font-size:16px;cursor:pointer;padding:6px 10px;border-radius:8px;">← Back</button>
+      <span style="flex:1;color:#aaa;font-size:13px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Preview</span>
+      <button id="app-player-open" style="background:none;border:none;color:#4facfe;font-size:13px;cursor:pointer;padding:6px 10px;">Open ↗</button>
+    </div>
+    <iframe src="${appUrl}" style="flex:1;border:none;width:100%;background:#000" allow="clipboard-write"></iframe>
+  `;
+  document.body.appendChild(overlay);
+  document.getElementById('app-player-back')?.addEventListener('click', () => overlay.remove());
+  document.getElementById('app-player-open')?.addEventListener('click', () => { tg?.openLink(appUrl); });
 }
 
 

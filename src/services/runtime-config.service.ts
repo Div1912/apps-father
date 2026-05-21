@@ -66,8 +66,10 @@ export interface EscalationConfig {
   modelLadder: string[];
   /** Escalate after this many consecutive iterations with no file writes. */
   noWriteThreshold: number;
-  /** Escalate after this many tool errors (start-of-run resets). */
+  /** Escalate after this many total tool errors (fallback). */
   toolErrorThreshold: number;
+  /** Escalate after this many CONSECUTIVE tool errors (more responsive). */
+  consecutiveErrorThreshold: number;
   /** Escalate after this many repeated validation failures. */
   validationFailThreshold: number;
   /** Check escalation every N iterations. */
@@ -76,6 +78,12 @@ export interface EscalationConfig {
   budgetWarnFraction: number;
   /** When liveCostUsd exceeds (creditBudgetUsd * this), abort gracefully. */
   budgetAbortFraction: number;
+  /** Downgrade back to initial model after this many clean iterations post-escalation. */
+  autoDowngradeAfterClean: number;
+  /** Tool names considered lightweight (testing). Model switches to lightweightModel for these. */
+  lightweightTools: string[];
+  /** Model to use for lightweight tool iterations (default: Haiku). */
+  lightweightModel: string;
 }
 
 /**
@@ -247,31 +255,31 @@ const DEFAULT_AGENT_SESSIONS: Record<AgentSessionType, AgentSessionConfig> = {
     iterations: 4,
   },
   build: {
-    model: "anthropic/claude-sonnet-4-5",
+    model: "google/gemini-3.5-flash",
     max_tokens: 32000,
     reasoning: false,
-    thinking: 4000,
+    thinking: 0,
     iterations: 60,
   },
   update: {
-    model: "anthropic/claude-sonnet-4-5",
+    model: "google/gemini-3.5-flash",
     max_tokens: 32000,
     reasoning: false,
-    thinking: 4000,
+    thinking: 0,
     iterations: 60,
   },
   "update-plan": {
-    model: "anthropic/claude-sonnet-4-5",
+    model: "google/gemini-3.5-flash",
     max_tokens: 32000,
     reasoning: false,
-    thinking: 4000,
+    thinking: 0,
     iterations: 80,
   },
   "bug-fix": {
-    model: "anthropic/claude-sonnet-4-5",
+    model: "google/gemini-3.5-flash",
     max_tokens: 16000,
     reasoning: false,
-    thinking: 2000,
+    thinking: 0,
     iterations: 40,
   },
   suggestions: {
@@ -304,10 +312,18 @@ const DEFAULT_AGENT_SESSIONS: Record<AgentSessionType, AgentSessionConfig> = {
 /**
  * Default per-task-type starting model overrides.
  *
+ * Starting model per task type, per session kind. The task type is classified by
+ * the router LLM before the agent run starts, so we know *what* the user wants.
+ *
  * Strategy:
- *  - trivial_edit / config → always Haiku (cheap enough, capable enough)
- *  - bug_fix → Haiku for update; Sonnet for build (new app bugs are rare but complex)
- *  - feature_add / new_build / architecture → Sonnet (default; escalates to Opus if needed)
+ *  - trivial_edit / config → Haiku (simple text/config changes)
+ *  - bug_fix → Gemini Flash (bugs need reasoning to diagnose properly)
+ *  - feature_add / new_build / architecture → Gemini Flash (complex creative work)
+ *
+ * IMPORTANT: This is the FALLBACK when complexity is not provided.
+ * When complexity IS provided (from the router), it takes priority:
+ *  - trivial / small complexity → Haiku
+ *  - medium / large / huge complexity → Gemini Flash
  *
  * Admins can override any cell via runtime-config.json → taskTypeModels.
  */
@@ -315,27 +331,27 @@ const DEFAULT_TASK_TYPE_MODELS: Partial<Record<AgentSessionType, TaskTypeModelMa
   update: {
     trivial_edit:  "anthropic/claude-haiku-4-5",
     config:        "anthropic/claude-haiku-4-5",
-    bug_fix:       "anthropic/claude-haiku-4-5",
-    feature_add:   "anthropic/claude-sonnet-4-5",
-    new_build:     "anthropic/claude-sonnet-4-5",
-    architecture:  "anthropic/claude-sonnet-4-5",
+    bug_fix:       "google/gemini-3.5-flash",       // bugs need proper reasoning
+    feature_add:   "google/gemini-3.5-flash",
+    new_build:     "google/gemini-3.5-flash",
+    architecture:  "google/gemini-3.5-flash",
   },
   "bug-fix": {
     trivial_edit:  "anthropic/claude-haiku-4-5",
     config:        "anthropic/claude-haiku-4-5",
-    bug_fix:       "anthropic/claude-haiku-4-5",
-    feature_add:   "anthropic/claude-sonnet-4-5",
-    new_build:     "anthropic/claude-sonnet-4-5",
-    architecture:  "anthropic/claude-sonnet-4-5",
+    bug_fix:       "google/gemini-3.5-flash",       // bugs need proper reasoning
+    feature_add:   "google/gemini-3.5-flash",
+    new_build:     "google/gemini-3.5-flash",
+    architecture:  "google/gemini-3.5-flash",
   },
-  // build always goes Sonnet — new apps are complex by nature
+  // build always goes Gemini Flash — new apps are complex by nature
   build: {
-    trivial_edit:  "anthropic/claude-sonnet-4-5",
-    config:        "anthropic/claude-sonnet-4-5",
-    bug_fix:       "anthropic/claude-sonnet-4-5",
-    feature_add:   "anthropic/claude-sonnet-4-5",
-    new_build:     "anthropic/claude-sonnet-4-5",
-    architecture:  "anthropic/claude-sonnet-4-5",
+    trivial_edit:  "google/gemini-3.5-flash",
+    config:        "google/gemini-3.5-flash",
+    bug_fix:       "google/gemini-3.5-flash",
+    feature_add:   "google/gemini-3.5-flash",
+    new_build:     "google/gemini-3.5-flash",
+    architecture:  "google/gemini-3.5-flash",
   },
 };
 
@@ -344,18 +360,22 @@ const DEFAULT_TASK_TYPE_MODELS: Partial<Record<AgentSessionType, TaskTypeModelMa
  * All values are admin-tunable from runtime-config.json → agentEscalation.
  */
 const DEFAULT_ESCALATION: EscalationConfig = {
-  // Haiku → Sonnet → Opus
+  // Haiku → Gemini Flash → Opus
   modelLadder: [
     "anthropic/claude-haiku-4-5",
-    "anthropic/claude-sonnet-4-5",
+    "google/gemini-3.5-flash",
     "anthropic/claude-opus-4-5",
   ],
-  noWriteThreshold: 3,         // 3 consecutive no-write iters → escalate
-  toolErrorThreshold: 6,       // 6 tool errors in session → escalate
-  validationFailThreshold: 3,  // 3 consecutive validation failures → escalate
-  checkEveryNIterations: 5,    // check every 5 iters
-  budgetWarnFraction: 0.80,    // at 80% budget → downgrade if possible
-  budgetAbortFraction: 1.00,   // at 100% budget → graceful abort
+  noWriteThreshold: 3,              // 3 consecutive no-write iters → escalate
+  toolErrorThreshold: 6,            // 6 total tool errors → escalate (fallback)
+  consecutiveErrorThreshold: 2,     // 2 errors in a row → escalate (responsive)
+  validationFailThreshold: 3,       // 3 consecutive validation failures → escalate
+  checkEveryNIterations: 1,         // check EVERY iteration for responsiveness
+  budgetWarnFraction: 0.80,         // at 80% budget → downgrade if possible
+  budgetAbortFraction: 1.00,        // at 100% budget → graceful abort
+  autoDowngradeAfterClean: 2,       // 2 clean iters post-escalation → downgrade back
+  lightweightTools: ["simulate_api", "simulate_telegram", "visual_test", "server_logs"], // testing tools → use cheap model
+  lightweightModel: "anthropic/claude-haiku-4-5",    // cheap model for testing phases
 };
 
 // Default credit prices. The medium column matches the previous flat rates so
@@ -579,7 +599,7 @@ class RuntimeConfigService {
 
   /** DEDICATED key for the agent-feedback analysis pipeline (no fallback). */
   getTrainingApiKey(): string { return this.config.trainingOpenrouterApiKey || ""; }
-  getTrainingModel(): string { return this.config.trainingModel || "anthropic/claude-sonnet-4-5"; }
+  getTrainingModel(): string { return this.config.trainingModel || "google/gemini-3.5-flash"; }
   getTrainingProvider(): string { return this.config.trainingProvider || ""; }
   isServiceMode(): boolean { return !!this.config.serviceMode; }
   getCreditsPerDollar(): number { return this.config.creditsPerDollar || 50; }
@@ -658,23 +678,58 @@ class RuntimeConfigService {
   }
 
   /**
-   * Resolve the starting model for a session, considering task type.
-   * Returns the cheapest model that can realistically handle `taskType`.
-   * Falls back to the session-type default when:
-   *   - maxMode is on (always use max-mode model)
-   *   - taskType is absent
-   *   - no override row exists for this session/task combination
+   * Resolve the starting model for a session based on difficulty.
+   *
+   * Priority order:
+   *   1. maxMode → always use max-mode model
+   *   2. complexity (difficulty level from router) → maps difficulty to model:
+   *        trivial/small → Haiku (cheap, fast — easy tasks)
+   *        medium/large/huge → Gemini Flash (standard — needs reasoning)
+   *   3. taskType → fallback mapping when complexity isn't available
+   *   4. session default → last resort
    */
   resolveStartingModel(
     type: AgentSessionType,
     maxMode: boolean,
     taskType?: AgentTaskType | null,
+    complexity?: AgentComplexity | string | null,
   ): string {
     if (maxMode) return this.getSessionConfig("max-mode").model;
     const sessionDefault = this.getSessionConfig(type).model;
-    if (!taskType) return sessionDefault;
-    const overrideMap = this.config.taskTypeModels?.[type];
-    return overrideMap?.[taskType] ?? sessionDefault;
+
+    // ── Complexity-based selection (primary) ─────────────────────────────────
+    // When the router classified the difficulty, use that as the primary signal.
+    // Easy tasks → cheap model, hard tasks → standard model.
+    if (complexity && typeof complexity === "string") {
+      const c = complexity.toLowerCase();
+      if (c === "trivial" || c === "small") {
+        // Easy work: text changes, config, simple fixes, testing
+        const model = "anthropic/claude-haiku-4-5";
+        const short = model.split('/').pop();
+        console.log(`[Model] 🧠 Difficulty=${c} → starting on ${short} (easy task, saving cost)`);
+        return model;
+      }
+      if (c === "medium" || c === "large" || c === "huge") {
+        // Standard/complex work: features, builds, architecture
+        const model = "google/gemini-3.5-flash";
+        const short = model.split('/').pop();
+        console.log(`[Model] 🧠 Difficulty=${c} → starting on ${short} (complex task, needs reasoning)`);
+        return model;
+      }
+    }
+
+    // ── TaskType-based selection (fallback) ──────────────────────────────────
+    // When complexity isn't available, fall back to task type mapping.
+    if (taskType) {
+      const overrideMap = this.config.taskTypeModels?.[type];
+      const model = overrideMap?.[taskType] ?? sessionDefault;
+      const short = model.split('/').pop();
+      console.log(`[Model] 🧠 TaskType=${taskType} → starting on ${short} (no complexity provided, using taskType fallback)`);
+      return model;
+    }
+
+    console.log(`[Model] 🧠 No classification available → using session default: ${sessionDefault.split('/').pop()}`);
+    return sessionDefault;
   }
 
   /** Returns the escalation config (thresholds, model ladder). */

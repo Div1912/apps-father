@@ -63,16 +63,32 @@ export class RunContext {
   consecutiveNoWrite = 0;
 
   // ── Escalation tracking ──────────────────────────────────────────────────
+  /** The model selected at run start — downgrade target after escalation. */
+  initialModelId: string = "";
   /** Total tool-call errors accumulated this session. */
   toolErrorCount = 0;
+  /** Consecutive tool errors in a row (reset on any successful tool call). */
+  consecutiveToolErrors = 0;
   /** Consecutive validation failures (reset on any passing validation). */
   consecutiveValidationFails = 0;
+  /** Clean iterations since last escalation (no tool errors). */
+  cleanItersAfterEscalation = 0;
+  /** Whether the model is currently escalated above the initial model. */
+  isEscalated = false;
+  /** Tool names used in the current iteration (reset each iter). */
+  iterationToolNames: string[] = [];
   /** Credit budget for this run (USD). 0 = unlimited. */
   readonly creditBudgetUsd: number;
   /** Escalation thresholds (copied from runtimeConfig at run start). */
   readonly escalationConfig: EscalationConfig | null;
   /** Log of every model switch: { iteration, fromModel, toModel, reason } */
   escalationHistory: Array<{ iteration: number; fromModel: string; toModel: string; reason: string }> = [];
+
+  // ── Tool-aware model switching (Layer 2c) ─────────────────────────────
+  /** Model we were on before the testing-phase downgrade. null = not in testing phase. */
+  preTestingModelId: string | null = null;
+  /** Whether we're currently in a temporary testing-phase downgrade. */
+  isInTestingPhase = false;
 
   // ── Billing / cost ───────────────────────────────────────────────────────
   totalInputTokens = 0;
@@ -123,6 +139,7 @@ export class RunContext {
     this.startBalance = userBalance ?? 0;
     this.creditBudgetUsd = params.creditBudgetUsd ?? 0;
     this.escalationConfig = params.escalationConfig ?? null;
+    this.initialModelId = params.tierConfig.modelId; // remember starting model for auto-downgrade
   }
 
   // ── Event emitters ───────────────────────────────────────────────────────

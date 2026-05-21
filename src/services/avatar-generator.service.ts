@@ -1,11 +1,11 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { getOpenRouterClient } from "./openrouter.service";
 import { config } from "../config";
 
 /**
  * AI avatar generator for app icons.
  *
  * Two-step pipeline:
- *   1. Claude Haiku turns the (often vague) app description into a detailed
+ *   1. Gemini Flash turns the (often vague) app description into a detailed
  *      iOS-style logo prompt tailored for Nano-Banana 2.
  *   2. The prompt is submitted to ApiPass (`google/nano-banana-2` model). We
  *      then poll the job until `state === "success"` (or fails / times out)
@@ -20,16 +20,10 @@ const MAX_POLL_ATTEMPTS = 18; // 18 × 10 s = 3 min max
 
 const PROMPT_SAMPLE = `A professional 1:1 modern iOS-style logotype icon for an app called "Swipe", which is for "Crypto Wallet". The icon is a single, stylized, minimalist 3D symbol centered on a pure, seamless gradient background. The symbol is rendered in a vibrant glassmorphism style with deep internal layering and a soft volumetric radial gradient. The icon features subtle glowing contours and sharp specular highlights for a high-end neomorphic effect. Strictly no text, no letters, no plates, and no phone screens. Only the central glass symbol on a clean white field. 4k, ultra-sharp focus.`;
 
-let anthropicClient: Anthropic | null = null;
-function getAnthropic(): Anthropic {
-  if (!anthropicClient) {
-    anthropicClient = new Anthropic({ apiKey: config.anthropicApiKey });
-  }
-  return anthropicClient;
-}
+// OpenRouter client is used lazily from getOpenRouterClient()
 
 /**
- * Step 1 — ask Haiku to draft a Nano-Banana logo prompt for this app.
+ * Step 1 — ask the model to draft a Nano-Banana logo prompt for this app.
  * Returns just the raw prompt string (no markdown wrappers).
  */
 export async function buildLogoPrompt(appDescription: string, appName?: string): Promise<string> {
@@ -43,14 +37,15 @@ Prompt sample: ${PROMPT_SAMPLE}
 
 Return only the prompt as text. No markdown, no preamble, no quotes.`;
 
-  const response = await getAnthropic().messages.create({
-    model: "claude-haiku-4-5-20251001",
+  const client = getOpenRouterClient();
+  const response = await client.chat.completions.create({
+    model: "google/gemini-3.5-flash",
     max_tokens: 800,
     messages: [{ role: "user", content: userPrompt }],
   });
 
-  const text = response.content[0]?.type === "text" ? response.content[0].text.trim() : "";
-  if (!text) throw new Error("Haiku returned empty prompt");
+  const text = (response.choices?.[0]?.message?.content || "").trim();
+  if (!text) throw new Error("Model returned empty prompt");
   return text;
 }
 
@@ -133,7 +128,7 @@ async function pollApiPassTask(taskId: string): Promise<string> {
 }
 
 /**
- * End-to-end: description → Haiku prompt → ApiPass image URL.
+ * End-to-end: description → Gemini Flash prompt → ApiPass image URL.
  * Throws on any upstream failure or timeout.
  */
 export async function generateAvatarUrl(appDescription: string, appName?: string): Promise<{
